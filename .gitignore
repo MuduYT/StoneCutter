@@ -12,10 +12,6 @@ dist
 dist-ssr
 *.local
 
-# Tauri / Rust
-src-tauri/target
-src-tauri/WixTools
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

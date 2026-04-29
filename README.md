@@ -1,36 +1,16 @@
-# StoneCutter
+# React + Vite
 
-Ein Video-Schnittprogramm gebaut mit **Tauri 2**, **React** und **Rust**.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-## Tech Stack
+Currently, two official plugins are available:
 
-- **Frontend**: React + Vite + JavaScript
-- **Backend**: Rust (via Tauri)
-- **Desktop**: Tauri 2
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-## Voraussetzungen
+## React Compiler
 
-- [Node.js](https://nodejs.org/) >= 18
-- [Rust](https://rustup.rs/) (stable)
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-## Setup
+## Expanding the ESLint configuration
 
-```bash
-# Dependencies installieren
-npm install
-
-# App im Entwicklungsmodus starten
-npm run tauri dev
-
-# App bauen
-npm run tauri build
-```
-
-## Projektstruktur
-
-```
-StoneCutter/
-├── src/              # React Frontend
-├── src-tauri/        # Rust Backend (Tauri)
-├── public/           # Statische Assets
-└── index.html        # Einstiegspunkt
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
