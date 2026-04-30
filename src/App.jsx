@@ -1777,12 +1777,24 @@ function App() {
 
   return (
     <div className="app">
-      <img
-        src={logoUrl}
-        alt="StoneCutter"
-        className="app-logo"
-        draggable={false}
-      />
+      <div className="logo-area">
+        <img
+          src={logoUrl}
+          alt="StoneCutter"
+          className="app-logo"
+          draggable={false}
+        />
+        {isTauri && (
+          <button
+            className="logo-export-btn"
+            onClick={() => { setExportStatus(null); setShowExport(true) }}
+            title="Als MP4 exportieren"
+            disabled={clips.length === 0}
+          >
+            <Icon.Export /> Exportieren
+          </button>
+        )}
+      </div>
       <input
         ref={fileRef}
         type="file"
@@ -1941,15 +1953,6 @@ function App() {
             onClick={() => setShowSettings((v) => !v)}
             title="Einstellungen"
           ><Icon.Settings /></button>
-
-          {isTauri && (
-            <button
-              className="tb-btn export-btn"
-              onClick={() => { setExportStatus(null); setShowExport(true) }}
-              title="Als MP4 exportieren"
-              disabled={clips.length === 0}
-            ><Icon.Export /> Export</button>
-          )}
 
           <div className="tb-group volume">
             <button className="tb-btn" onClick={() => setMuted((v) => !v)} title={muted ? 'Stumm aufheben' : 'Stummschalten'}>
