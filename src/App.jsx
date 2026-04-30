@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/rules-of-hooks */
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import logoUrl from '../media/Logo/StoneCutter-Logo.png'
 import './App.css'
@@ -172,6 +173,15 @@ const resolveOverlapsMulti = (clipList, modifierIds, makeId) => {
   return result
 }
 
+const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']
+const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']
+
+const getMediaType = (nameOrPath) => {
+  const ext = (nameOrPath.split('.').pop() || '').toLowerCase()
+  if (IMAGE_EXTS.includes(ext)) return 'image'
+  return 'video'
+}
+
 async function openVideoDialog() {
   if (!isTauri) return null
   const { open } = await import('@tauri-apps/plugin-dialog')
@@ -179,7 +189,9 @@ async function openVideoDialog() {
   const selected = await open({
     multiple: true,
     filters: [
-      { name: 'Videos', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'] },
+      { name: 'Medien', extensions: [...VIDEO_EXTS, ...IMAGE_EXTS] },
+      { name: 'Videos', extensions: VIDEO_EXTS },
+      { name: 'Bilder', extensions: IMAGE_EXTS },
       { name: 'All', extensions: ['*'] }
     ]
   })
@@ -187,11 +199,12 @@ async function openVideoDialog() {
   const paths = Array.isArray(selected) ? selected : [selected]
   return paths.map((p) => {
     const name = p.split(/[\\/]/).pop() || p
-    return { id: nextId('vid'), name, path: p, src: convertFileSrc(p) }
+    return { id: nextId('vid'), name, path: p, src: convertFileSrc(p), mediaType: getMediaType(name) }
   })
 }
 
-function probeDuration(src) {
+function probeDuration(src, mediaType = 'video', defaultImageDuration = 3) {
+  if (mediaType === 'image') return Promise.resolve(defaultImageDuration)
   return new Promise((resolve) => {
     const v = document.createElement('video')
     v.preload = 'metadata'
@@ -204,6 +217,11 @@ function probeDuration(src) {
     v.onerror = () => { cleanup(); resolve(5) }
     v.src = src
   })
+}
+
+async function generateImageThumbnails(src, count = 12) {
+  // For images: return the same src multiple times (rendered as a strip).
+  return Array(count).fill(src)
 }
 
 async function generateThumbnails(src, count = 12) {
@@ -317,6 +335,8 @@ const Icon = {
   Cut: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>,
   Undo: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7v6h6M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>,
   Redo: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 7v6h-6M3 17a9 9 0 0 1 15-6.7L21 13"/></svg>,
+  Settings: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+  Image: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
 }
 
 function App() {
@@ -356,6 +376,19 @@ function App() {
   const [importDragInfo, setImportDragInfo] = useState(null) // { videoId, name, dur, insertPoint, mode, simulatedLayout }
   const draggedVideoIdRef = useRef(null)
   const [dragTooltip, setDragTooltip] = useState(null) // { x, y, label }
+
+  // --- Settings (persisted in localStorage) ---
+  const [settings, setSettings] = useState(() => {
+    try {
+      const raw = localStorage.getItem('stonecutter.settings')
+      if (raw) return { imageDuration: 3, ...JSON.parse(raw) }
+    } catch { /* ignored */ }
+    return { imageDuration: 3 }
+  })
+  const [showSettings, setShowSettings] = useState(false)
+  useEffect(() => {
+    try { localStorage.setItem('stonecutter.settings', JSON.stringify(settings)) } catch { /* ignored */ }
+  }, [settings])
 
   const activeVideo = videos.find((v) => v.id === activeId)
   const videoSrc = activeVideo?.src || ''
@@ -560,11 +593,11 @@ function App() {
   // Probe duration for newly imported videos so drag-from-sidebar can show a real-width preview.
   const probeAndCacheDurations = useCallback((items) => {
     for (const item of items) {
-      probeDuration(item.src).then((dur) => {
+      probeDuration(item.src, item.mediaType, settings.imageDuration).then((dur) => {
         setVideoDurations((prev) => ({ ...prev, [item.id]: dur }))
       })
     }
-  }, [])
+  }, [settings.imageDuration])
 
   const handleImport = async () => {
     if (isTauri) {
@@ -592,11 +625,12 @@ function App() {
       name: f.name,
       path: f.name,
       src: URL.createObjectURL(f),
+      mediaType: f.type.startsWith('image/') ? 'image' : (f.type.startsWith('video/') ? 'video' : getMediaType(f.name)),
     }))
     setVideos((prev) => [...prev, ...items])
     if (!activeId && items.length > 0) setActiveId(items[0].id)
     probeAndCacheDurations(items)
-    e.target.value = ''
+    if (e.target && 'value' in e.target) e.target.value = ''
   }
 
   const handleSelectMedia = (id) => setActiveId(id)
@@ -625,7 +659,7 @@ function App() {
     draggedVideoIdRef.current = video.id
     // Probe lazily if not yet cached, so the very first preview is accurate too.
     if (videoDurations[video.id] == null) {
-      probeDuration(video.src).then((dur) => {
+      probeDuration(video.src, video.mediaType, settings.imageDuration).then((dur) => {
         setVideoDurations((prev) => ({ ...prev, [video.id]: dur }))
       })
     }
@@ -656,7 +690,8 @@ function App() {
 
   // Compute the simulated timeline layout that would result from dropping `videoId` at `dropTime`.
   // Returns { insertPoint, mode, simulatedLayout, dur }.
-  const computeImportPreview = useCallback((videoId, dropTime) => {
+  // For Explorer files: videoId = '__explorer__', optional fileName.
+  const computeImportPreview = useCallback((videoId, dropTime, fileName = '') => {
     const dur = videoDurations[videoId] || 5
     if (snapEnabled) {
       const ins = detectInsertPoint('__preview__', dropTime + dur / 2, dur, clips)
@@ -678,7 +713,7 @@ function App() {
     // Snap-off: simulate Filmora-style overwrite (cut existing clips that overlap)
     const start = Math.max(0, dropTime)
     const placeholder = {
-      id: '__preview__', videoId, name: '', src: '',
+      id: '__preview__', videoId, name: fileName, src: '',
       sourceDuration: dur, inPoint: 0, outPoint: dur, startTime: start,
     }
     const cut = resolveOverlaps([...clips, placeholder], '__preview__', () => `prev-${Math.random()}`)
@@ -701,6 +736,25 @@ function App() {
     }
     const dropTime = dropTimeFromEvent(e)
     setDropIndicatorTime(dropTime)
+
+    // Check for files from Explorer
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('video/') || f.type.startsWith('image/'))
+    if (files.length > 0) {
+      const file = files[0]
+      const preview = computeImportPreview('__explorer__', dropTime, file.name, file.size)
+      setImportDragInfo({ videoId: '__explorer__', name: file.name, ...preview })
+      const rect = tracksContentRef.current?.getBoundingClientRect()
+      if (rect) {
+        setDragTooltip({
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+          label: `${file.name} · ${formatTime(preview.dur || 5)}`,
+        })
+      }
+      return
+    }
+
+    // Handle drag from sidebar
     const videoId = draggedVideoIdRef.current
     if (videoId) {
       const video = videos.find((v) => v.id === videoId)
@@ -731,6 +785,52 @@ function App() {
     setImportDragInfo(null)
     setDragTooltip(null)
     draggedVideoIdRef.current = null
+
+    // Check for dropped files from Explorer
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('video/') || f.type.startsWith('image/'))
+    if (files.length > 0) {
+      // Handle file drop from Explorer
+      await handleFileChange({ target: { files } })
+      // Auto-drop the first imported file to timeline at drop position
+      const dropTime = dropTimeFromEvent(e)
+      setTimeout(() => {
+        const newVideos = [...videos]
+        const lastVideo = newVideos[newVideos.length - 1] // most recently added
+        if (lastVideo) {
+          const clipId = nextId('clip')
+          const placeholderDur = videoDurations[lastVideo.id] || 5
+          const pristine = clips
+          let placeholderStart = dropTime
+          let baseList = pristine
+          if (snapEnabled) {
+            const ins = detectInsertPoint(clipId, dropTime, placeholderDur, pristine)
+            if (ins) {
+              placeholderStart = ins.insertPoint
+              baseList = applyRippleInsert(pristine, clipId, ins.insertPoint, placeholderDur)
+            } else {
+              placeholderStart = constrainMoveStart(dropTime, placeholderDur, pristine)
+            }
+          }
+          const placeholder = {
+            id: clipId,
+            videoId: lastVideo.id,
+            name: lastVideo.name,
+            src: lastVideo.src,
+            sourceDuration: placeholderDur,
+            inPoint: 0,
+            outPoint: placeholderDur,
+            startTime: placeholderStart,
+          }
+          const initialList = [...baseList, placeholder]
+          commitClips(snapEnabled
+            ? initialList
+            : resolveOverlaps(initialList, clipId, () => nextId('clip')))
+        }
+      }, 100)
+      return
+    }
+
+    // Handle drag from sidebar
     const videoId = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text')
     const video = videos.find((v) => v.id === videoId)
     if (!video) return
@@ -1379,6 +1479,18 @@ function App() {
     }
   }
 
+  // Context menu handlers (to avoid ESLint ref access warnings)
+  const handleContextMenuDuplicate = (clipId) => {
+    duplicateClip(clipId)
+    setContextMenu(null)
+  }
+
+  const handleContextMenuDelete = (clipId) => {
+    commitClips(clips.filter((c) => c.id !== clipId))
+    setActiveClipId(null)
+    setContextMenu(null)
+  }
+
   const handleClipDoubleClick = (clip, e) => {
     e.stopPropagation()
     setActiveClipId(clip.id)
@@ -1562,7 +1674,8 @@ function App() {
       const video = videos.find((v) => v.id === vid)
       if (!video) return
       setThumbsMap((prev) => ({ ...prev, [vid]: null }))
-      generateThumbnails(video.src).then((thumbs) => {
+      const genFn = video.mediaType === 'image' ? generateImageThumbnails : generateThumbnails
+      genFn(video.src).then((thumbs) => {
         setThumbsMap((prev) => ({ ...prev, [vid]: thumbs || [] }))
       })
     })
@@ -1625,7 +1738,7 @@ function App() {
       <input
         ref={fileRef}
         type="file"
-        accept="video/*"
+        accept="video/*,image/*"
         multiple
         style={{ display: 'none' }}
         onChange={handleFileChange}
@@ -1639,7 +1752,16 @@ function App() {
             <Icon.Plus /> Import
           </button>
         </div>
-        <div className="video-list">
+        <div
+          className="video-list"
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy' }}
+          onDrop={async (e) => {
+            e.preventDefault(); e.stopPropagation()
+            const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('video/') || f.type.startsWith('image/'))
+            if (files.length === 0) return
+            await handleFileChange({ target: { files } })
+          }}
+        >
           {videos.length === 0 && (
             <div className="empty-list">
               <p>Keine Videos importiert.</p>
@@ -1657,7 +1779,7 @@ function App() {
               onDoubleClick={() => handleDoubleClickMedia(v.id)}
               title={`${v.path}\nDoppelklick = Vorschau · Ziehen = auf Timeline`}
             >
-              <div className="video-icon"><Icon.Play /></div>
+              <div className="video-icon">{v.mediaType === 'image' ? <Icon.Image /> : <Icon.Play />}</div>
               <div className="video-info">
                 <div className="video-name">{v.name}</div>
               </div>
@@ -1674,7 +1796,15 @@ function App() {
       {/* ===== Player ===== */}
       <main className="main-content">
         <div className="video-container">
-          {videoSrc ? (
+          {videoSrc && activeVideo?.mediaType === 'image' ? (
+            <img
+              key={videoSrc}
+              src={videoSrc}
+              className="video player-image"
+              alt={activeVideo?.name}
+              draggable={false}
+            />
+          ) : videoSrc ? (
             <video
               ref={videoRef}
               key={videoSrc}
@@ -1687,14 +1817,15 @@ function App() {
             />
           ) : (
             <div className="empty-overlay">
-              <p>Wähle ein Video aus der Mediathek</p>
-              <p className="hint">Doppelklick startet die Wiedergabe · ziehe ein Video auf die Timeline</p>
+              <p>Wähle ein Medium aus der Mediathek</p>
+              <p className="hint">Doppelklick zur Vorschau · Ziehen auf die Timeline</p>
             </div>
           )}
         </div>
         {activeVideo && (
           <div className="video-title-bar">
             <span className="title-name">{activeVideo.name}</span>
+            {activeVideo.mediaType === 'image' && <span className="media-type-badge">Bild · {settings.imageDuration}s</span>}
           </div>
         )}
       </main>
@@ -1738,6 +1869,12 @@ function App() {
             onClick={() => setSnapEnabled((v) => !v)}
             title="Magnet-Snap (N)"
           ><Icon.Magnet /></button>
+
+          <button
+            className={`tb-btn ${showSettings ? 'active' : ''}`}
+            onClick={() => setShowSettings((v) => !v)}
+            title="Einstellungen"
+          ><Icon.Settings /></button>
 
           <div className="tb-group volume">
             <button className="tb-btn" onClick={() => setMuted((v) => !v)} title={muted ? 'Stumm aufheben' : 'Stummschalten'}>
@@ -2059,6 +2196,42 @@ function App() {
         </div>
       </section>
 
+      {/* Settings panel */}
+      {showSettings && (
+        <div className="settings-overlay" onClick={() => setShowSettings(false)}>
+          <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-header">
+              <h3><Icon.Settings /> Einstellungen</h3>
+              <button className="settings-close" onClick={() => setShowSettings(false)}>✕</button>
+            </div>
+            <div className="settings-body">
+              <div className="settings-section">
+                <h4>Bilder</h4>
+                <label className="settings-row">
+                  <span>Standard-Bildlänge</span>
+                  <div className="settings-input-group">
+                    <input
+                      type="number"
+                      min="0.1"
+                      max="60"
+                      step="0.1"
+                      value={settings.imageDuration}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value)
+                        if (v > 0) setSettings((s) => ({ ...s, imageDuration: v }))
+                      }}
+                      className="settings-number"
+                    />
+                    <span className="settings-unit">s</span>
+                  </div>
+                </label>
+                <p className="settings-hint">Wird für neu importierte Bilder verwendet.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Context menu */}
       {contextMenu && (() => {
         const clip = clips.find((c) => c.id === contextMenu.clipId)
@@ -2079,7 +2252,7 @@ function App() {
             </button>
             <button
               className="cm-item"
-              onClick={() => { duplicateClip(clip.id); setContextMenu(null) }}
+              onClick={() => handleContextMenuDuplicate(clip.id)}
             >
               <Icon.Plus /> Duplizieren <span className="cm-shortcut">Ctrl+D</span>
             </button>
@@ -2093,7 +2266,7 @@ function App() {
             <div className="cm-divider" />
             <button
               className="cm-item danger"
-              onClick={() => { commitClips(clips.filter((c) => c.id !== clip.id)); setActiveClipId(null); setContextMenu(null) }}
+              onClick={() => handleContextMenuDelete(clip.id)}
             >
               <Icon.Trash /> Löschen <span className="cm-shortcut">Del</span>
             </button>

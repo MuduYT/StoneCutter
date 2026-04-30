@@ -1205,6 +1205,118 @@ button {
   margin: 4px 6px;
 }
 
+/* ===== Player image ===== */
+.player-image {
+  object-fit: contain;
+  background: #000;
+  pointer-events: none;
+}
+
+.media-type-badge {
+  font-size: 10px;
+  background: rgba(139, 92, 246, 0.25);
+  border: 1px solid var(--border);
+  color: var(--accent-hover);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 8px;
+}
+
+/* ===== Settings modal ===== */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  width: 360px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.settings-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.settings-close:hover { background: var(--bg-hover); color: var(--text); }
+
+.settings-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 16px; }
+
+.settings-section h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin-bottom: 10px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text);
+  cursor: default;
+}
+
+.settings-input-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-number {
+  width: 64px;
+  padding: 4px 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: right;
+}
+.settings-number:focus { outline: none; border-color: var(--accent); }
+
+.settings-unit { font-size: 12px; color: var(--text-muted); }
+
+.settings-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 8px;
+}
+
 /* Responsive: small windows */
 @media (max-width: 1100px) {
   .video-container, .video-title-bar { width: min(560px, 100%); }
