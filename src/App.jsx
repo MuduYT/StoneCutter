@@ -2319,11 +2319,17 @@ function App() {
                   <div className="settings-section">
                     <h4>Qualität</h4>
                     <div className="export-quality-group">
-                      {[['low', 'Niedrig', 'kleinste Datei'], ['medium', 'Mittel', 'empfohlen'], ['high', 'Hoch', 'beste Qualität']].map(([val, label, hint]) => (
+                      {[
+                        { val: 'low',    label: 'Niedrig', crf: 28, preset: 'veryfast', hint: '~2–4 Mbit/s',  desc: 'Kleinste Datei, sichtbare Artefakte' },
+                        { val: 'medium', label: 'Mittel',  crf: 23, preset: 'fast',     hint: '~6–10 Mbit/s', desc: 'Empfohlen – gute Qualität & Größe' },
+                        { val: 'high',   label: 'Hoch',    crf: 18, preset: 'slow',     hint: '~15–30 Mbit/s',desc: 'Maximale Qualität, große Datei' },
+                      ].map(({ val, label, crf, preset, hint, desc }) => (
                         <label key={val} className={`export-quality-btn ${exportQuality === val ? 'active' : ''}`}>
                           <input type="radio" name="quality" value={val} checked={exportQuality === val} onChange={() => setExportQuality(val)} />
                           <span className="eq-label">{label}</span>
                           <span className="eq-hint">{hint}</span>
+                          <span className="eq-desc">{desc}</span>
+                          <span className="eq-tech">CRF {crf} · {preset}</span>
                         </label>
                       ))}
                     </div>

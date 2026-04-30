@@ -1426,7 +1426,9 @@ button {
 .export-quality-btn:hover { background: var(--bg-hover); }
 .export-quality-btn.active { background: rgba(139, 92, 246, 0.18); border-color: var(--accent); }
 .eq-label { font-size: 12px; font-weight: 600; color: var(--text); }
-.eq-hint { font-size: 10px; color: var(--text-faint); }
+.eq-hint { font-size: 11px; color: var(--accent); font-weight: 600; }
+.eq-desc { font-size: 10px; color: var(--text-muted); text-align: center; line-height: 1.3; }
+.eq-tech { font-size: 9px; color: var(--text-faint); font-family: monospace; margin-top: 2px; }
 
 .export-start-btn {
   display: flex;
