@@ -40,3 +40,12 @@ source: .windsurf/workflows/rules.md
 - Progress before perfection.
 - Rough working code is better than no code.
 - Make it work first, then clean it up.
+
+## Windows Dev Environment
+
+- Rust/Cargo is installed at `C:\Users\viuser\.cargo\bin\` but may not be in PATH for IDE terminals.
+- Before running `npm run tauri dev`, ensure cargo is available: `$env:PATH += ";C:\Users\viuser\.cargo\bin"`
+- PowerShell execution policy must be set: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
+- First Tauri build takes 3–10 minutes; subsequent builds are fast (~30s).
+- FFmpeg must be in system PATH for the export feature to work.
+- Git remote is `https://github.com/MuduYT/StoneCutter.git` — push with MuduYT credentials.
