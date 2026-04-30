@@ -337,6 +337,7 @@ const Icon = {
   Redo: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 7v6h-6M3 17a9 9 0 0 1 15-6.7L21 13"/></svg>,
   Settings: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
   Image: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
+  Export: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
 }
 
 function App() {
@@ -387,6 +388,53 @@ function App() {
   })
   const [showSettings, setShowSettings] = useState(false)
   const [aspectRatio, setAspectRatio] = useState('16:9')
+  const [showExport, setShowExport] = useState(false)
+  const [exportQuality, setExportQuality] = useState('medium')
+  const [exportStatus, setExportStatus] = useState(null) // null | 'running' | { ok, msg }
+
+  const handleExport = async () => {
+    if (!isTauri) return
+    if (clips.length === 0) { setExportStatus({ ok: false, msg: 'Keine Clips auf der Timeline.' }); return }
+
+    // Build segments: sorted clips + gaps
+    const sorted = [...clips].sort((a, b) => a.startTime - b.startTime)
+    const segments = []
+    let prevEnd = 0
+    for (const clip of sorted) {
+      if (clip.startTime > prevEnd + 0.005) {
+        segments.push({ source_path: '', in_point: 0, out_point: clip.startTime - prevEnd, media_type: 'gap' })
+      }
+      const vid = videos.find((v) => v.id === clip.videoId)
+      const srcPath = vid?.path || ''
+      // Validate full path (not just filename)
+      const isAbsolute = /^[A-Za-z]:[\\/]/.test(srcPath) || srcPath.startsWith('/')
+      if (!isAbsolute) {
+        setExportStatus({ ok: false, msg: `"${vid?.name || clip.videoId}" wurde per Browser importiert – für den Export muss die Datei über den Tauri-Dateidialog geöffnet werden.` })
+        return
+      }
+      segments.push({ source_path: srcPath, in_point: clip.inPoint, out_point: clip.outPoint, media_type: vid?.mediaType || 'video' })
+      prevEnd = clip.startTime + (clip.outPoint - clip.inPoint)
+    }
+
+    const qualityMap = { low: { crf: 28, preset: 'veryfast' }, medium: { crf: 23, preset: 'fast' }, high: { crf: 18, preset: 'slow' } }
+    const { crf, preset } = qualityMap[exportQuality]
+    const [w, h] = aspectRatio === '9:16' ? [1080, 1920] : [1920, 1080]
+
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog')
+      const outputPath = await save({ defaultPath: 'export.mp4', filters: [{ name: 'MP4 Video', extensions: ['mp4'] }] })
+      if (!outputPath) return
+
+      setExportStatus('running')
+      const { invoke } = await import('@tauri-apps/api/core')
+      const result = await invoke('export_video', { segments, outputPath, width: w, height: h, crf, preset })
+
+      const noAudio = typeof result === 'string' && result.includes('|no_audio')
+      setExportStatus({ ok: true, msg: noAudio ? 'Export erfolgreich (kein Audiotrack in den Quellen – stilles Video).' : 'Export erfolgreich!' })
+    } catch (err) {
+      setExportStatus({ ok: false, msg: String(err) })
+    }
+  }
   useEffect(() => {
     try { localStorage.setItem('stonecutter.settings', JSON.stringify(settings)) } catch { /* ignored */ }
   }, [settings])
@@ -1895,6 +1943,15 @@ function App() {
             title="Einstellungen"
           ><Icon.Settings /></button>
 
+          {isTauri && (
+            <button
+              className="tb-btn export-btn"
+              onClick={() => { setExportStatus(null); setShowExport(true) }}
+              title="Als MP4 exportieren"
+              disabled={clips.length === 0}
+            ><Icon.Export /> Export</button>
+          )}
+
           <div className="tb-group volume">
             <button className="tb-btn" onClick={() => setMuted((v) => !v)} title={muted ? 'Stumm aufheben' : 'Stummschalten'}>
               {muted || volume === 0 ? <Icon.Mute /> : <Icon.Volume />}
@@ -2214,6 +2271,72 @@ function App() {
           </div>
         </div>
       </section>
+
+      {/* Export modal */}
+      {showExport && (
+        <div className="settings-overlay" onClick={() => { if (exportStatus !== 'running') setShowExport(false) }}>
+          <div className="settings-panel export-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-header">
+              <h3><Icon.Export /> Video exportieren</h3>
+              {exportStatus !== 'running' && (
+                <button className="settings-close" onClick={() => setShowExport(false)}>✕</button>
+              )}
+            </div>
+            <div className="settings-body">
+
+              {exportStatus === 'running' ? (
+                <div className="export-running">
+                  <div className="export-spinner" />
+                  <p>FFmpeg läuft… Das kann bei langen Videos einige Minuten dauern.</p>
+                </div>
+              ) : exportStatus?.ok != null ? (
+                <div className={`export-result ${exportStatus.ok ? 'ok' : 'err'}`}>
+                  <p>{exportStatus.msg}</p>
+                  <button className="export-action-btn" onClick={() => { setExportStatus(null); if (exportStatus.ok) setShowExport(false) }}>
+                    {exportStatus.ok ? 'Schließen' : 'Erneut versuchen'}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="settings-section">
+                    <h4>Format</h4>
+                    <div className="export-info-row">
+                      <span>Auflösung</span>
+                      <strong>{aspectRatio === '9:16' ? '1080 × 1920 (9:16)' : '1920 × 1080 (16:9)'}</strong>
+                    </div>
+                    <div className="export-info-row">
+                      <span>Container</span>
+                      <strong>MP4 (H.264 + AAC)</strong>
+                    </div>
+                    <div className="export-info-row">
+                      <span>Timeline-Dauer</span>
+                      <strong>{formatTC(totalEnd)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="settings-section">
+                    <h4>Qualität</h4>
+                    <div className="export-quality-group">
+                      {[['low', 'Niedrig', 'kleinste Datei'], ['medium', 'Mittel', 'empfohlen'], ['high', 'Hoch', 'beste Qualität']].map(([val, label, hint]) => (
+                        <label key={val} className={`export-quality-btn ${exportQuality === val ? 'active' : ''}`}>
+                          <input type="radio" name="quality" value={val} checked={exportQuality === val} onChange={() => setExportQuality(val)} />
+                          <span className="eq-label">{label}</span>
+                          <span className="eq-hint">{hint}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button className="export-start-btn" onClick={handleExport}>
+                    <Icon.Export /> Speicherort wählen & Exportieren
+                  </button>
+                  <p className="settings-hint">Benötigt FFmpeg im System-PATH.</p>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Settings panel */}
       {showSettings && (
