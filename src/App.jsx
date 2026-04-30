@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/rules-of-hooks */
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import logoUrl from '../media/Logo/StoneCutter-Logo.png'
 import './App.css'
@@ -919,7 +918,7 @@ function App() {
       ? initialList
       : resolveOverlaps(initialList, clipId, () => nextId('clip')))
 
-    const duration = await probeDuration(video.src)
+    const duration = await probeDuration(video.src, video.mediaType, settings.imageDuration)
     setClips((prev) => {
       const placeholderClip = prev.find((c) => c.id === clipId)
       if (!placeholderClip) return prev // user removed it during probe
@@ -2394,7 +2393,7 @@ function App() {
             </button>
             <button
               className="cm-item"
-              onClick={() => handleContextMenuDuplicate(clip.id)}
+              onClick={() => handleContextMenuDuplicate(clip.id)} // eslint-disable-line react-hooks/refs
             >
               <Icon.Plus /> Duplizieren <span className="cm-shortcut">Ctrl+D</span>
             </button>
