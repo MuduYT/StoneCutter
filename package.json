@@ -1,14 +1,25 @@
 {
   "name": "stonecutter",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "node src/lib/run-tests.js",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "installer:win": "tauri build --target x86_64-pc-windows-msvc",
+    "release:precheck": "powershell -ExecutionPolicy Bypass -File .\\scripts\\release-precheck.ps1",
+    "release:bump": "powershell -ExecutionPolicy Bypass -File .\\scripts\\bump-version.ps1",
+    "release:patch": "powershell -ExecutionPolicy Bypass -File .\\scripts\\bump-version.ps1 -Increment patch",
+    "release:minor": "powershell -ExecutionPolicy Bypass -File .\\scripts\\bump-version.ps1 -Increment minor",
+    "release:major": "powershell -ExecutionPolicy Bypass -File .\\scripts\\bump-version.ps1 -Increment major",
+    "release:commit": "powershell -ExecutionPolicy Bypass -File .\\scripts\\release-commit.ps1",
+    "release:tag": "powershell -ExecutionPolicy Bypass -File .\\scripts\\release-tag.ps1",
+    "release:push-tags": "powershell -ExecutionPolicy Bypass -File .\\scripts\\release-push-tags.ps1",
+    "release:all": "powershell -ExecutionPolicy Bypass -File .\\scripts\\release-all.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

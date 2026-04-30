@@ -1,185 +1,68 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import logoUrl from '../media/Logo/StoneCutter-Logo.png'
 import './App.css'
+import {
+  SNAP_THRESHOLD_PX,
+  MOVE_THRESHOLD_PX,
+  MIN_CLIP_DURATION,
+  IMAGE_EXTS,
+  VIDEO_EXTS,
+  getMediaType,
+  normalizeSourceSelection,
+  constrainMoveStart,
+  minStartForTrimLeft,
+  maxEndForTrimRight,
+  detectInsertPoint,
+  applyRippleInsert,
+  findGapAtTime,
+  findTimelineSpaceAtTime,
+  closeGap,
+  rippleDeleteClips,
+  resolveOverlaps,
+  resolveOverlapsMulti,
+} from './lib/timeline.js'
+import {
+  nextTrackId,
+  createDefaultTracks,
+  addTrack as addTrackToList,
+  removeTrack as removeTrackFromList,
+  updateTrack as updateTrackInList,
+  DEFAULT_TRACK_HEIGHT,
+} from './lib/trackStore.js'
+import { buildExportSegments } from './lib/exportSegments.js'
+import {
+  buildProjectDocument,
+  createEmptyProjectState,
+  hydrateProjectState,
+  sanitizeProjectName,
+} from './lib/project.js'
+import {
+  findClipAtTime,
+  findNextClipAfter,
+  getClipPlaybackPosition,
+  getClipTimelineEnd,
+  getImagePlaybackTimelineTime,
+  getTimelineContentEnd,
+  getVirtualTimelinePlaybackTime,
+  shouldLeaveClipPlayback,
+  shouldStartNextClipFromGap,
+} from './lib/playback.js'
+import {
+  FOCUS_SOURCE,
+  FOCUS_TIMELINE,
+  clampSourceRange,
+  clampSourceTime,
+  isSourceMonitorVisible,
+  stepSourcePreviewTime,
+  timeFromClientX,
+} from './lib/sourceMonitor.js'
 
 const isTauri = '__TAURI_INTERNALS__' in window
-const SNAP_THRESHOLD_PX = 8
-const MOVE_THRESHOLD_PX = 3
-const MIN_CLIP_DURATION = 0.05
+const RECENT_PROJECTS_KEY = 'stonecutter.recentProjects'
+const PROJECT_FILTER = [{ name: 'StoneCutter Project', extensions: ['stonecutter'] }]
 
 let _idCounter = 0
 const nextId = (prefix) => `${prefix}-${++_idCounter}`
-
-// --- Collision / overlap helpers (Filmora-style track behavior) ---
-const constrainMoveStart = (desired, dur, others) => {
-  const sorted = others
-    .map((o) => [o.startTime, o.startTime + (o.outPoint - o.inPoint)])
-    .sort((a, b) => a[0] - b[0])
-  const gaps = []
-  let prevEnd = 0
-  for (const [oS, oE] of sorted) {
-    if (oS - prevEnd >= dur - 1e-3) gaps.push([prevEnd, oS - dur])
-    prevEnd = Math.max(prevEnd, oE)
-  }
-  gaps.push([prevEnd, Infinity])
-  let best = desired, bestDist = Infinity
-  for (const [lo, hi] of gaps) {
-    const c = Math.max(lo, Math.min(hi, desired))
-    const d = Math.abs(c - desired)
-    if (d < bestDist) { bestDist = d; best = c }
-  }
-  return Math.max(0, best)
-}
-
-const minStartForTrimLeft = (fixedRight, others) => {
-  let limit = 0
-  for (const o of others) {
-    const oE = o.startTime + (o.outPoint - o.inPoint)
-    if (oE <= fixedRight + 1e-3 && oE > limit) limit = oE
-  }
-  return limit
-}
-
-const maxEndForTrimRight = (fixedLeft, others) => {
-  let limit = Infinity
-  for (const o of others) {
-    if (o.startTime >= fixedLeft - 1e-3 && o.startTime < limit) limit = o.startTime
-  }
-  return limit
-}
-
-// Detect ripple-insert intent: cursor is over a clip OR in a gap too small for the dragged dur.
-// Returns { insertPoint } or null. `excludeId` skips the dragged clip itself.
-const detectInsertPoint = (excludeId, center, dur, snapshot) => {
-  const others = snapshot.filter((c) => c.id !== excludeId)
-  for (const o of others) {
-    const oE = o.startTime + (o.outPoint - o.inPoint)
-    if (center >= o.startTime && center <= oE) {
-      const oCenter = (o.startTime + oE) / 2
-      return { insertPoint: center < oCenter ? o.startTime : oE }
-    }
-  }
-  let leftEnd = 0, rightStart = Infinity
-  for (const o of others) {
-    const oE = o.startTime + (o.outPoint - o.inPoint)
-    if (oE <= center + 1e-3 && oE > leftEnd) leftEnd = oE
-    if (o.startTime > center - 1e-3 && o.startTime < rightStart) rightStart = o.startTime
-  }
-  if (rightStart < Infinity && rightStart - leftEnd < dur - 1e-3) {
-    const gapCenter = (leftEnd + rightStart) / 2
-    return { insertPoint: center < gapCenter ? leftEnd : rightStart }
-  }
-  return null
-}
-
-// Apply a ripple-insert to `snapshot`: dragged clip placed at `insertPoint`,
-// every clip with startTime >= insertPoint (except the dragged) is shifted by `dur`.
-const applyRippleInsert = (snapshot, draggedId, insertPoint, dur) => {
-  return snapshot.map((c) => {
-    if (c.id === draggedId) return { ...c, startTime: insertPoint }
-    if (c.startTime >= insertPoint - 1e-3) return { ...c, startTime: c.startTime + dur }
-    return c
-  })
-}
-
-// Find a gap at time t. Returns { start, end } or null (only for gaps BETWEEN clips).
-const findGapAtTime = (t, list) => {
-  const sorted = [...list].sort((a, b) => a.startTime - b.startTime)
-  let prevEnd = 0
-  for (const c of sorted) {
-    if (t < c.startTime - 1e-3) {
-      return { start: prevEnd, end: c.startTime }
-    }
-    const cE = c.startTime + (c.outPoint - c.inPoint)
-    if (t < cE) return null
-    prevEnd = Math.max(prevEnd, cE)
-  }
-  return null
-}
-
-// Close a gap: shift all clips with startTime >= gap.end left by gap width.
-const closeGap = (list, gap) => {
-  const dur = gap.end - gap.start
-  if (dur <= 0) return list
-  return list.map((c) =>
-    c.startTime >= gap.end - 1e-3
-      ? { ...c, startTime: c.startTime - dur }
-      : c
-  )
-}
-
-// Ripple-delete: remove clips with given ids; shift later clips left to fill the freed slots.
-// Pre-existing gaps between non-deleted clips are preserved.
-const rippleDeleteClips = (list, idsToDelete) => {
-  const ids = idsToDelete instanceof Set ? idsToDelete : new Set(idsToDelete)
-  const removed = list.filter((c) => ids.has(c.id))
-  const remaining = list.filter((c) => !ids.has(c.id))
-  return remaining.map((c) => {
-    let shift = 0
-    for (const r of removed) {
-      if (r.startTime < c.startTime - 1e-3) shift += (r.outPoint - r.inPoint)
-    }
-    return { ...c, startTime: Math.max(0, c.startTime - shift) }
-  })
-}
-
-// Filmora-style overwrite: trim/split neighbors that overlap modifiedId.
-// `protectedIds` (optional Set) keeps those clips untouched — useful for multi-clip drags
-// where other selected clips should not be cut by the moved one.
-const resolveOverlaps = (clipList, modifiedId, makeId, protectedIds) => {
-  const moved = clipList.find((c) => c.id === modifiedId)
-  if (!moved) return clipList
-  const protect = protectedIds || null
-  const mS = moved.startTime
-  const mE = moved.startTime + (moved.outPoint - moved.inPoint)
-  const out = []
-  for (const c of clipList) {
-    if (c.id === modifiedId) { out.push(c); continue }
-    if (protect && protect.has(c.id)) { out.push(c); continue }
-    const cS = c.startTime
-    const cE = c.startTime + (c.outPoint - c.inPoint)
-    if (cE <= mS + 1e-3 || cS >= mE - 1e-3) { out.push(c); continue }
-    if (mS <= cS + 1e-3 && mE >= cE - 1e-3) continue
-    if (cS < mS - 1e-3 && cE > mE + 1e-3) {
-      const left = { ...c, outPoint: c.inPoint + (mS - cS) }
-      const right = { ...c, id: makeId(), inPoint: c.inPoint + (mE - cS), startTime: mE }
-      if (left.outPoint - left.inPoint > MIN_CLIP_DURATION) out.push(left)
-      if (right.outPoint - right.inPoint > MIN_CLIP_DURATION) out.push(right)
-      continue
-    }
-    if (cS >= mS - 1e-3 && cS < mE - 1e-3) {
-      const nc = { ...c, inPoint: c.inPoint + (mE - cS), startTime: mE }
-      if (nc.outPoint - nc.inPoint > MIN_CLIP_DURATION) out.push(nc)
-      continue
-    }
-    if (cE > mS + 1e-3 && cE <= mE + 1e-3) {
-      const nc = { ...c, outPoint: c.outPoint - (cE - mS) }
-      if (nc.outPoint - nc.inPoint > MIN_CLIP_DURATION) out.push(nc)
-      continue
-    }
-    out.push(c)
-  }
-  return out
-}
-
-// Run resolveOverlaps for every modifier id, protecting other modifiers from being cut.
-const resolveOverlapsMulti = (clipList, modifierIds, makeId) => {
-  const ids = modifierIds instanceof Set ? modifierIds : new Set(modifierIds)
-  let result = clipList
-  for (const id of ids) {
-    result = resolveOverlaps(result, id, makeId, ids)
-  }
-  return result
-}
-
-const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']
-const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']
-
-const getMediaType = (nameOrPath) => {
-  const ext = (nameOrPath.split('.').pop() || '').toLowerCase()
-  if (IMAGE_EXTS.includes(ext)) return 'image'
-  return 'video'
-}
 
 async function openVideoDialog() {
   if (!isTauri) return null
@@ -337,6 +220,11 @@ const Icon = {
   Settings: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
   Image: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
   Export: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  Save: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+  FolderOpen: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2"/><path d="M3 9h18l-2 10H5z"/></svg>,
+  File: () => <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
+  VideoTrack: () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 10h18M3 14h18"/></svg>,
+  AudioTrack: () => <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 12v2M8 8v8M12 5v14M16 8v8M20 11v2"/></svg>,
 }
 
 function App() {
@@ -347,7 +235,11 @@ function App() {
   const pendingPlayRef = useRef(false) // play after src change + metadata
   const historyRef = useRef({ past: [], future: [] })
   const interactionRef = useRef(null)
-  const playbackRef = useRef({ clips: [], activeClipId: null, isPlaying: false })
+  const playbackRef = useRef({ clips: [], activeClipId: null, activeId: null, isPlaying: false, videos: [], timelineTime: 0 })
+  const playbackModeRef = useRef(null) // "timeline" | "source" | null
+  const playingClipIdRef = useRef(null) // tracks current clip for playback engine — never touches user selection
+  const imagePlaybackRef = useRef(null) // virtual playback clock for still-image clips
+  const timelinePlaybackRef = useRef(null) // virtual clock for empty sequence/gap playback
   const clipboardRef = useRef([]) // copied clips (with relative startTimes)
 
   const [isPlaying, setIsPlaying] = useState(false)
@@ -368,6 +260,9 @@ function App() {
   const [peaksMap, setPeaksMap] = useState({}) // videoId -> peaks[] (or null while loading)
   const [thumbsMap, setThumbsMap] = useState({}) // videoId -> dataURL[] (or null while loading)
   const [videoDurations, setVideoDurations] = useState({}) // videoId -> seconds (probed once after import)
+  const [sourceRanges, setSourceRanges] = useState({}) // videoId -> { inPoint, outPoint } for source preview drags
+  const [sourceMonitorId, setSourceMonitorId] = useState(null) // only set by explicit video clicks in the media library
+  const [editorFocus, setEditorFocus] = useState(FOCUS_SOURCE)
   const [contextMenu, setContextMenu] = useState(null) // {x, y, clipId}
   const [scrubTooltip, setScrubTooltip] = useState(null) // {x, time} during seek drag
   const [selectedGap, setSelectedGap] = useState(null) // { start, end }
@@ -375,7 +270,14 @@ function App() {
   const [marqueeBox, setMarqueeBox] = useState(null) // { x1, y1, x2, y2 } in tracks-content px
   const [importDragInfo, setImportDragInfo] = useState(null) // { videoId, name, dur, insertPoint, mode, simulatedLayout }
   const draggedVideoIdRef = useRef(null)
+  const draggedTrackModeRef = useRef('av') // "av" = video with audio, "audio" = audio-only
+  const sourceTrimDragRef = useRef(null)
+  const sourceSeekDragRef = useRef(null)
   const [dragTooltip, setDragTooltip] = useState(null) // { x, y, label }
+  const [tracks, setTracks] = useState(() => createDefaultTracks())
+  const trackHeadersListRef = useRef(null)
+  const [editingTrackId, setEditingTrackId] = useState(null)
+  const [dropTargetTrackId, setDropTargetTrackId] = useState(null)
 
   // --- Settings (persisted in localStorage) ---
   const [settings, setSettings] = useState(() => {
@@ -390,30 +292,165 @@ function App() {
   const [showExport, setShowExport] = useState(false)
   const [exportQuality, setExportQuality] = useState('medium')
   const [exportStatus, setExportStatus] = useState(null) // null | 'running' | { ok, msg }
+  const [previewTime, setPreviewTime] = useState(0)
+  const [playbackMode, setPlaybackMode] = useState(null) // "timeline" | "source" | null
+  const [currentProject, setCurrentProject] = useState(null) // { name, path, directory }
+  const [showProjectStart, setShowProjectStart] = useState(true)
+  const [showNewProjectDialog, setShowNewProjectDialog] = useState(false)
+  const [newProjectName, setNewProjectName] = useState('Untitled Project')
+  const [projectStatus, setProjectStatus] = useState(null)
+  const [isProjectDirty, setIsProjectDirty] = useState(false)
+  const [recentProjects, setRecentProjects] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(RECENT_PROJECTS_KEY) || '[]')
+    } catch {
+      return []
+    }
+  })
+  const projectHydratingRef = useRef(false)
+
+  const persistRecentProjects = useCallback((items) => {
+    setRecentProjects(items)
+    try { localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(items)) } catch { /* ignored */ }
+  }, [])
+
+  const rememberProject = useCallback((project) => {
+    if (!project?.path) return
+    const entry = {
+      name: project.name || 'Untitled Project',
+      path: project.path,
+      directory: project.directory || '',
+      openedAt: new Date().toISOString(),
+    }
+    const next = [entry, ...recentProjects.filter((item) => item.path !== entry.path)].slice(0, 8)
+    persistRecentProjects(next)
+  }, [persistRecentProjects, recentProjects])
+
+  const getProjectSnapshot = useCallback((name = currentProject?.name || newProjectName) => buildProjectDocument({
+    name,
+    videos,
+    clips,
+    sourceRanges,
+    videoDurations,
+    timelineTime,
+    settings,
+    aspectRatio,
+    pxPerSec,
+    snapEnabled,
+    volume,
+    muted,
+  }), [aspectRatio, clips, currentProject?.name, muted, newProjectName, pxPerSec, settings, snapEnabled, sourceRanges, timelineTime, videoDurations, videos, volume])
+
+  const applyProjectState = useCallback((state, projectInfo) => {
+    projectHydratingRef.current = true
+    setVideos(state.videos)
+    setClips(state.clips)
+    setSourceRanges(state.sourceRanges)
+    setVideoDurations(state.videoDurations)
+    setPeaksMap({})
+    setThumbsMap({})
+    setTimelineTime(state.timelineTime)
+    setSettings((prev) => ({ ...prev, ...state.settings }))
+    setAspectRatio(state.ui.aspectRatio)
+    setPxPerSec(state.ui.pxPerSec)
+    setSnapEnabled(state.ui.snapEnabled)
+    setVolume(state.ui.volume)
+    setMuted(state.ui.muted)
+    setActiveId(state.videos[0]?.id || null)
+    setSourceMonitorId(null)
+    setEditorFocus(FOCUS_SOURCE)
+    setActiveClipId(null)
+    setSelectedClipIds(new Set())
+    setSelectedGap(null)
+    setShowProjectStart(false)
+    setCurrentProject(projectInfo)
+    setIsProjectDirty(false)
+    historyRef.current = { past: [], future: [] }
+    setHistorySizes({ past: 0, future: 0 })
+    setTimeout(() => { projectHydratingRef.current = false }, 0)
+  }, [setSettings])
+
+  const handleCreateProject = useCallback(async () => {
+    if (!isTauri) {
+      const name = sanitizeProjectName(newProjectName)
+      applyProjectState(createEmptyProjectState(name), { name, path: '', directory: '' })
+      setShowNewProjectDialog(false)
+      return
+    }
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const { invoke } = await import('@tauri-apps/api/core')
+      const parentDir = await open({ directory: true, multiple: false, title: 'Projektordner-Speicherort waehlen' })
+      if (!parentDir) return
+      const name = sanitizeProjectName(newProjectName)
+      const document = JSON.stringify(buildProjectDocument(createEmptyProjectState(name)), null, 2)
+      const info = await invoke('create_project_folder', { parentDir, projectName: name, document })
+      applyProjectState(createEmptyProjectState(info.name), info)
+      rememberProject(info)
+      setShowNewProjectDialog(false)
+      setProjectStatus({ ok: true, msg: `Projekt angelegt: ${info.name}` })
+    } catch (err) {
+      setProjectStatus({ ok: false, msg: String(err) })
+    }
+  }, [applyProjectState, newProjectName, rememberProject])
+
+  const openProjectPath = useCallback(async (path) => {
+    if (!isTauri || !path) return
+    try {
+      const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
+      const raw = await invoke('load_project_file', { projectPath: path })
+      const state = hydrateProjectState(raw, convertFileSrc)
+      const directory = path.replace(/[\\/][^\\/]+$/, '')
+      const projectInfo = { name: state.name, path, directory }
+      applyProjectState(state, projectInfo)
+      rememberProject(projectInfo)
+      setProjectStatus({ ok: true, msg: `Projekt geoeffnet: ${state.name}` })
+    } catch (err) {
+      setProjectStatus({ ok: false, msg: String(err) })
+    }
+  }, [applyProjectState, rememberProject])
+
+  const handleOpenProject = useCallback(async () => {
+    if (!isTauri) return
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      const selected = await open({ multiple: false, filters: PROJECT_FILTER })
+      if (selected) await openProjectPath(selected)
+    } catch (err) {
+      setProjectStatus({ ok: false, msg: String(err) })
+    }
+  }, [openProjectPath])
+
+  const saveCurrentProject = useCallback(async () => {
+    if (!currentProject?.path || !isTauri) {
+      setProjectStatus({ ok: false, msg: 'Kein gespeichertes Projekt aktiv.' })
+      return
+    }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const document = JSON.stringify(getProjectSnapshot(currentProject.name), null, 2)
+      await invoke('save_project_file', { projectPath: currentProject.path, document })
+      setIsProjectDirty(false)
+      rememberProject(currentProject)
+      setProjectStatus({ ok: true, msg: 'Projekt gespeichert.' })
+    } catch (err) {
+      setProjectStatus({ ok: false, msg: String(err) })
+    }
+  }, [currentProject, getProjectSnapshot, rememberProject])
+
+  useEffect(() => {
+    if (!currentProject || projectHydratingRef.current) return
+    setIsProjectDirty(true)
+  }, [aspectRatio, clips, currentProject, muted, pxPerSec, settings, snapEnabled, sourceRanges, timelineTime, videoDurations, videos, volume])
 
   const handleExport = async () => {
     if (!isTauri) return
-    if (clips.length === 0) { setExportStatus({ ok: false, msg: 'Keine Clips auf der Timeline.' }); return }
-
-    // Build segments: sorted clips + gaps
-    const sorted = [...clips].sort((a, b) => a.startTime - b.startTime)
-    const segments = []
-    let prevEnd = 0
-    for (const clip of sorted) {
-      if (clip.startTime > prevEnd + 0.005) {
-        segments.push({ source_path: '', in_point: 0, out_point: clip.startTime - prevEnd, media_type: 'gap' })
-      }
-      const vid = videos.find((v) => v.id === clip.videoId)
-      const srcPath = vid?.path || ''
-      // Validate full path (not just filename)
-      const isAbsolute = /^[A-Za-z]:[\\/]/.test(srcPath) || srcPath.startsWith('/')
-      if (!isAbsolute) {
-        setExportStatus({ ok: false, msg: `"${vid?.name || clip.videoId}" wurde per Browser importiert – für den Export muss die Datei über den Tauri-Dateidialog geöffnet werden.` })
-        return
-      }
-      segments.push({ source_path: srcPath, in_point: clip.inPoint, out_point: clip.outPoint, media_type: vid?.mediaType || 'video' })
-      prevEnd = clip.startTime + (clip.outPoint - clip.inPoint)
+    const exportPlan = buildExportSegments({ clips, videos })
+    if (!exportPlan.ok) {
+      setExportStatus({ ok: false, msg: exportPlan.error })
+      return
     }
+    const { segments } = exportPlan
 
     const qualityMap = { low: { crf: 28, preset: 'veryfast' }, medium: { crf: 23, preset: 'fast' }, high: { crf: 18, preset: 'slow' } }
     const { crf, preset } = qualityMap[exportQuality]
@@ -438,12 +475,168 @@ function App() {
     try { localStorage.setItem('stonecutter.settings', JSON.stringify(settings)) } catch { /* ignored */ }
   }, [settings])
 
+  useEffect(() => {
+    playbackModeRef.current = playbackMode
+  }, [playbackMode])
+
+  useEffect(() => {
+    if (!projectStatus) return undefined
+    const clearTimer = window.setTimeout(() => setProjectStatus(null), 1500)
+    return () => {
+      window.clearTimeout(clearTimer)
+    }
+  }, [projectStatus])
+
   const activeVideo = videos.find((v) => v.id === activeId)
   const videoSrc = activeVideo?.src || ''
   const activeClip = clips.find((c) => c.id === activeClipId)
 
+  const getSourceSelection = useCallback((mediaOrId) => {
+    const media = typeof mediaOrId === 'string'
+      ? videos.find((v) => v.id === mediaOrId)
+      : mediaOrId
+    return normalizeSourceSelection({
+      media,
+      probedDuration: media ? videoDurations[media.id] : null,
+      savedRange: media ? sourceRanges[media.id] : null,
+      defaultImageDuration: settings.imageDuration,
+    })
+  }, [settings.imageDuration, sourceRanges, videoDurations, videos])
+
+  const activeSourceSelection = activeVideo ? getSourceSelection(activeVideo) : null
+  const isSourceMonitorActive = isSourceMonitorVisible({ media: activeVideo, sourceMonitorId }) && activeSourceSelection
+
+  const updateSourceRange = useCallback((videoId, patch) => {
+    const media = videos.find((v) => v.id === videoId)
+    if (!media) return
+    const current = getSourceSelection(media)
+    const { inPoint: nextIn, outPoint: nextOut } = clampSourceRange({
+      duration: current.duration,
+      currentRange: current,
+      patch,
+    })
+
+    setSourceRanges((prev) => ({ ...prev, [videoId]: { inPoint: nextIn, outPoint: nextOut } }))
+    if (videoId === activeId && videoRef.current && media.mediaType === 'video') {
+      try { videoRef.current.currentTime = patch.outPoint != null ? nextOut : nextIn } catch { /* ignored */ }
+      setPreviewTime(patch.outPoint != null ? nextOut : nextIn)
+    }
+  }, [activeId, getSourceSelection, videos])
+
+  const sourceTimeFromClientX = useCallback((clientX) => {
+    const drag = sourceTrimDragRef.current
+    if (!drag) return 0
+    return timeFromClientX({ clientX, rect: drag.rect, duration: drag.selection.duration })
+  }, [])
+
+  const sourceTimelineTimeFromClientX = useCallback((clientX) => {
+    const drag = sourceSeekDragRef.current
+    if (!drag) return 0
+    return timeFromClientX({ clientX, rect: drag.rect, duration: drag.duration })
+  }, [])
+
+  const seekSourcePreviewTo = useCallback((time) => {
+    if (!activeVideo || activeVideo.mediaType !== 'video' || !activeSourceSelection) return
+    setEditorFocus(FOCUS_SOURCE)
+    const next = clampSourceTime(time, activeSourceSelection.duration)
+    setPreviewTime(next)
+    if (videoRef.current && activeId === activeVideo.id) {
+      try { videoRef.current.currentTime = next } catch { /* ignored */ }
+    } else {
+      setActiveId(activeVideo.id)
+      pendingSeekRef.current = next
+      pendingPlayRef.current = false
+    }
+  }, [activeId, activeSourceSelection, activeVideo])
+
+  const beginSourcePreviewSeek = useCallback((e) => {
+    if (!activeVideo || activeVideo.mediaType !== 'video' || !activeSourceSelection) return
+    e.preventDefault()
+    e.stopPropagation()
+    const rect = e.currentTarget.getBoundingClientRect()
+    sourceSeekDragRef.current = { rect, duration: activeSourceSelection.duration }
+    seekSourcePreviewTo(timeFromClientX({ clientX: e.clientX, rect, duration: activeSourceSelection.duration }))
+  }, [activeSourceSelection, activeVideo, seekSourcePreviewTo])
+
+  const beginSourceTimelineDrag = useCallback((e, edge) => {
+    if (!activeVideo || !activeSourceSelection || activeVideo.mediaType !== 'video') return
+    e.preventDefault()
+    e.stopPropagation()
+    const timelineEl = e.currentTarget.closest('.source-preview-timeline') || e.currentTarget
+    const rect = timelineEl.getBoundingClientRect()
+    const clickTime = timeFromClientX({ clientX: e.clientX, rect, duration: activeSourceSelection.duration })
+    const inferredEdge = edge || (
+      Math.abs(clickTime - activeSourceSelection.inPoint) <= Math.abs(clickTime - activeSourceSelection.outPoint)
+        ? 'inPoint'
+        : 'outPoint'
+    )
+
+    sourceTrimDragRef.current = {
+      videoId: activeVideo.id,
+      edge: inferredEdge,
+      rect,
+      selection: activeSourceSelection,
+    }
+    updateSourceRange(activeVideo.id, { [inferredEdge]: clickTime })
+  }, [activeSourceSelection, activeVideo, updateSourceRange])
+
+  const setSourcePointAtPreviewTime = useCallback((edge) => {
+    if (!activeVideo || activeVideo.mediaType !== 'video' || !activeSourceSelection) return
+    const time = clampSourceTime(previewTime, activeSourceSelection.duration)
+    updateSourceRange(activeVideo.id, { [edge]: time })
+  }, [activeSourceSelection, activeVideo, previewTime, updateSourceRange])
+
+  useEffect(() => {
+    const onMove = (e) => {
+      const drag = sourceTrimDragRef.current
+      if (drag) {
+        updateSourceRange(drag.videoId, { [drag.edge]: sourceTimeFromClientX(e.clientX) })
+      }
+      if (sourceSeekDragRef.current) {
+        seekSourcePreviewTo(sourceTimelineTimeFromClientX(e.clientX))
+      }
+    }
+    const onUp = () => {
+      sourceTrimDragRef.current = null
+      sourceSeekDragRef.current = null
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [seekSourcePreviewTo, sourceTimeFromClientX, sourceTimelineTimeFromClientX, updateSourceRange])
+
+  const makeClipFromSource = useCallback((media, clipId, startTime, trackMode = 'av') => {
+    const selection = getSourceSelection(media)
+    return {
+      id: clipId,
+      videoId: media.id,
+      name: media.name,
+      src: media.src,
+      sourceDuration: selection.duration,
+      inPoint: selection.inPoint,
+      outPoint: selection.outPoint,
+      startTime,
+      trackMode,
+    }
+  }, [getSourceSelection])
+
   // While the user is dragging from the sidebar, render the simulated layout instead of the real clips.
-  const displayClips = importDragInfo?.simulatedLayout || clips
+  const displayClips = useMemo(() => {
+    const raw = importDragInfo?.simulatedLayout || clips
+    const defaultVideoTrackId = tracks.find((t) => t.type === 'video')?.id
+    const defaultAudioTrackId = tracks.find((t) => t.type === 'audio')?.id
+    // Migrate legacy clips without trackId based on trackMode
+    return raw.map((c) => {
+      if (c.trackId) return c
+      let targetTrackId = null
+      if (c.trackMode === 'audio') { targetTrackId = defaultAudioTrackId }
+      else { targetTrackId = defaultVideoTrackId }
+      return { ...c, trackId: targetTrackId }
+    })
+  }, [importDragInfo?.simulatedLayout, clips, tracks])
 
   // Track which clips are currently being dragged → used for `.dragging` CSS class (z-index lift)
   const draggingIds = useMemo(() => {
@@ -454,10 +647,10 @@ function App() {
     return null
   }, [interaction])
   const totalEnd = useMemo(
-    () => displayClips.reduce((m, c) => Math.max(m, c.startTime + (c.outPoint - c.inPoint)), 0),
+    () => getTimelineContentEnd(displayClips),
     [displayClips]
   )
-  const totalWidth = Math.max(800, totalEnd * pxPerSec + 200)
+  const totalWidth = Math.max(800, totalEnd * pxPerSec + 200, timelineTime * pxPerSec + 200)
   const playheadX = timelineTime * pxPerSec
 
   // --- history ---
@@ -500,62 +693,180 @@ function App() {
     setActiveClipId((aid) => (aid && next.some((c) => c.id === aid) ? aid : null))
   }, [clips, syncHistorySizes])
 
-  // ---- Helpers: find clip at time / next clip ----
-  const findClipAtTime = useCallback((t, list = clips) => {
-    for (const c of list) {
-      const dur = c.outPoint - c.inPoint
-      if (t >= c.startTime - 1e-3 && t < c.startTime + dur - 1e-3) return c
-    }
-    return null
-  }, [clips])
+  // --- track management ---
+  const handleAddTrack = useCallback((type) => {
+    setTracks((prev) => addTrackToList(prev, type))
+  }, [])
+  const handleRemoveTrack = useCallback((trackId) => {
+    setTracks((prev) => removeTrackFromList(prev, trackId))
+    // Remove all clips on this track
+    setClips((prev) => prev.filter((c) => c.trackId !== trackId))
+  }, [])
+  const handleUpdateTrack = useCallback((trackId, changes) => {
+    setTracks((prev) => updateTrackInList(prev, trackId, changes))
+  }, [])
 
-  const findNextClipAfter = useCallback((t, list = clips) => {
-    let best = null
-    for (const c of list) {
-      if (c.startTime >= t - 1e-3) {
-        if (!best || c.startTime < best.startTime) best = c
-      }
+  // --- multi-track helpers ---
+  const getTrackY = useCallback(() => {
+    const tc = tracksContentRef.current
+    if (!tc) return { y: 0, scrollTop: 0 }
+    const rect = tc.getBoundingClientRect()
+    const RULER_HEIGHT = 30
+    const yOffset = tc.scrollTop - RULER_HEIGHT
+    return { y: rect.top, scrollTop: yOffset }
+  }, [])
+
+  const getTrackAtClientY = useCallback((clientY) => {
+    const { y, scrollTop } = getTrackY()
+    const relativeY = clientY - y - scrollTop
+    if (relativeY < 0) return null
+    let accumulated = 0
+    for (const track of tracks) {
+      const h = track.height || DEFAULT_TRACK_HEIGHT
+      if (relativeY < accumulated + h) return track.id
+      accumulated += h
     }
-    return best
-  }, [clips])
+    return '__below__'
+  }, [tracks, getTrackY])
+
+  const handleTracksScroll = useCallback((e) => {
+    if (trackHeadersListRef.current) {
+      trackHeadersListRef.current.scrollTop = e.target.scrollTop
+    }
+  }, [])
 
   // --- player ---
-  const handlePlay = useCallback(() => {
-    if (!videoRef.current) return
-    if (!videoRef.current.paused) {
-      videoRef.current.pause()
+  const startImageClipPlayback = useCallback((clip, startAtTime) => {
+    const { duration } = getClipPlaybackPosition(clip, startAtTime)
+    const timelineStart = Math.min(clip.startTime + duration, Math.max(clip.startTime, startAtTime))
+    playingClipIdRef.current = clip.id
+    imagePlaybackRef.current = {
+      clipId: clip.id,
+      startedAtMs: performance.now(),
+      timelineStart,
+    }
+    timelinePlaybackRef.current = null
+    setPlaybackMode('timeline')
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
+    setActiveId(clip.videoId)
+    setTimelineTime(timelineStart)
+    setIsPlaying(true)
+  }, [])
+
+  const startClipPlayback = useCallback((target, startAtTime) => {
+    setPlaybackMode('timeline')
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
+    timelinePlaybackRef.current = null
+    const media = videos.find((v) => v.id === target.videoId)
+    if (media?.mediaType === 'image') {
+      startImageClipPlayback(target, startAtTime)
       return
     }
-    // Try to find the clip at current playhead, or the next one after
-    const atHead = findClipAtTime(timelineTime)
-    const target = atHead || findNextClipAfter(timelineTime + 0.001)
-    if (target) {
-      const sameClip = target.id === activeClipId
-      const offsetInClip = atHead ? Math.max(0, timelineTime - target.startTime) : 0
-      const videoTime = target.inPoint + offsetInClip
-      if (sameClip) {
-        if (videoRef.current.currentTime >= target.outPoint - 0.05) {
-          videoRef.current.currentTime = target.inPoint
-        }
-        videoRef.current.play().catch(() => {})
-      } else {
-        // switch source if needed; play after metadata ready
-        if (target.videoId !== activeId) {
-          setActiveId(target.videoId)
-          pendingSeekRef.current = videoTime
-          pendingPlayRef.current = true
-        } else {
-          try { videoRef.current.currentTime = videoTime } catch { /* ignored */ }
-          videoRef.current.play().catch(() => {})
-        }
-        setActiveClipId(target.id)
-        if (!atHead) setTimelineTime(target.startTime)
-      }
-    } else if (videoSrc) {
-      // No clips on timeline but a media source is loaded: just play preview
-      videoRef.current.play().catch(() => {})
+
+    const { offsetInClip, sourceTime: videoTime } = getClipPlaybackPosition(target, startAtTime)
+    playingClipIdRef.current = target.id
+    imagePlaybackRef.current = null
+    setTimelineTime(target.startTime + offsetInClip)
+
+    if (target.videoId !== activeId || !videoRef.current) {
+      setActiveId(target.videoId)
+      pendingSeekRef.current = videoTime
+      pendingPlayRef.current = true
+      return
     }
-  }, [timelineTime, activeClipId, activeId, videoSrc, findClipAtTime, findNextClipAfter])
+
+    try { videoRef.current.currentTime = videoTime } catch { /* ignored */ }
+    videoRef.current.play().catch(() => {})
+  }, [activeId, startImageClipPlayback, videos])
+
+  const startTimelineGapPlayback = useCallback((startAtTime) => {
+    if (videoRef.current && !videoRef.current.paused) videoRef.current.pause()
+    setPlaybackMode('timeline')
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
+    playingClipIdRef.current = null
+    imagePlaybackRef.current = null
+    timelinePlaybackRef.current = {
+      startedAtMs: performance.now(),
+      timelineStart: Math.max(0, startAtTime),
+    }
+    setTimelineTime(Math.max(0, startAtTime))
+    setIsPlaying(true)
+  }, [])
+
+  const stopPlayback = useCallback(() => {
+    playbackModeRef.current = null
+    const videoEl = videoRef.current
+    if (videoEl && !videoEl.paused) videoEl.pause()
+    imagePlaybackRef.current = null
+    timelinePlaybackRef.current = null
+    pendingPlayRef.current = false
+    setPlaybackMode(null)
+    setIsPlaying(false)
+  }, [])
+
+  const handleSourcePreviewPlay = useCallback(() => {
+    const videoEl = videoRef.current
+    if (!activeVideo || activeVideo.mediaType !== 'video' || !activeSourceSelection || !videoEl) return
+    if (playbackMode === 'source' && isPlaying) {
+      stopPlayback()
+      setSourceMonitorId(activeVideo.id)
+      return
+    }
+
+    const outsideRange = videoEl.currentTime < activeSourceSelection.inPoint - 0.02 ||
+      videoEl.currentTime >= activeSourceSelection.outPoint - 0.02
+    if (outsideRange) {
+      try { videoEl.currentTime = activeSourceSelection.inPoint } catch { /* ignored */ }
+      setPreviewTime(activeSourceSelection.inPoint)
+    }
+    playingClipIdRef.current = null
+    imagePlaybackRef.current = null
+    timelinePlaybackRef.current = null
+    pendingPlayRef.current = false
+    setPlaybackMode('source')
+    setEditorFocus(FOCUS_SOURCE)
+    videoEl.play().catch(() => {})
+  }, [activeSourceSelection, activeVideo, isPlaying, playbackMode, stopPlayback])
+
+  const handleTimelinePlay = useCallback(() => {
+    setEditorFocus(FOCUS_TIMELINE)
+    if (playbackMode === 'timeline' && isPlaying) {
+      stopPlayback()
+      return
+    }
+
+    const target = findClipAtTime(timelineTime, clips)
+    if (target) {
+      startClipPlayback(target, timelineTime)
+    } else {
+      startTimelineGapPlayback(timelineTime)
+    }
+  }, [clips, isPlaying, playbackMode, startClipPlayback, startTimelineGapPlayback, stopPlayback, timelineTime])
+
+  const handlePlay = useCallback(() => {
+    if (isSourceMonitorActive) {
+      handleSourcePreviewPlay()
+    } else {
+      handleTimelinePlay()
+    }
+  }, [handleSourcePreviewPlay, handleTimelinePlay, isSourceMonitorActive])
+
+  const handlePreviewTimeUpdate = useCallback((e) => {
+    const nextTime = e.currentTarget.currentTime || 0
+    setPreviewTime(nextTime)
+    if (playbackModeRef.current === 'source' && activeSourceSelection && nextTime >= activeSourceSelection.outPoint - 0.02) {
+      e.currentTarget.pause()
+      try { e.currentTarget.currentTime = activeSourceSelection.outPoint } catch { /* ignored */ }
+      setPreviewTime(activeSourceSelection.outPoint)
+      imagePlaybackRef.current = null
+      timelinePlaybackRef.current = null
+      setPlaybackMode(null)
+      setIsPlaying(false)
+    }
+  }, [activeSourceSelection])
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
@@ -582,50 +893,127 @@ function App() {
 
   // Keep playbackRef synced (used inside rAF loop without re-binding)
   useEffect(() => {
-    playbackRef.current = { clips, activeClipId, activeId, isPlaying }
-  }, [clips, activeClipId, activeId, isPlaying])
+    playbackRef.current = { clips, activeClipId, activeId, isPlaying, videos, timelineTime }
+  }, [clips, activeClipId, activeId, isPlaying, videos, timelineTime])
 
   // ---- Smooth playhead via rAF + continuous playback through cuts ----
   useEffect(() => {
-    if (!isPlaying) return
+    if (!isPlaying || playbackMode !== 'timeline') return
     let raf = 0
     const tick = () => {
-      const v = videoRef.current
       const state = playbackRef.current
-      if (!v || v.paused) { raf = requestAnimationFrame(tick); return }
       if (interactionRef.current?.type === 'seek') { raf = requestAnimationFrame(tick); return }
-      const clip = state.clips.find((c) => c.id === state.activeClipId)
+      const clip = state.clips.find((c) => c.id === playingClipIdRef.current)
+      const media = clip ? state.videos.find((v) => v.id === clip.videoId) : null
+      const continueWithGap = (startAtTime, currentVideo) => {
+        timelinePlaybackRef.current = {
+          startedAtMs: performance.now(),
+          timelineStart: Math.max(0, startAtTime),
+        }
+        playingClipIdRef.current = null
+        imagePlaybackRef.current = null
+        if (currentVideo && !currentVideo.paused) currentVideo.pause()
+        setPlaybackMode('timeline')
+        setTimelineTime(Math.max(0, startAtTime))
+        setIsPlaying(true)
+      }
+      const continueWithNext = (next, currentVideo) => {
+        setTimelineTime(next.startTime)
+        playingClipIdRef.current = next.id
+        timelinePlaybackRef.current = null
+        const nextMedia = state.videos.find((v) => v.id === next.videoId)
+        if (nextMedia?.mediaType === 'image') {
+          imagePlaybackRef.current = {
+            clipId: next.id,
+            startedAtMs: performance.now(),
+            timelineStart: next.startTime,
+          }
+          if (currentVideo && !currentVideo.paused) currentVideo.pause()
+          setActiveId(next.videoId)
+          queueMicrotask(() => setIsPlaying(true))
+          return
+        }
+        imagePlaybackRef.current = null
+        if (next.videoId !== state.activeId) {
+          setActiveId(next.videoId)
+          pendingSeekRef.current = next.inPoint
+          pendingPlayRef.current = true
+          if (currentVideo && !currentVideo.paused) currentVideo.pause()
+        } else if (currentVideo) {
+          try { currentVideo.currentTime = next.inPoint } catch { /* ignored */ }
+          if (currentVideo.paused) currentVideo.play().catch(() => {})
+        }
+      }
+
+      if (!clip && timelinePlaybackRef.current) {
+        const gapState = getVirtualTimelinePlaybackTime({
+          timelinePlayback: timelinePlaybackRef.current,
+          nowMs: performance.now(),
+          fallbackTimelineTime: state.timelineTime,
+        })
+        const next = findNextClipAfter(gapState.timelineTime, state.clips)
+        if (shouldStartNextClipFromGap({ timelineTime: gapState.timelineTime, nextClip: next })) {
+          continueWithNext(next, videoRef.current)
+        } else {
+          setTimelineTime(gapState.timelineTime)
+        }
+        raf = requestAnimationFrame(tick)
+        return
+      }
+
+      if (clip && media?.mediaType === 'image') {
+        const imageState = getImagePlaybackTimelineTime({
+          clip,
+          imagePlayback: imagePlaybackRef.current,
+          nowMs: performance.now(),
+          fallbackTimelineTime: state.timelineTime,
+        })
+        if (imagePlaybackRef.current?.clipId !== clip.id) {
+          imagePlaybackRef.current = {
+            clipId: clip.id,
+            startedAtMs: imageState.startedAtMs,
+            timelineStart: imageState.timelineStart,
+          }
+        }
+        if (imageState.ended) {
+          const next = findNextClipAfter(imageState.endTime - 0.02, state.clips, clip.id)
+          if (next) {
+            if (next.startTime > imageState.endTime + 0.02) {
+              continueWithGap(imageState.endTime, videoRef.current)
+            } else {
+              continueWithNext(next, videoRef.current)
+            }
+          } else {
+            continueWithGap(imageState.endTime, videoRef.current)
+          }
+        } else {
+          setTimelineTime(imageState.timelineTime)
+        }
+        raf = requestAnimationFrame(tick)
+        return
+      }
+
+      const v = videoRef.current
+      if (!v) { raf = requestAnimationFrame(tick); return }
       const ct = v.currentTime
+      if (v.paused && (!clip || !shouldLeaveClipPlayback({ sourceTime: ct, clip }))) {
+        raf = requestAnimationFrame(tick)
+        return
+      }
       if (clip) {
         // End of current clip → continue with the next clip on the timeline
-        if (ct >= clip.outPoint - 0.02) {
-          const clipEnd = clip.startTime + (clip.outPoint - clip.inPoint)
-          const next = (() => {
-            let best = null
-            for (const c of state.clips) {
-              if (c.id === clip.id) continue
-              if (c.startTime >= clipEnd - 0.02) {
-                if (!best || c.startTime < best.startTime) best = c
-              }
-            }
-            return best
-          })()
+        if (shouldLeaveClipPlayback({ sourceTime: ct, clip })) {
+          const clipTimelineEnd = getClipTimelineEnd(clip)
+          const next = findNextClipAfter(clipTimelineEnd - 0.02, state.clips, clip.id)
           if (next) {
-            // Jump (skip any gap) to the next clip and continue playing
-            setTimelineTime(next.startTime)
-            setActiveClipId(next.id)
-            if (next.videoId !== state.activeId) {
-              setActiveId(next.videoId)
-              pendingSeekRef.current = next.inPoint
-              pendingPlayRef.current = true
-              v.pause()
+            if (next.startTime > clipTimelineEnd + 0.02) {
+              continueWithGap(clipTimelineEnd, v)
             } else {
-              try { v.currentTime = next.inPoint } catch { /* ignored */ }
+              continueWithNext(next, v)
             }
           } else {
             // No more clips → stop at end of timeline
-            v.pause()
-            setTimelineTime(clipEnd)
+            continueWithGap(clipTimelineEnd, v)
           }
         } else if (ct >= clip.inPoint - 0.02) {
           setTimelineTime(clip.startTime + (ct - clip.inPoint))
@@ -635,7 +1023,7 @@ function App() {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [isPlaying])
+  }, [isPlaying, playbackMode])
 
   // --- import ---
   // Probe duration for newly imported videos so drag-from-sidebar can show a real-width preview.
@@ -667,7 +1055,7 @@ function App() {
 
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files || [])
-    if (files.length === 0) return
+    if (files.length === 0) return []
     const items = files.map((f) => ({
       id: nextId('vid'),
       name: f.name,
@@ -679,16 +1067,42 @@ function App() {
     if (!activeId && items.length > 0) setActiveId(items[0].id)
     probeAndCacheDurations(items)
     if (e.target && 'value' in e.target) e.target.value = ''
+    return items
   }
 
-  const handleSelectMedia = (id) => setActiveId(id)
-  const handleDoubleClickMedia = (id) => {
+  const handleSelectMedia = (id) => {
+    stopPlayback()
+    setEditorFocus(FOCUS_SOURCE)
     setActiveId(id)
     setActiveClipId(null)
+    playingClipIdRef.current = null
+    const media = videos.find((v) => v.id === id)
+    setSourceMonitorId(media?.mediaType === 'video' ? id : null)
+    const selection = getSourceSelection(id)
+    setPreviewTime(selection.inPoint)
+    if (media?.mediaType === 'video') {
+      pendingSeekRef.current = selection.inPoint
+      pendingPlayRef.current = false
+      if (videoRef.current && activeId === id) {
+        try { videoRef.current.currentTime = selection.inPoint } catch { /* ignored */ }
+      }
+    }
+  }
+  const handleDoubleClickMedia = (id) => {
+    stopPlayback()
+    setEditorFocus(FOCUS_SOURCE)
+    setActiveId(id)
+    setActiveClipId(null)
+    playingClipIdRef.current = null
+    const media = videos.find((v) => v.id === id)
+    setSourceMonitorId(media?.mediaType === 'video' ? id : null)
+    const selection = getSourceSelection(id)
+    setPreviewTime(selection.inPoint)
     setIsPlaying(false)
     setTimeout(() => {
       if (videoRef.current) {
-        videoRef.current.currentTime = 0
+        setPlaybackMode('source')
+        videoRef.current.currentTime = selection.inPoint
         videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {})
       }
     }, 50)
@@ -700,32 +1114,48 @@ function App() {
       setActiveId(null)
       setIsPlaying(false)
     }
+    if (sourceMonitorId === id) setSourceMonitorId(null)
   }
 
   // --- drag from sidebar ---
-  const handleDragStart = (e, video) => {
+  const handleDragStart = (e, video, trackMode = 'av') => {
     draggedVideoIdRef.current = video.id
+    draggedTrackModeRef.current = trackMode
     // Probe lazily if not yet cached, so the very first preview is accurate too.
     if (videoDurations[video.id] == null) {
       probeDuration(video.src, video.mediaType, settings.imageDuration).then((dur) => {
         setVideoDurations((prev) => ({ ...prev, [video.id]: dur }))
       })
     }
+    const selection = getSourceSelection(video)
     const ghost = document.createElement('div')
     ghost.className = 'drag-ghost'
-    ghost.innerHTML = `<span class="drag-ghost-icon">🎬</span><span class="drag-ghost-name">${video.name}</span>`
+    const icon = document.createElement('span')
+    icon.className = 'drag-ghost-icon'
+    icon.textContent = trackMode === 'audio' ? 'A' : 'V'
+    const name = document.createElement('span')
+    name.className = 'drag-ghost-name'
+    name.textContent = `${video.name} · ${formatTime(selection.clipDuration)}`
+    ghost.append(icon, name)
     Object.assign(ghost.style, { position: 'absolute', top: '-1000px', left: '0px', pointerEvents: 'none' })
     document.body.appendChild(ghost)
     try { e.dataTransfer.setDragImage(ghost, 14, 18) } catch { /* ignored */ }
     setTimeout(() => { if (ghost.parentNode) ghost.parentNode.removeChild(ghost) }, 0)
     e.dataTransfer.setData('text/plain', video.id)
     e.dataTransfer.setData('text', video.id)
+    e.dataTransfer.setData('application/x-stonecutter-track-mode', trackMode)
     e.dataTransfer.effectAllowed = 'copy'
   }
   const handleDragEnd = () => {
     draggedVideoIdRef.current = null
+    draggedTrackModeRef.current = 'av'
     setImportDragInfo(null)
     setDragTooltip(null)
+  }
+
+  const handleSourceDragStart = (e, trackMode) => {
+    if (!activeVideo) return
+    handleDragStart(e, activeVideo, trackMode)
   }
 
   // --- timeline drop ---
@@ -739,20 +1169,27 @@ function App() {
   // Compute the simulated timeline layout that would result from dropping `videoId` at `dropTime`.
   // Returns { insertPoint, mode, simulatedLayout, dur }.
   // For Explorer files: videoId = '__explorer__', optional fileName.
-  const computeImportPreview = useCallback((videoId, dropTime, fileName = '') => {
-    const dur = videoDurations[videoId] || 5
+  const computeImportPreview = useCallback((videoId, dropTime, fileName = '', trackMode = 'av', targetTrack = null) => {
+    const media = videos.find((v) => v.id === videoId)
+    const selection = media
+      ? getSourceSelection(media)
+      : { inPoint: 0, outPoint: videoDurations[videoId] || 5, duration: videoDurations[videoId] || 5, clipDuration: videoDurations[videoId] || 5 }
+    const dur = selection.clipDuration
+    const targetTrackId = targetTrack?.id
+    const trackClips = clips.filter((c) => c.trackId === targetTrackId)
     if (snapEnabled) {
-      const ins = detectInsertPoint('__preview__', dropTime + dur / 2, dur, clips)
+      const ins = detectInsertPoint('__preview__', dropTime + dur / 2, dur, trackClips)
       if (ins) {
+        const rippledTrack = applyRippleInsert(trackClips, '__preview__', ins.insertPoint, dur)
         return {
           insertPoint: ins.insertPoint,
           mode: 'insert',
-          simulatedLayout: applyRippleInsert(clips, '__preview__', ins.insertPoint, dur),
+          simulatedLayout: clips.map((c) => (c.trackId === targetTrackId ? rippledTrack.find((x) => x.id === c.id) || c : c)),
           dur,
         }
       }
       return {
-        insertPoint: constrainMoveStart(dropTime, dur, clips),
+        insertPoint: constrainMoveStart(dropTime, dur, trackClips),
         mode: 'constrain',
         simulatedLayout: clips,
         dur,
@@ -762,12 +1199,18 @@ function App() {
     const start = Math.max(0, dropTime)
     const placeholder = {
       id: '__preview__', videoId, name: fileName, src: '',
-      sourceDuration: dur, inPoint: 0, outPoint: dur, startTime: start,
+      sourceDuration: selection.duration,
+      inPoint: selection.inPoint,
+      outPoint: selection.outPoint,
+      startTime: start,
+      trackMode,
+      trackId: targetTrackId,
     }
-    const cut = resolveOverlaps([...clips, placeholder], '__preview__', () => `prev-${Math.random()}`)
-    const simulatedLayout = cut.filter((c) => c.id !== '__preview__')
+    const cut = resolveOverlaps([...trackClips, placeholder], '__preview__', () => `prev-${Math.random()}`)
+    const trackLayout = cut.filter((c) => c.id !== '__preview__')
+    const simulatedLayout = clips.filter((c) => c.trackId !== targetTrackId).concat(trackLayout)
     return { insertPoint: start, mode: 'overwrite', simulatedLayout, dur }
-  }, [clips, snapEnabled, videoDurations])
+  }, [clips, getSourceSelection, snapEnabled, videoDurations, videos])
 
   const handleTimelineDragEnter = (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true) }
   const handleTimelineDragOver = (e) => {
@@ -785,12 +1228,19 @@ function App() {
     const dropTime = dropTimeFromEvent(e)
     setDropIndicatorTime(dropTime)
 
+    // Detect target track
+    const targetTrackId = getTrackAtClientY(e.clientY)
+    setDropTargetTrackId(targetTrackId)
+
     // Check for files from Explorer
     const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('video/') || f.type.startsWith('image/'))
     if (files.length > 0) {
       const file = files[0]
-      const preview = computeImportPreview('__explorer__', dropTime, file.name, file.size)
-      setImportDragInfo({ videoId: '__explorer__', name: file.name, ...preview })
+      const targetTrack = targetTrackId && targetTrackId !== '__below__'
+        ? tracks.find((t) => t.id === targetTrackId)
+        : null
+      const preview = computeImportPreview('__explorer__', dropTime, file.name, 'av', targetTrack)
+      setImportDragInfo({ videoId: '__explorer__', name: file.name, trackMode: 'av', mediaType: getMediaType(file.name), ...preview })
       const rect = tracksContentRef.current?.getBoundingClientRect()
       if (rect) {
         setDragTooltip({
@@ -806,15 +1256,19 @@ function App() {
     const videoId = draggedVideoIdRef.current
     if (videoId) {
       const video = videos.find((v) => v.id === videoId)
-      const preview = computeImportPreview(videoId, dropTime)
-      setImportDragInfo({ videoId, name: video?.name || '', ...preview })
+      const trackMode = draggedTrackModeRef.current || 'av'
+      const targetTrack = targetTrackId && targetTrackId !== '__below__'
+        ? tracks.find((t) => t.id === targetTrackId)
+        : null
+      const preview = computeImportPreview(videoId, dropTime, '', trackMode, targetTrack)
+      setImportDragInfo({ videoId, name: video?.name || '', trackMode, mediaType: video?.mediaType || 'video', ...preview })
       // Tooltip near cursor
       const rect = tracksContentRef.current?.getBoundingClientRect()
       if (rect) {
         setDragTooltip({
           x: e.clientX - rect.left,
           y: e.clientY - rect.top,
-          label: `${formatTime(preview.insertPoint)} · ${formatTime(preview.dur)}`,
+          label: `${trackMode === 'audio' ? 'Nur Audio' : 'Video + Audio'} · ${formatTime(preview.insertPoint)} · ${formatTime(preview.dur)}`,
         })
       }
     }
@@ -825,6 +1279,7 @@ function App() {
     setDropIndicatorTime(null)
     setImportDragInfo(null)
     setDragTooltip(null)
+    setDropTargetTrackId(null)
   }
   const handleTimelineDrop = async (e) => {
     e.preventDefault()
@@ -832,110 +1287,164 @@ function App() {
     setDropIndicatorTime(null)
     setImportDragInfo(null)
     setDragTooltip(null)
+    setDropTargetTrackId(null)
+    const droppedVideoId = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text') || draggedVideoIdRef.current
+    const droppedTrackMode = e.dataTransfer.getData('application/x-stonecutter-track-mode') || draggedTrackModeRef.current || 'av'
     draggedVideoIdRef.current = null
+    draggedTrackModeRef.current = 'av'
+
+    // Determine target track
+    const dropTargetId = getTrackAtClientY(e.clientY)
+    let targetTrack = dropTargetId && dropTargetId !== '__below__'
+      ? tracks.find((t) => t.id === dropTargetId)
+      : null
 
     // Check for dropped files from Explorer
     const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('video/') || f.type.startsWith('image/'))
     if (files.length > 0) {
       // Handle file drop from Explorer
-      await handleFileChange({ target: { files } })
+      const importedItems = await handleFileChange({ target: { files } })
       // Auto-drop the first imported file to timeline at drop position
       const dropTime = dropTimeFromEvent(e)
-      setTimeout(() => {
-        const newVideos = [...videos]
-        const lastVideo = newVideos[newVideos.length - 1] // most recently added
-        if (lastVideo) {
-          const clipId = nextId('clip')
-          const placeholderDur = videoDurations[lastVideo.id] || 5
-          const pristine = clips
-          let placeholderStart = dropTime
-          let baseList = pristine
-          if (snapEnabled) {
-            const ins = detectInsertPoint(clipId, dropTime, placeholderDur, pristine)
-            if (ins) {
-              placeholderStart = ins.insertPoint
-              baseList = applyRippleInsert(pristine, clipId, ins.insertPoint, placeholderDur)
-            } else {
-              placeholderStart = constrainMoveStart(dropTime, placeholderDur, pristine)
-            }
-          }
-          const placeholder = {
-            id: clipId,
-            videoId: lastVideo.id,
-            name: lastVideo.name,
-            src: lastVideo.src,
-            sourceDuration: placeholderDur,
-            inPoint: 0,
-            outPoint: placeholderDur,
-            startTime: placeholderStart,
-          }
-          const initialList = [...baseList, placeholder]
-          commitClips(snapEnabled
-            ? initialList
-            : resolveOverlaps(initialList, clipId, () => nextId('clip')))
+      const lastVideo = importedItems?.[0]
+      if (lastVideo) {
+        // If dropped below existing tracks, create a new video track
+        if (dropTargetId === '__below__' || !targetTrack) {
+          setTracks((prev) => addTrackToList(prev, 'video'))
+          const newTrack = tracks.find((t) => t.type === 'video' && !clips.some((c) => c.trackId === t.id))
+            || tracks[tracks.length - 1]
+          targetTrack = { id: nextTrackId(), type: 'video' }
+          setTracks((prev) => [...prev, targetTrack])
         }
-      }, 100)
+        const targetTrackId = targetTrack.id
+        const duration = await probeDuration(lastVideo.src, lastVideo.mediaType, settings.imageDuration)
+        setVideoDurations((prev) => ({ ...prev, [lastVideo.id]: duration }))
+        const clipId = nextId('clip')
+        const placeholderDur = duration
+        const trackClips = clips.filter((c) => c.trackId === targetTrackId)
+        let placeholderStart = dropTime
+        let baseTrackClips = trackClips
+        if (snapEnabled) {
+          const ins = detectInsertPoint(clipId, dropTime, placeholderDur, trackClips)
+          if (ins) {
+            placeholderStart = ins.insertPoint
+            baseTrackClips = applyRippleInsert(trackClips, clipId, ins.insertPoint, placeholderDur)
+          } else {
+            placeholderStart = constrainMoveStart(dropTime, placeholderDur, trackClips)
+          }
+        }
+        const placeholder = {
+          id: clipId,
+          videoId: lastVideo.id,
+          name: lastVideo.name,
+          src: lastVideo.src,
+          sourceDuration: duration,
+          inPoint: 0,
+          outPoint: duration,
+          startTime: placeholderStart,
+          trackMode: 'av',
+          trackId: targetTrackId,
+        }
+        // Merge updated track clips with clips from other tracks
+        const baseList = clips.filter((c) => c.trackId !== targetTrackId).concat(baseTrackClips)
+        const initialList = [...baseList, placeholder]
+        commitClips(snapEnabled
+          ? initialList
+          : resolveOverlaps(initialList.filter((c) => c.trackId === targetTrackId), clipId, () => nextId('clip'))
+              .concat(initialList.filter((c) => c.trackId !== targetTrackId)))
+      }
       return
     }
 
     // Handle drag from sidebar
-    const videoId = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text')
+    const videoId = droppedVideoId
     const video = videos.find((v) => v.id === videoId)
     if (!video) return
+    const trackMode = droppedTrackMode
+    const selection = getSourceSelection(video)
+    const hasExplicitSourceRange = !!sourceRanges[video.id]
 
+    // Validate track type compatibility
+    const requiredTrackType = trackMode === 'audio' ? 'audio' : 'video'
+    if (targetTrack && targetTrack.type !== requiredTrackType) {
+      alert(`Incompatible: ${trackMode === 'audio' ? 'Audio-only' : 'Video'} clip cannot be placed on ${targetTrack.type} track.`)
+      return
+    }
+
+    // If dropped below existing tracks, create a new track of the required type
+    if (dropTargetId === '__below__' || !targetTrack) {
+      const newTrack = { id: nextTrackId(), type: requiredTrackType, name: `${requiredTrackType === 'audio' ? 'Audio' : 'Video'} ${tracks.filter((t) => t.type === requiredTrackType).length + 1}`, locked: false, height: DEFAULT_TRACK_HEIGHT }
+      if (requiredTrackType === 'audio') { newTrack.muted = false; newTrack.solo = false }
+      setTracks((prev) => [...prev, newTrack])
+      targetTrack = newTrack
+    }
+
+    const targetTrackId = targetTrack.id
     const dropTime = dropTimeFromEvent(e)
     const clipId = nextId('clip')
-    const placeholderDur = 5
-    const pristine = clips // snapshot before insert (for re-rippling after probe)
+    const placeholderDur = selection.clipDuration
+    const trackClips = clips.filter((c) => c.trackId === targetTrackId)
 
     // Decide placement (insert / constrain / free)
     let placeholderStart = dropTime
-    let baseList = pristine
+    let baseTrackClips = trackClips
     let insertPoint = null // remembered for probe re-ripple
     if (snapEnabled) {
-      const ins = detectInsertPoint(clipId, dropTime, placeholderDur, pristine)
+      const ins = detectInsertPoint(clipId, dropTime, placeholderDur, trackClips)
       if (ins) {
         insertPoint = ins.insertPoint
         placeholderStart = ins.insertPoint
-        baseList = applyRippleInsert(pristine, clipId, ins.insertPoint, placeholderDur)
-        // applyRippleInsert with non-existent draggedId just shifts later clips; OK.
+        baseTrackClips = applyRippleInsert(trackClips, clipId, ins.insertPoint, placeholderDur)
       } else {
-        placeholderStart = constrainMoveStart(dropTime, placeholderDur, pristine)
+        placeholderStart = constrainMoveStart(dropTime, placeholderDur, trackClips)
       }
     }
-    const placeholder = {
-      id: clipId,
-      videoId: video.id,
-      name: video.name,
-      src: video.src,
-      sourceDuration: placeholderDur,
-      inPoint: 0,
-      outPoint: placeholderDur,
-      startTime: placeholderStart,
-    }
+    const placeholder = { ...makeClipFromSource(video, clipId, placeholderStart, trackMode), trackId: targetTrackId }
+    const baseList = clips.filter((c) => c.trackId !== targetTrackId).concat(baseTrackClips)
     const initialList = [...baseList, placeholder]
     commitClips(snapEnabled
       ? initialList
-      : resolveOverlaps(initialList, clipId, () => nextId('clip')))
+      : resolveOverlaps(initialList.filter((c) => c.trackId === targetTrackId), clipId, () => nextId('clip'))
+          .concat(initialList.filter((c) => c.trackId !== targetTrackId)))
 
     const duration = await probeDuration(video.src, video.mediaType, settings.imageDuration)
     setClips((prev) => {
       const placeholderClip = prev.find((c) => c.id === clipId)
       if (!placeholderClip) return prev // user removed it during probe
+      const resolvedIn = hasExplicitSourceRange ? selection.inPoint : 0
+      const resolvedOut = hasExplicitSourceRange ? Math.min(selection.outPoint, duration) : duration
       let updated = prev.map((c) =>
-        c.id === clipId ? { ...c, sourceDuration: duration, outPoint: duration } : c
+        c.id === clipId ? { ...c, sourceDuration: duration, inPoint: resolvedIn, outPoint: Math.max(resolvedIn + MIN_CLIP_DURATION, resolvedOut) } : c
       )
+      // Track-aware overlap resolution
+      const resolveTrackAware = (clipList) => {
+        const byTrack = new Map()
+        clipList.forEach((c) => {
+          if (!byTrack.has(c.trackId)) byTrack.set(c.trackId, [])
+          byTrack.get(c.trackId).push(c)
+        })
+        const resolved = []
+        byTrack.forEach((trackClipList, trackId) => {
+          const modified = trackClipList.find((c) => c.id === clipId)
+          if (modified) {
+            resolved.push(...resolveOverlaps(trackClipList, clipId, () => nextId('clip')))
+          } else {
+            resolved.push(...trackClipList)
+          }
+        })
+        return resolved
+      }
       if (!snapEnabled) {
-        return resolveOverlaps(updated, clipId, () => nextId('clip'))
+        return resolveTrackAware(updated)
       }
       // Snap-on: adjust ripple by (actualDuration - placeholderDur) for clips behind the insert point
       if (insertPoint != null) {
-        const extra = duration - placeholderDur
+        const extra = (Math.max(resolvedIn + MIN_CLIP_DURATION, resolvedOut) - resolvedIn) - placeholderDur
         if (Math.abs(extra) > 1e-3) {
           const insertEnd = placeholderStart + placeholderDur // boundary in current (already-rippled) timeline
           updated = updated.map((x) => {
             if (x.id === clipId) return x
-            if (x.startTime >= insertEnd - 1e-3) return { ...x, startTime: x.startTime + extra }
+            if (x.trackId === targetTrackId && x.startTime >= insertEnd - 1e-3) return { ...x, startTime: x.startTime + extra }
             return x
           })
         }
@@ -944,7 +1453,7 @@ function App() {
       // Gap mode: trim outPoint if it now overlaps the right neighbor
       const c = updated.find((x) => x.id === clipId)
       if (!c) return updated
-      const others = updated.filter((x) => x.id !== clipId)
+      const others = updated.filter((x) => x.id !== clipId && x.trackId === targetTrackId)
       const maxRight = maxEndForTrimRight(c.startTime, others)
       const cEnd = c.startTime + (c.outPoint - c.inPoint)
       if (cEnd > maxRight + 1e-3) {
@@ -961,26 +1470,57 @@ function App() {
   // --- seeking ---
   const seekToTime = useCallback((t) => {
     t = Math.max(0, t)
+    setSourceMonitorId(null)
     setTimelineTime(t)
-    const clip = (() => {
-      for (const c of clips) {
-        const dur = c.outPoint - c.inPoint
-        if (t >= c.startTime && t < c.startTime + dur) return c
-      }
-      return null
-    })()
+    const clip = findClipAtTime(t, clips)
     if (clip) {
+      playingClipIdRef.current = clip.id
+      timelinePlaybackRef.current = null
       const within = t - clip.startTime
       const videoTime = clip.inPoint + within
-      if (clip.id !== activeClipId) {
+      const media = videos.find((v) => v.id === clip.videoId)
+      if (media?.mediaType === 'image') {
         setActiveClipId(clip.id)
         setActiveId(clip.videoId)
-        pendingSeekRef.current = videoTime
+        pendingSeekRef.current = null
+        pendingPlayRef.current = false
+        if (playbackModeRef.current === 'timeline' && isPlaying) {
+          imagePlaybackRef.current = {
+            clipId: clip.id,
+            startedAtMs: performance.now(),
+            timelineStart: t,
+          }
+        }
+        return
+      }
+      imagePlaybackRef.current = null
+      if (clip.id !== activeClipId) {
+        setActiveClipId(clip.id)
+        if (clip.videoId !== playbackRef.current.activeId) {
+          setActiveId(clip.videoId)
+          pendingSeekRef.current = videoTime
+        } else if (videoRef.current) {
+          try { videoRef.current.currentTime = videoTime } catch { /* ignored */ }
+        }
       } else if (videoRef.current) {
         try { videoRef.current.currentTime = videoTime } catch { /* ignored */ }
       }
+    } else {
+      playingClipIdRef.current = null
+      imagePlaybackRef.current = null
+      pendingSeekRef.current = null
+      pendingPlayRef.current = false
+      if (videoRef.current && !videoRef.current.paused) videoRef.current.pause()
+      if (playbackModeRef.current === 'timeline' && isPlaying) {
+        timelinePlaybackRef.current = {
+          startedAtMs: performance.now(),
+          timelineStart: t,
+        }
+      } else {
+        timelinePlaybackRef.current = null
+      }
     }
-  }, [clips, activeClipId])
+  }, [clips, activeClipId, isPlaying, videos])
 
   const getXInTracks = (clientX) => {
     if (!tracksContentRef.current) return 0
@@ -992,14 +1532,17 @@ function App() {
   // Pause helper: pauses if playing and remembers state for resume on mouseup
   const beginScrub = () => {
     const v = videoRef.current
-    const wasPlaying = !!(v && !v.paused)
-    if (wasPlaying) v.pause()
+    const wasPlaying = playbackModeRef.current === 'timeline' && isPlaying
+    if (wasPlaying && v && !v.paused) v.pause()
     return wasPlaying
   }
 
   const handleTracksMouseDown = (e) => {
     if (e.target.closest('.clip') || e.target.closest('.playhead-handle')) return
     if (e.button !== 0) return
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
+    if (playbackModeRef.current === 'source') stopPlayback()
     const x = getXInTracks(e.clientX)
     const t = Math.max(0, x / pxPerSec)
     // Click on the time-ruler keeps classic seek/scrub behavior.
@@ -1033,6 +1576,9 @@ function App() {
 
   const handlePlayheadMouseDown = (e) => {
     e.stopPropagation(); e.preventDefault()
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
+    if (playbackModeRef.current === 'source') stopPlayback()
     const wasPlaying = beginScrub()
     const i = { type: 'seek', wasPlaying }
     interactionRef.current = i
@@ -1043,6 +1589,9 @@ function App() {
     if (e.target.closest('.trim-handle') || e.target.closest('.clip-remove')) return
     if (e.button !== 0) return
     e.stopPropagation()
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
+    if (playbackModeRef.current === 'source') stopPlayback()
     const additive = e.shiftKey || e.ctrlKey || e.metaKey
     setSelectedGap(null)
 
@@ -1128,14 +1677,18 @@ function App() {
 
   const handleTrimMouseDown = (e, clip, side) => {
     e.stopPropagation(); e.preventDefault()
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
+    if (playbackModeRef.current === 'source') stopPlayback()
     setActiveClipId(clip.id)
     setActiveId(clip.videoId)
+    const media = videos.find((v) => v.id === clip.videoId)
     const x = getXInTracks(e.clientX)
     const i = {
       type: side === 'left' ? 'trim-left' : 'trim-right',
       clipId: clip.id,
       startX: x,
-      originalClip: { ...clip },
+      originalClip: { ...clip, mediaType: media?.mediaType || 'video' },
       snapshotBefore: clips.map((c) => ({ ...c })),
       moved: false,
     }
@@ -1233,7 +1786,10 @@ function App() {
         if (effSnap) {
           const proposedLeftmost = leftmostStart + deltaSec
           const proposedCenter = proposedLeftmost + groupDur / 2
-          const ins = detectInsertPoint('__group__', proposedCenter, groupDur, nonSelected)
+          // Track-aware: only consider clips on the same track as the primary clip
+          const origTrackId = snaps[0].trackId
+          const trackNonSelected = nonSelected.filter((c) => c.trackId === origTrackId)
+          const ins = detectInsertPoint('__group__', proposedCenter, groupDur, trackNonSelected)
           if (ins) {
             const groupShift = ins.insertPoint - leftmostStart
             const moved = it.snapshotBefore.map((c) => {
@@ -1252,10 +1808,13 @@ function App() {
         // ── Otherwise: clamped uniform shift (no insert)
         let delta = deltaSec
         if (effSnap) {
+          // Track-aware: only consider clips on the same track as the group
+          const origTrackId = snaps[0].trackId
+          const trackNonSelected = nonSelected.filter((c) => c.trackId === origTrackId)
           let maxRightShift = Infinity, maxLeftShift = Infinity
           for (const s of snaps) {
             const sE = s.startTime + (s.outPoint - s.inPoint)
-            for (const n of nonSelected) {
+            for (const n of trackNonSelected) {
               const nS = n.startTime, nE = n.startTime + (n.outPoint - n.inPoint)
               if (nS >= sE - 1e-3 && nS - sE < maxRightShift) maxRightShift = nS - sE
               if (nE <= s.startTime + 1e-3 && s.startTime - nE < maxLeftShift) maxLeftShift = s.startTime - nE
@@ -1279,20 +1838,25 @@ function App() {
       if (it.type === 'move') {
         const dur = orig.outPoint - orig.inPoint
         let newStart = Math.max(0, orig.startTime + deltaSec)
+        const origTrackId = orig.trackId
+        // Track-aware: filter snapshot to only clips on the same track
+        const trackSnapshot = it.snapshotBefore.filter((c) => c.trackId === origTrackId)
         if (effSnap) {
           // Ripple-insert mode: when the dragged clip's center sits over another clip,
           // or in a gap too small for it, push the rest of the timeline aside (Filmora-style).
           const center = newStart + dur / 2
-          const ins = detectInsertPoint(orig.id, center, dur, it.snapshotBefore)
+          const ins = detectInsertPoint(orig.id, center, dur, trackSnapshot)
           if (ins) {
-            setClips(applyRippleInsert(it.snapshotBefore, orig.id, ins.insertPoint, dur))
+            const rippledTrack = applyRippleInsert(trackSnapshot, orig.id, ins.insertPoint, dur)
+            // Merge rippled track back with other tracks
+            setClips(it.snapshotBefore.filter((c) => c.trackId !== origTrackId).concat(rippledTrack))
             setSnapIndicatorTime(ins.insertPoint)
             it.moved = true
             return
           }
           // Otherwise: edge-snap to snapshot positions, then constrain to non-overlap
-          const sStart = snapValue(newStart, orig.id, it.snapshotBefore)
-          const sEnd = snapValue(newStart + dur, orig.id, it.snapshotBefore)
+          const sStart = snapValue(newStart, orig.id, trackSnapshot)
+          const sEnd = snapValue(newStart + dur, orig.id, trackSnapshot)
           const distStart = Math.abs(sStart.value - newStart)
           const distEnd = Math.abs(sEnd.value - (newStart + dur))
           let snappedAt = null
@@ -1302,13 +1866,13 @@ function App() {
             newStart = sEnd.value - dur; snappedAt = sEnd.value
           }
           if (newStart < 0) { newStart = 0; snappedAt = 0 }
-          const others = it.snapshotBefore.filter((c) => c.id !== orig.id)
+          const others = trackSnapshot.filter((c) => c.id !== orig.id)
           const constrained = constrainMoveStart(newStart, dur, others)
           if (Math.abs(constrained - newStart) > 1e-3) snappedAt = null
           newStart = constrained
           // Restore other clips to snapshot positions (in case a previous frame rippled them)
           setSnapIndicatorTime(snappedAt)
-          setClips(it.snapshotBefore.map((c) => c.id === orig.id ? { ...c, startTime: newStart } : c))
+          setClips(it.snapshotBefore.map((c) => (c.id === orig.id ? { ...c, startTime: newStart } : c)))
           it.moved = true
         } else {
           // Snap-off: free move; snap-off snap is no-op anyway
@@ -1333,7 +1897,8 @@ function App() {
         }
         // Snap-on: prevent overlap with left neighbor
         if (effSnap) {
-          const others = clips.filter((c) => c.id !== orig.id)
+          const origTrackId = orig.trackId
+          const others = clips.filter((c) => c.id !== orig.id && c.trackId === origTrackId)
           const fixedRight = orig.startTime + (orig.outPoint - orig.inPoint)
           const minLeft = minStartForTrimLeft(fixedRight, others)
           if (finalStart < minLeft - 1e-3) {
@@ -1349,14 +1914,15 @@ function App() {
           : c))
         it.moved = true
       } else if (it.type === 'trim-right') {
+        const maxOutPoint = orig.mediaType === 'image' ? Infinity : orig.sourceDuration
         let newOutPoint = Math.max(orig.inPoint + MIN_CLIP_DURATION,
-                                    Math.min(orig.sourceDuration, orig.outPoint + deltaSec))
+                                    Math.min(maxOutPoint, orig.outPoint + deltaSec))
         let rightOnTimeline = orig.startTime + (newOutPoint - orig.inPoint)
         const s = snapValue(rightOnTimeline, orig.id)
         let snappedAt = null
         if (s.snapped) {
           const adjustedOut = newOutPoint + (s.value - rightOnTimeline)
-          if (adjustedOut > orig.inPoint + MIN_CLIP_DURATION && adjustedOut <= orig.sourceDuration) {
+          if (adjustedOut > orig.inPoint + MIN_CLIP_DURATION && adjustedOut <= maxOutPoint) {
             newOutPoint = adjustedOut
             rightOnTimeline = orig.startTime + (newOutPoint - orig.inPoint)
             snappedAt = s.value
@@ -1364,7 +1930,8 @@ function App() {
         }
         // Snap-on: prevent overlap with right neighbor
         if (effSnap) {
-          const others = clips.filter((c) => c.id !== orig.id)
+          const origTrackId = orig.trackId
+          const others = clips.filter((c) => c.id !== orig.id && c.trackId === origTrackId)
           const maxRight = maxEndForTrimRight(orig.startTime, others)
           if (rightOnTimeline > maxRight + 1e-3) {
             const delta = rightOnTimeline - maxRight
@@ -1393,6 +1960,9 @@ function App() {
       } else if (it && it.type === 'marquee') {
         // Selection already updated during drag; just clear the box
         setMarqueeBox(null)
+      } else if (it && it.type === 'move' && !it.moved) {
+        // Click without drag: collapse multi-selection to just the clicked clip
+        setSelectedClipIds(new Set([it.clipId]))
       } else if (it && it.moved && it.snapshotBefore) {
         // Alt-drag stores a separate pre-clone snapshot so undo restores to before duplication.
         pushHistory(it.historyBefore || it.snapshotBefore)
@@ -1401,15 +1971,45 @@ function App() {
           const isMultiMove = it.type === 'move' && it.selectedSnaps && it.selectedSnaps.length > 1
           if (isMultiMove) {
             const ids = new Set(it.selectedSnaps.map((s) => s.id))
-            setClips((prev) => resolveOverlapsMulti(prev, ids, () => nextId('clip')))
+            // Track-aware: resolve overlaps per track
+            setClips((prev) => {
+              const byTrack = new Map()
+              prev.forEach((c) => {
+                if (!byTrack.has(c.trackId)) byTrack.set(c.trackId, [])
+                byTrack.get(c.trackId).push(c)
+              })
+              const resolved = []
+              byTrack.forEach((trackClipList) => {
+                const modified = trackClipList.filter((c) => ids.has(c.id))
+                if (modified.length > 0) {
+                  const modifierIds = modified.map((c) => c.id)
+                  resolved.push(...resolveOverlapsMulti(trackClipList, modifierIds, () => nextId('clip')))
+                } else {
+                  resolved.push(...trackClipList)
+                }
+              })
+              return resolved
+            })
           } else if (it.type === 'move' || it.type === 'trim-left' || it.type === 'trim-right') {
-            setClips((prev) => resolveOverlaps(prev, it.clipId, () => nextId('clip')))
+            // Track-aware: resolve overlaps only within the clip's track
+            setClips((prev) => {
+              const orig = prev.find((c) => c.id === it.clipId)
+              if (!orig) return prev
+              const trackId = orig.trackId
+              const trackClips = prev.filter((c) => c.trackId === trackId)
+              const otherTracks = prev.filter((c) => c.trackId !== trackId)
+              const resolvedTrack = resolveOverlaps(trackClips, it.clipId, () => nextId('clip'))
+              return [...otherTracks, ...resolvedTrack]
+            })
           }
         }
       }
-      // Resume playback if it was playing before a scrub
-      if (it && it.type === 'seek' && it.wasPlaying && videoRef.current) {
-        videoRef.current.play().catch(() => {})
+      // Resume timeline playback at the scrubbed position, including empty gaps.
+      if (it && it.type === 'seek' && it.wasPlaying) {
+        const resumeTime = playbackRef.current.timelineTime
+        const resumeClip = findClipAtTime(resumeTime, playbackRef.current.clips)
+        if (resumeClip) startClipPlayback(resumeClip, resumeTime)
+        else startTimelineGapPlayback(resumeTime)
       }
       interactionRef.current = null
       setInteraction(null)
@@ -1477,6 +2077,8 @@ function App() {
   const handleClipContextMenu = (e, clip) => {
     e.preventDefault()
     e.stopPropagation()
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
     setActiveClipId(clip.id)
     setActiveId(clip.videoId)
     setContextMenu({ x: e.clientX, y: e.clientY, clipId: clip.id })
@@ -1541,8 +2143,11 @@ function App() {
 
   const handleClipDoubleClick = (clip, e) => {
     e.stopPropagation()
+    setEditorFocus(FOCUS_TIMELINE)
+    setSourceMonitorId(null)
     setActiveClipId(clip.id)
     setActiveId(clip.videoId)
+    playingClipIdRef.current = clip.id
     pendingSeekRef.current = clip.inPoint
     setTimelineTime(clip.startTime)
     setIsPlaying(false)
@@ -1559,6 +2164,53 @@ function App() {
     const onKey = (e) => {
       const tag = (e.target?.tagName || '').toLowerCase()
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault(); saveCurrentProject()
+        return
+      }
+
+      if (editorFocus === FOCUS_SOURCE && isSourceMonitorActive) {
+        if (e.code === 'Space' || e.code === 'KeyK') {
+          e.preventDefault(); handleSourcePreviewPlay()
+          return
+        }
+        if (e.code === 'ArrowLeft') {
+          e.preventDefault()
+          seekSourcePreviewTo(stepSourcePreviewTime({ keyCode: e.code, currentTime: previewTime, inPoint: activeSourceSelection.inPoint, outPoint: activeSourceSelection.outPoint, shiftKey: e.shiftKey }))
+          return
+        }
+        if (e.code === 'ArrowRight') {
+          e.preventDefault()
+          seekSourcePreviewTo(stepSourcePreviewTime({ keyCode: e.code, currentTime: previewTime, inPoint: activeSourceSelection.inPoint, outPoint: activeSourceSelection.outPoint, shiftKey: e.shiftKey }))
+          return
+        }
+        if (e.code === 'Comma') {
+          e.preventDefault(); seekSourcePreviewTo(stepSourcePreviewTime({ keyCode: e.code, currentTime: previewTime, inPoint: activeSourceSelection.inPoint, outPoint: activeSourceSelection.outPoint }))
+          return
+        }
+        if (e.code === 'Period') {
+          e.preventDefault(); seekSourcePreviewTo(stepSourcePreviewTime({ keyCode: e.code, currentTime: previewTime, inPoint: activeSourceSelection.inPoint, outPoint: activeSourceSelection.outPoint }))
+          return
+        }
+        if (e.code === 'Home') {
+          e.preventDefault(); seekSourcePreviewTo(stepSourcePreviewTime({ keyCode: e.code, currentTime: previewTime, inPoint: activeSourceSelection.inPoint, outPoint: activeSourceSelection.outPoint }))
+          return
+        }
+        if (e.code === 'End') {
+          e.preventDefault(); seekSourcePreviewTo(stepSourcePreviewTime({ keyCode: e.code, currentTime: previewTime, inPoint: activeSourceSelection.inPoint, outPoint: activeSourceSelection.outPoint }))
+          return
+        }
+        if (e.code === 'KeyJ') {
+          e.preventDefault(); seekSourcePreviewTo(stepSourcePreviewTime({ keyCode: e.code, currentTime: previewTime, inPoint: activeSourceSelection.inPoint, outPoint: activeSourceSelection.outPoint }))
+          return
+        }
+        if (e.code === 'KeyL') {
+          e.preventDefault()
+          if (playbackMode !== 'source' || !isPlaying) handleSourcePreviewPlay()
+          return
+        }
+      }
 
       if (e.code === 'Space') {
         e.preventDefault()
@@ -1676,7 +2328,7 @@ function App() {
         e.preventDefault(); handlePlay()
       } else if (e.code === 'KeyL') {
         e.preventDefault()
-        if (videoRef.current) videoRef.current.play().catch(() => {})
+        if (playbackMode !== 'timeline' || !isPlaying) handlePlay()
       } else if (e.code === 'Comma') {
         e.preventDefault()
         // frame back (~33ms = 30fps)
@@ -1698,7 +2350,7 @@ function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [activeClipId, clips, timelineTime, totalEnd, handlePlay, undo, redo, splitAtPlayhead, seekToTime, commitClips, duplicateClip, selectedClipIds, selectedGap, snapEnabled])
+  }, [activeClipId, activeSourceSelection, clips, commitClips, duplicateClip, editorFocus, handlePlay, handleSourcePreviewPlay, isPlaying, isSourceMonitorActive, playbackMode, previewTime, redo, saveCurrentProject, seekSourcePreviewTo, seekToTime, selectedClipIds, selectedGap, snapEnabled, splitAtPlayhead, timelineTime, totalEnd, undo])
 
   // Generate waveforms for clips' source videos (cached per videoId)
   useEffect(() => {
@@ -1760,6 +2412,12 @@ function App() {
     return null
   }, [selectedGap, clips])
 
+  const activePlaybackSpace = useMemo(() => {
+    if (playbackMode !== 'timeline' || !isPlaying) return null
+    if (findClipAtTime(timelineTime, displayClips)) return null
+    return findTimelineSpaceAtTime(timelineTime, displayClips)
+  }, [displayClips, isPlaying, playbackMode, timelineTime])
+
   // Auto-scroll only when needed
   useEffect(() => {
     const el = tracksContentRef.current
@@ -1775,6 +2433,88 @@ function App() {
   const stepBack = () => seekToTime(Math.max(0, timelineTime - 1))
   const stepFwd = () => seekToTime(timelineTime + 1)
 
+  if (showProjectStart) {
+    return (
+      <div className="app project-start-app">
+        <div className="project-start-shell">
+          <img src={logoUrl} alt="StoneCutter" className="project-start-logo" draggable={false} />
+          <h1>Willkommen zu StoneCutter</h1>
+          <div className="project-start-actions">
+            <button className="project-primary-action" onClick={() => setShowNewProjectDialog(true)}>
+              <Icon.Plus /> Neues Projekt
+            </button>
+            <button className="project-secondary-action" onClick={handleOpenProject} disabled={!isTauri}>
+              <Icon.FolderOpen /> Projekt oeffnen
+            </button>
+          </div>
+
+          <section className="recent-projects-panel">
+            <div className="recent-projects-header">
+              <h2>Zuletzt benutzt</h2>
+              {recentProjects.length > 0 && (
+                <button className="recent-clear-btn" onClick={() => persistRecentProjects([])}>Leeren</button>
+              )}
+            </div>
+            {recentProjects.length === 0 ? (
+              <div className="recent-empty">Noch keine Projekte geoeffnet.</div>
+            ) : (
+              <div className="recent-project-list">
+                {recentProjects.map((project) => (
+                  <button
+                    key={project.path}
+                    className="recent-project-item"
+                    onClick={() => openProjectPath(project.path)}
+                    title={project.path}
+                  >
+                    <span className="recent-project-icon"><Icon.File /></span>
+                    <span className="recent-project-info">
+                      <strong>{project.name}</strong>
+                      <span>{project.path}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {projectStatus && (
+            <div className={`project-status ${projectStatus.ok ? 'ok' : 'err'}`}>
+              {projectStatus.msg}
+            </div>
+          )}
+        </div>
+
+        {showNewProjectDialog && (
+          <div className="settings-overlay" onClick={() => setShowNewProjectDialog(false)}>
+            <div className="settings-panel project-dialog" onClick={(e) => e.stopPropagation()}>
+              <div className="settings-header">
+                <h3><Icon.Plus /> Neues Projekt</h3>
+                <button className="settings-close" onClick={() => setShowNewProjectDialog(false)}>x</button>
+              </div>
+              <div className="settings-body">
+                <label className="project-name-field">
+                  <span>Projektname</span>
+                  <input
+                    autoFocus
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleCreateProject()
+                    }}
+                  />
+                </label>
+                <p className="settings-hint">StoneCutter erstellt einen Projektordner mit einer `.stonecutter`-Projektdatei.</p>
+                <button className="export-start-btn" onClick={handleCreateProject}>
+                  <Icon.FolderOpen /> Speicherort waehlen
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <div className="logo-area">
@@ -1784,6 +2524,23 @@ function App() {
           className="app-logo"
           draggable={false}
         />
+        <div className="project-toolbar">
+          <button
+            className="project-toolbar-btn"
+            onClick={() => setShowProjectStart(true)}
+            title="Startscreen anzeigen"
+          >
+            <Icon.File /> {currentProject?.name || 'Projekt'}
+          </button>
+          <button
+            className="project-toolbar-btn"
+            onClick={saveCurrentProject}
+            title="Projekt speichern (Ctrl+S)"
+            disabled={!currentProject?.path || !isProjectDirty}
+          >
+            <Icon.Save /> {isProjectDirty ? 'Speichern' : 'Gespeichert'}
+          </button>
+        </div>
         {isTauri && (
           <button
             className="logo-export-btn"
@@ -1803,9 +2560,15 @@ function App() {
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />
+      {projectStatus && (
+        <div className={`project-toast ${projectStatus.ok ? 'ok' : 'err'}`}>
+          {projectStatus.msg}
+          <button onClick={() => setProjectStatus(null)}>x</button>
+        </div>
+      )}
 
       {/* ===== Sidebar ===== */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${editorFocus === FOCUS_SOURCE ? 'focus-source' : ''}`}>
         <div className="sidebar-header">
           <h2 className="sidebar-title">Mediathek</h2>
           <button className="import-btn" onClick={handleImport} title="Videos importieren">
@@ -1854,7 +2617,7 @@ function App() {
       </aside>
 
       {/* ===== Player ===== */}
-      <main className="main-content">
+      <main className={`main-content ${editorFocus === FOCUS_SOURCE ? 'focus-source' : ''}`}>
         <div className={`player-wrapper ${aspectRatio === '9:16' ? 'ar-portrait' : 'ar-landscape'}`}>
           {/* Aspect Ratio Switcher */}
           <div className="ar-switcher">
@@ -1878,6 +2641,7 @@ function App() {
                 src={videoSrc}
                 className="video player-image"
                 alt={activeVideo?.name}
+                onClick={handlePlay}
                 draggable={false}
               />
             ) : videoSrc ? (
@@ -1887,14 +2651,32 @@ function App() {
                 className="video"
                 onClick={handlePlay}
                 onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
+                onPause={() => {
+                  if (playbackModeRef.current === 'timeline' && playingClipIdRef.current) return
+                  if (!imagePlaybackRef.current && !timelinePlaybackRef.current) setIsPlaying(false)
+                }}
                 onLoadedMetadata={handleLoadedMetadata}
+                onTimeUpdate={handlePreviewTimeUpdate}
                 src={videoSrc}
               />
             ) : (
               <div className="empty-overlay">
                 <p>Wähle ein Medium aus der Mediathek</p>
                 <p className="hint">Doppelklick zur Vorschau · Ziehen auf die Timeline</p>
+              </div>
+            )}
+            {isSourceMonitorActive && (
+              <div className="preview-player-bar">
+                <button className="preview-player-btn" onClick={handlePlay} title="Vorschau abspielen">
+                  {playbackMode === 'source' && isPlaying ? <Icon.Pause /> : <Icon.Play />}
+                </button>
+                <span className="preview-player-time">{formatTC(previewTime)}</span>
+                <div className="preview-player-progress" aria-hidden="true">
+                  <div
+                    className="preview-player-progress-fill"
+                    style={{ width: `${Math.min(100, Math.max(0, (previewTime / activeSourceSelection.duration) * 100))}%` }}
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -1905,12 +2687,91 @@ function App() {
               {activeVideo.mediaType === 'image' && <span className="media-type-badge">Bild · {settings.imageDuration}s</span>}
             </div>
           )}
+
+          {isSourceMonitorActive && (
+            <div className="source-trim-panel">
+              <div className="source-trim-header">
+                <span>Source In/Out</span>
+                <strong>
+                  {formatTC(activeSourceSelection.inPoint)} - {formatTC(activeSourceSelection.outPoint)}
+                  {' '}({formatTime(activeSourceSelection.clipDuration)})
+                </strong>
+                <div className="source-point-actions">
+                  <button type="button" onClick={() => setSourcePointAtPreviewTime('inPoint')} title="In auf aktuelle Vorschauposition setzen">
+                    In
+                  </button>
+                  <button type="button" onClick={() => setSourcePointAtPreviewTime('outPoint')} title="Out auf aktuelle Vorschauposition setzen">
+                    Out
+                  </button>
+                </div>
+              </div>
+              <div
+                className="source-preview-timeline"
+                onMouseDown={beginSourcePreviewSeek}
+                title="Vorschauposition setzen; In/Out-Handles ziehen"
+              >
+                <div
+                  className="source-preview-window"
+                  style={{
+                    left: `${(activeSourceSelection.inPoint / activeSourceSelection.duration) * 100}%`,
+                    width: `${(activeSourceSelection.clipDuration / activeSourceSelection.duration) * 100}%`,
+                  }}
+                />
+                <div
+                  className="source-preview-playhead"
+                  style={{ left: `${Math.min(100, Math.max(0, (previewTime / activeSourceSelection.duration) * 100))}%` }}
+                />
+                <button
+                  type="button"
+                  className="source-preview-handle in"
+                  style={{ left: `${(activeSourceSelection.inPoint / activeSourceSelection.duration) * 100}%` }}
+                  onMouseDown={(e) => beginSourceTimelineDrag(e, 'inPoint')}
+                  aria-label="Source In setzen"
+                  title="In ziehen"
+                />
+                <button
+                  type="button"
+                  className="source-preview-handle out"
+                  style={{ left: `${(activeSourceSelection.outPoint / activeSourceSelection.duration) * 100}%` }}
+                  onMouseDown={(e) => beginSourceTimelineDrag(e, 'outPoint')}
+                  aria-label="Source Out setzen"
+                  title="Out ziehen"
+                />
+              </div>
+              <div className="source-drag-actions">
+                <button
+                  type="button"
+                  className="source-drag-btn video-source"
+                  draggable
+                  onDragStart={(e) => handleSourceDragStart(e, 'av')}
+                  onDragEnd={handleDragEnd}
+                  aria-label={activeVideo.mediaType === 'image' ? 'Bildauswahl in die Timeline ziehen' : 'Auswahl als Video mit Audio in die Timeline ziehen'}
+                  title={activeVideo.mediaType === 'image' ? 'Bildauswahl in die Timeline ziehen' : 'Auswahl als Video mit Audio in die Timeline ziehen'}
+                >
+                  <Icon.VideoTrack /> {activeVideo.mediaType === 'image' ? 'Bild' : 'Video + Audio'}
+                </button>
+                {activeVideo.mediaType === 'video' && (
+                  <button
+                    type="button"
+                    className="source-drag-btn audio-source"
+                    draggable
+                    onDragStart={(e) => handleSourceDragStart(e, 'audio')}
+                    onDragEnd={handleDragEnd}
+                    aria-label="Nur Audio der Auswahl in die Timeline ziehen"
+                    title="Nur Audio der Auswahl in die Timeline ziehen"
+                  >
+                    <Icon.AudioTrack /> Nur Audio
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
       {/* ===== Timeline ===== */}
       <section
-        className={`timeline ${dragOver ? 'drag-over' : ''}`}
+        className={`timeline ${dragOver ? 'drag-over' : ''} ${editorFocus === FOCUS_TIMELINE ? 'focus-timeline' : ''}`}
         onDragEnter={handleTimelineDragEnter}
         onDragOver={handleTimelineDragOver}
         onDragLeave={handleTimelineDragLeave}
@@ -1922,7 +2783,7 @@ function App() {
             <button className="tb-btn" onClick={() => seekToTime(0)} title="Zum Anfang (Home)"><Icon.SkipStart /></button>
             <button className="tb-btn" onClick={stepBack} title="1s zurück (←)"><Icon.StepBack /></button>
             <button className="tb-btn play" onClick={handlePlay} title="Play/Pause (Space)">
-              {isPlaying ? <Icon.Pause /> : <Icon.Play />}
+              {playbackMode === 'timeline' && isPlaying ? <Icon.Pause /> : <Icon.Play />}
             </button>
             <button className="tb-btn" onClick={stepFwd} title="1s vor (→)"><Icon.StepFwd /></button>
             <button className="tb-btn" onClick={() => seekToTime(totalEnd)} title="Zum Ende (End)"><Icon.SkipEnd /></button>
@@ -1987,18 +2848,83 @@ function App() {
 
         {/* Tracks */}
         <div className="timeline-tracks">
-          <div className="track-labels">
-            <div className="track-label time-label" />
-            <div className="track-label video-label">V1</div>
-            <div className="track-label audio-label">A1</div>
+          {/* Fixed track headers column */}
+          <div className="track-headers">
+            <div className="track-header time-header" />
+            <div className="track-headers-list" ref={trackHeadersListRef}>
+              {tracks.map((track) => (
+                <div
+                  key={track.id}
+                  className={`track-header-row ${track.type === 'video' ? 'video' : 'audio'} ${dropTargetTrackId === track.id ? 'drop-target' : ''}`}
+                  style={{ height: `${track.height || DEFAULT_TRACK_HEIGHT}px` }}
+                >
+                  <div className="track-header-left">
+                    <span className="track-icon">{track.type === 'video' ? '▶' : '🔊'}</span>
+                    {editingTrackId === track.id ? (
+                      <input
+                        className="track-name-input"
+                        defaultValue={track.name}
+                        autoFocus
+                        onBlur={(e) => { handleUpdateTrack(track.id, { name: e.target.value }); setEditingTrackId(null) }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { handleUpdateTrack(track.id, { name: e.currentTarget.value }); setEditingTrackId(null) } if (e.key === 'Escape') setEditingTrackId(null) }}
+                      />
+                    ) : (
+                      <span className="track-name" onDoubleClick={() => setEditingTrackId(track.id)} title="Doppelklick zum Bearbeiten">
+                        {track.name}
+                      </span>
+                    )}
+                  </div>
+                  <div className="track-header-controls">
+                    {track.type === 'audio' && (
+                      <>
+                        <button
+                          className={`track-btn mute ${track.muted ? 'active' : ''}`}
+                          onClick={() => handleUpdateTrack(track.id, { muted: !track.muted })}
+                          title={track.muted ? 'Stumm aus' : 'Stumm'}
+                        >M</button>
+                        <button
+                          className={`track-btn solo ${track.solo ? 'active' : ''}`}
+                          onClick={() => handleUpdateTrack(track.id, { solo: !track.solo })}
+                          title={track.solo ? 'Solo aus' : 'Solo'}
+                        >S</button>
+                      </>
+                    )}
+                    <button
+                      className={`track-btn lock ${track.locked ? 'active' : ''}`}
+                      onClick={() => handleUpdateTrack(track.id, { locked: !track.locked })}
+                      title={track.locked ? 'Entsperren' : 'Sperren'}
+                    >🔒</button>
+                    {tracks.length > 1 && (
+                      <button
+                        className="track-btn delete"
+                        onClick={() => handleRemoveTrack(track.id)}
+                        title="Spur löschen"
+                      >×</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {/* Drop target below tracks */}
+              {dropTargetTrackId === '__below__' && (
+                <div className="track-header-row drop-target-below">
+                  <span>+ Neue Spur</span>
+                </div>
+              )}
+            </div>
+            {/* Add track buttons */}
+            <div className="track-header-actions">
+              <button className="add-track-btn" onClick={() => handleAddTrack('video')} title="Video-Spur hinzufügen">+ Video</button>
+              <button className="add-track-btn" onClick={() => handleAddTrack('audio')} title="Audio-Spur hinzufügen">+ Audio</button>
+            </div>
           </div>
 
           <div
             className="tracks-content"
             ref={tracksContentRef}
             onMouseDown={handleTracksMouseDown}
+            onScroll={handleTracksScroll}
           >
-            <div className="tracks-inner" style={{ width: `${totalWidth}px` }}>
+            <div className="tracks-inner" style={{ width: `${totalWidth}px`, minHeight: `${30 + tracks.reduce((h, t) => h + (t.height || DEFAULT_TRACK_HEIGHT), 0) + 60}px` }}>
               {/* Time ruler */}
               <div className="time-ruler">
                 {Array.from({ length: Math.max(20, Math.ceil(totalEnd) + 5) }).map((_, i) => (
@@ -2012,132 +2938,117 @@ function App() {
                 ))}
               </div>
 
-              {/* Video track */}
-              <div className="track video-track">
-                {displayClips.map((clip) => {
-                  const dur = clip.outPoint - clip.inPoint
-                  const left = clip.startTime * pxPerSec
-                  const width = Math.max(20, dur * pxPerSec)
-                  const trimmedLeft = clip.inPoint > 0.01
-                  const trimmedRight = clip.outPoint < clip.sourceDuration - 0.01
-                  return (
-                    <div
-                      key={`v-${clip.id}`}
-                      className={`clip video-clip ${activeClipId === clip.id ? 'active' : ''} ${selectedClipIds.has(clip.id) ? 'selected' : ''} ${draggingIds?.has(clip.id) ? 'dragging' : ''}`}
-                      style={{ left: `${left}px`, width: `${width}px` }}
-                      onMouseDown={(e) => handleClipMouseDown(e, clip)}
-                      onDoubleClick={(e) => handleClipDoubleClick(clip, e)}
-                      onContextMenu={(e) => handleClipContextMenu(e, clip)}
-                      title={`${clip.name}\nIn: ${formatTime(clip.inPoint)} · Out: ${formatTime(clip.outPoint)} · Dauer: ${formatTime(dur)}`}
-                    >
+              {/* Track lanes */}
+              {tracks.map((track) => (
+                <div
+                  key={track.id}
+                  className={`track-lane ${track.type} ${dropTargetTrackId === track.id ? 'drop-target' : ''} ${track.locked ? 'locked' : ''}`}
+                  style={{ height: `${track.height || DEFAULT_TRACK_HEIGHT}px` }}
+                  data-track-id={track.id}
+                >
+                  {displayClips.filter((c) => c.trackId === track.id).map((clip) => {
+                    const dur = clip.outPoint - clip.inPoint
+                    const left = clip.startTime * pxPerSec
+                    const width = Math.max(20, dur * pxPerSec)
+                    const isVideo = track.type === 'video'
+                    const trimmedLeft = clip.inPoint > 0.01
+                    const trimmedRight = clip.outPoint < clip.sourceDuration - 0.01
+                    return (
                       <div
-                        className={`trim-handle left ${trimmedLeft ? 'trimmed' : ''}`}
-                        onMouseDown={(e) => handleTrimMouseDown(e, clip, 'left')}
-                        title="Links trimmen"
-                      />
-                      {(() => {
-                        const thumbs = thumbsMap[clip.videoId]
-                        if (thumbs && thumbs.length > 0) {
-                          const sd = Math.max(0.001, clip.sourceDuration)
-                          const startIdx = Math.max(0, Math.floor((clip.inPoint / sd) * thumbs.length))
-                          const endIdx = Math.min(thumbs.length, Math.max(startIdx + 1, Math.ceil((clip.outPoint / sd) * thumbs.length)))
-                          const visible = thumbs.slice(startIdx, endIdx)
-                          // Stretch to fill clip width via flex
-                          return (
-                            <div className="video-thumb-strip">
-                              {visible.map((url, i) => url
-                                ? <div key={i} className="video-thumb" style={{ backgroundImage: `url(${url})` }} />
-                                : <div key={i} className="video-thumb empty" />
-                              )}
-                            </div>
-                          )
-                        }
-                        return <div className={`video-thumb-strip ${thumbs === null ? 'loading' : ''}`} />
-                      })()}
-                      <div className="clip-content">
-                        <span className="clip-name">{clip.name}</span>
-                        <span className="clip-duration">{formatTime(dur)}</span>
-                      </div>
-                      <button
-                        className="clip-remove"
-                        onClick={(e) => handleClipRemove(clip.id, e)}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        title="Aus Timeline entfernen"
-                      ><Icon.Trash /></button>
-                      <div
-                        className={`trim-handle right ${trimmedRight ? 'trimmed' : ''}`}
-                        onMouseDown={(e) => handleTrimMouseDown(e, clip, 'right')}
-                        title="Rechts trimmen"
-                      />
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Audio track */}
-              <div className="track audio-track">
-                {displayClips.map((clip) => {
-                  const dur = clip.outPoint - clip.inPoint
-                  const left = clip.startTime * pxPerSec
-                  const width = Math.max(20, dur * pxPerSec)
-                  return (
-                    <div
-                      key={`a-${clip.id}`}
-                      className={`clip audio-clip ${activeClipId === clip.id ? 'active' : ''} ${selectedClipIds.has(clip.id) ? 'selected' : ''} ${draggingIds?.has(clip.id) ? 'dragging' : ''}`}
-                      style={{ left: `${left}px`, width: `${width}px` }}
-                      onMouseDown={(e) => handleClipMouseDown(e, clip)}
-                      onDoubleClick={(e) => handleClipDoubleClick(clip, e)}
-                      onContextMenu={(e) => handleClipContextMenu(e, clip)}
-                      title={`${clip.name} – Tonspur`}
-                    >
-                      <div
-                        className="trim-handle left"
-                        onMouseDown={(e) => handleTrimMouseDown(e, clip, 'left')}
-                      />
-                      {(() => {
-                        const peaks = peaksMap[clip.videoId]
-                        const barCount = Math.max(8, Math.floor(width / 3))
-                        if (peaks && peaks.length > 0) {
-                          const startIdx = Math.floor((clip.inPoint / Math.max(0.001, clip.sourceDuration)) * peaks.length)
-                          const endIdx = Math.max(startIdx + 1, Math.floor((clip.outPoint / Math.max(0.001, clip.sourceDuration)) * peaks.length))
-                          const segLen = endIdx - startIdx
-                          return (
-                            <div className="waveform">
-                              {Array.from({ length: barCount }).map((_, i) => {
-                                const idx = startIdx + Math.floor((i / barCount) * segLen)
-                                const v = peaks[idx] || 0
+                        key={clip.id}
+                        className={`clip ${isVideo ? 'video-clip' : 'audio-clip'} ${activeClipId === clip.id ? 'active' : ''} ${selectedClipIds.has(clip.id) ? 'selected' : ''} ${draggingIds?.has(clip.id) ? 'dragging' : ''} ${track.locked ? 'track-locked' : ''}`}
+                        style={{ left: `${left}px`, width: `${width}px` }}
+                        onMouseDown={(e) => !track.locked && handleClipMouseDown(e, clip)}
+                        onDoubleClick={(e) => handleClipDoubleClick(clip, e)}
+                        onContextMenu={(e) => handleClipContextMenu(e, clip)}
+                        title={`${clip.name}\nIn: ${formatTime(clip.inPoint)} · Out: ${formatTime(clip.outPoint)} · Dauer: ${formatTime(dur)}`}
+                      >
+                        <div
+                          className={`trim-handle left ${trimmedLeft ? 'trimmed' : ''}`}
+                          onMouseDown={(e) => !track.locked && handleTrimMouseDown(e, clip, 'left')}
+                          title="Links trimmen"
+                        />
+                        {isVideo ? (
+                          <>
+                            {(() => {
+                              const thumbs = thumbsMap[clip.videoId]
+                              if (thumbs && thumbs.length > 0) {
+                                const sd = Math.max(0.001, clip.sourceDuration)
+                                const startIdx = Math.max(0, Math.floor((clip.inPoint / sd) * thumbs.length))
+                                const endIdx = Math.min(thumbs.length, Math.max(startIdx + 1, Math.ceil((clip.outPoint / sd) * thumbs.length)))
+                                const visible = thumbs.slice(startIdx, endIdx)
                                 return (
-                                  <span
-                                    key={i}
-                                    className="wave-bar"
-                                    style={{ height: `${Math.max(6, v * 100)}%` }}
-                                  />
+                                  <div className="video-thumb-strip">
+                                    {visible.map((url, i) => url
+                                      ? <div key={i} className="video-thumb" style={{ backgroundImage: `url(${url})` }} />
+                                      : <div key={i} className="video-thumb empty" />
+                                    )}
+                                  </div>
                                 )
-                              })}
+                              }
+                              return <div className={`video-thumb-strip ${thumbs === null ? 'loading' : ''}`} />
+                            })()}
+                            <div className="clip-content">
+                              <span className="clip-name">{clip.name}</span>
+                              <span className="clip-duration">{formatTime(dur)}</span>
                             </div>
-                          )
-                        }
-                        // loading or unsupported
-                        return (
-                          <div className={`waveform ${peaks === null ? 'loading' : ''}`}>
-                            {Array.from({ length: barCount }).map((_, i) => (
-                              <span
-                                key={i}
-                                className="wave-bar placeholder"
-                                style={{ height: `${20 + Math.abs(Math.sin((i + clip.inPoint * 4) * 0.7 + clip.id.length)) * 50}%` }}
-                              />
-                            ))}
-                          </div>
-                        )
-                      })()}
-                      <div
-                        className="trim-handle right"
-                        onMouseDown={(e) => handleTrimMouseDown(e, clip, 'right')}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
+                          </>
+                        ) : (
+                          <>
+                            {(() => {
+                              const peaks = peaksMap[clip.videoId]
+                              const barCount = Math.max(8, Math.floor(width / 3))
+                              if (peaks && peaks.length > 0) {
+                                const startIdx = Math.floor((clip.inPoint / Math.max(0.001, clip.sourceDuration)) * peaks.length)
+                                const endIdx = Math.max(startIdx + 1, Math.floor((clip.outPoint / Math.max(0.001, clip.sourceDuration)) * peaks.length))
+                                const segLen = endIdx - startIdx
+                                return (
+                                  <div className="waveform">
+                                    {Array.from({ length: barCount }).map((_, i) => {
+                                      const idx = startIdx + Math.floor((i / barCount) * segLen)
+                                      const v = peaks[idx] || 0
+                                      return (
+                                        <span
+                                          key={i}
+                                          className="wave-bar"
+                                          style={{ height: `${Math.max(6, v * 100)}%` }}
+                                        />
+                                      )
+                                    })}
+                                  </div>
+                                )
+                              }
+                              return (
+                                <div className={`waveform ${peaks === null ? 'loading' : ''}`}>
+                                  {Array.from({ length: barCount }).map((_, i) => (
+                                    <span
+                                      key={i}
+                                      className="wave-bar placeholder"
+                                      style={{ height: `${20 + Math.abs(Math.sin((i + clip.inPoint * 4) * 0.7 + clip.id.length)) * 50}%` }}
+                                    />
+                                  ))}
+                                </div>
+                              )
+                            })()}
+                            <span className="clip-name">{clip.name}</span>
+                          </>
+                        )}
+                        <button
+                          className="clip-remove"
+                          onClick={(e) => handleClipRemove(clip.id, e)}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          title="Aus Timeline entfernen"
+                        ><Icon.Trash /></button>
+                        <div
+                          className={`trim-handle right ${trimmedRight ? 'trimmed' : ''}`}
+                          onMouseDown={(e) => !track.locked && handleTrimMouseDown(e, clip, 'right')}
+                          title="Rechts trimmen"
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              ))}
 
               {/* Drop indicator (during drag) */}
               {dragOver && dropIndicatorTime != null && (
@@ -2149,35 +3060,47 @@ function App() {
                 <div className="snap-indicator" style={{ left: `${snapIndicatorTime * pxPerSec}px` }} />
               )}
 
-              {/* Import-drag preview: ghost clip showing exact position + duration on both tracks */}
-              {importDragInfo && (
-                <>
-                  <div
-                    className={`clip ghost-clip video-clip mode-${importDragInfo.mode}`}
-                    style={{
-                      left: `${importDragInfo.insertPoint * pxPerSec}px`,
-                      width: `${Math.max(20, importDragInfo.dur * pxPerSec)}px`,
-                    }}
-                  >
-                    <div className="clip-thumb-strip ghost-thumb" />
-                    <div className="clip-name">{importDragInfo.name}</div>
-                    <div className="ghost-badge">
-                      {importDragInfo.mode === 'insert' && '⇆ Einfügen'}
-                      {importDragInfo.mode === 'overwrite' && '✂ Überschreiben'}
-                      {importDragInfo.mode === 'constrain' && '↔ Anpassen'}
-                    </div>
-                  </div>
-                  <div
-                    className={`clip ghost-clip audio-clip mode-${importDragInfo.mode}`}
-                    style={{
-                      left: `${importDragInfo.insertPoint * pxPerSec}px`,
-                      width: `${Math.max(20, importDragInfo.dur * pxPerSec)}px`,
-                    }}
-                  />
-                  {importDragInfo.mode === 'insert' && (
-                    <div className="insert-indicator" style={{ left: `${importDragInfo.insertPoint * pxPerSec}px` }} />
-                  )}
-                </>
+              {activePlaybackSpace && (
+                <div
+                  className={`playback-space playback-space-${activePlaybackSpace.type}`}
+                  style={{
+                    left: `${activePlaybackSpace.start * pxPerSec}px`,
+                    width: `${Math.max(2, (activePlaybackSpace.end - activePlaybackSpace.start) * pxPerSec)}px`,
+                  }}
+                  aria-hidden="true"
+                />
+              )}
+
+              {/* Import-drag preview: ghost clip showing exact position + duration */}
+              {importDragInfo && dropTargetTrackId && dropTargetTrackId !== '__below__' && (
+                (() => {
+                  const targetTrack = tracks.find((t) => t.id === dropTargetTrackId)
+                  if (!targetTrack) return null
+                  const isVideo = targetTrack.type === 'video'
+                  return (
+                    <>
+                      <div
+                        className={`clip ghost-clip ${isVideo ? 'video-clip' : 'audio-clip'} mode-${importDragInfo.mode}`}
+                        style={{
+                          left: `${importDragInfo.insertPoint * pxPerSec}px`,
+                          width: `${Math.max(20, importDragInfo.dur * pxPerSec)}px`,
+                          top: `${30 + tracks.slice(0, tracks.findIndex((t) => t.id === dropTargetTrackId)).reduce((h, t) => h + (t.height || DEFAULT_TRACK_HEIGHT), 0)}px`,
+                          position: 'absolute',
+                        }}
+                      >
+                        <div className="clip-name">{importDragInfo.name}</div>
+                        <div className="ghost-badge">
+                          {importDragInfo.mode === 'insert' && '⇆ Einfügen'}
+                          {importDragInfo.mode === 'overwrite' && '✂ Überschreiben'}
+                          {importDragInfo.mode === 'constrain' && '↔ Anpassen'}
+                        </div>
+                      </div>
+                      {importDragInfo.mode === 'insert' && (
+                        <div className="insert-indicator" style={{ left: `${importDragInfo.insertPoint * pxPerSec}px` }} />
+                      )}
+                    </>
+                  )
+                })()
               )}
 
               {/* Drag tooltip near cursor */}
@@ -2386,7 +3309,7 @@ function App() {
       {contextMenu && (() => {
         const clip = clips.find((c) => c.id === contextMenu.clipId)
         if (!clip) return null
-        const isTrimmed = clip.inPoint > 0.01 || clip.outPoint < clip.sourceDuration - 0.01
+        const isTrimmed = clip.inPoint > 0.01 || Math.abs(clip.outPoint - clip.sourceDuration) > 0.01
         return (
           <div
             className="context-menu"

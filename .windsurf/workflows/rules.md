@@ -2,95 +2,47 @@
 description: Core project rules for StoneCutter development
 ---
 
-# 🧩 ARCHITEKTUR REGELN
+# StoneCutter Rules
 
-## Trennung
-- **Frontend (JS/React) = UI ONLY**
-- **Backend (Rust) = Logik + Berechnung**
+## Architecture
 
-## Kommunikation
-- Jede wichtige Aktion läuft über Tauri Commands
-- Keine Business-Logik im Frontend
+- Frontend in `src/` is UI and interaction logic only.
+- Pure timeline, playback, and export rules belong in `src/lib/` first, with tests.
+- Rust/Tauri owns export, file access, and persisted state.
+- Keep React components small; do not grow `App.jsx` for new core behavior.
+- If a change affects release flow, update `README.md`, `CHANGELOG.md`, and the release scripts together.
 
-## Daten
-- Keyframes und Effekte werden im Backend gespeichert
-- Frontend zeigt nur an
+## Working Style
 
----
+- Finish one feature or fix before starting the next one.
+- Use the simplest working solution first.
+- Prefer visible, testable progress over hidden refactors.
+- Do not introduce fake implementations unless they unblock a visible editor flow.
+- Do not claim a build, installer, or release succeeded unless it was actually run in this workspace.
 
-# 🧠 CORE REGELN
+## Quality Gates
 
-## Fokus
-- **Baue immer nur EIN Feature gleichzeitig fertig.**
-- Kein neues Feature anfangen, bevor das alte stabil läuft.
+- Run the relevant tests before marking work done.
+- For release or installer changes, verify `npm.cmd test`, `npm.cmd run lint`, and the affected release script.
+- Keep the Git worktree clean before creating a release tag or installer artifact.
+- Do not silently ignore broken scripts, failed commands, or exit-code issues.
 
-## Einfachheit
-- Immer die simpelste Lösung zuerst.
-- **Fake Lösungen (z. B. CSS statt echte Videoverarbeitung) sind erlaubt und gewünscht.**
+## Debugging
 
-## Sichtbarkeit
-- Jede Änderung muss ein sichtbares Ergebnis haben.
-- Keine "unsichtbare" Logik über mehrere Tage bauen.
+- When something fails, reduce scope before adding complexity.
+- Fix breakages immediately instead of stacking temporary workarounds.
+- Prefer small pure functions that are easy to test.
 
----
+## Windows Setup
 
-# 🚫 VERBOTEN (am Anfang)
+- Use `npm.cmd` in PowerShell.
+- Ensure Rust/Cargo is available from `C:\Users\viuser\.cargo\bin\` if the IDE terminal does not inherit PATH.
+- Before Tauri dev/build, make sure `cargo --version` works in the current shell.
+- FFmpeg is only needed for the export path and should be treated as an external runtime dependency.
 
-- Keine komplexe Videoverarbeitung am Anfang
-- Kein direkter Einstieg in FFmpeg-Integration
-- Keine GPU / Shader Optimierung am Anfang
+## Git and Release Safety
 
----
-
-# 🔧 DEBUGGING REGELN
-
-## Wenn etwas nicht funktioniert
-- **Vereinfachen statt erweitern**
-- Nach jeder Änderung testen
-
-## Wenn etwas kaputt geht
-- **Sofort fixen, nicht ignorieren**
-- Kein "ich mach später fix"
-
-## Wenn du feststeckst
-- Einen Schritt zurückgehen
-- Problem kleiner machen
-
----
-
-# 💪 MINDSET
-
-- **Ziel ist Fortschritt, nicht Perfektion**
-- **Ugly Code > kein Code**
-- **Erst funktionierend, dann schön**
-
----
-
-# 🖥️ WINDOWS DEV ENVIRONMENT
-
-## Cargo/Rust PATH
-- Rust ist installiert unter `C:\Users\viuser\.cargo\bin\`
-- In IDE-Terminals fehlt der PATH oft → vor `npm run tauri dev` ausführen:
-  ```powershell
-  $env:PATH += ";C:\Users\viuser\.cargo\bin"
-  ```
-
-## Tauri starten
-```powershell
-$env:PATH += ";C:\Users\viuser\.cargo\bin"; npm run tauri dev
-```
-- Erster Build: 3–10 Minuten
-- Folge-Builds: ~30 Sekunden
-
-## PowerShell Policy (einmalig)
-```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-## Export (FFmpeg)
-- FFmpeg muss im System-PATH sein für den Export-Button
-- Download: https://ffmpeg.org/download.html
-
-## Git
-- Remote: `https://github.com/MuduYT/StoneCutter.git`
-- Push mit MuduYT-Account (nicht Fabiannn1)
+- Never use destructive Git commands unless the user explicitly asks for them.
+- Keep release commits, version bumps, tags, and installer outputs aligned.
+- Use the annotated `vX.Y.Z` tag format for releases.
+- Push releases only through the explicit push step, not as part of an accidental build.

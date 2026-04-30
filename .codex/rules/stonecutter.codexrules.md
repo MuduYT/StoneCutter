@@ -7,45 +7,41 @@ source: .windsurf/workflows/rules.md
 
 ## Architecture
 
-- Frontend (JS/React) is UI only.
-- Backend (Rust/Tauri) owns logic, calculations, and persisted editing state.
-- Important actions should go through Tauri commands.
-- Do not put business logic in the frontend.
-- Keyframes and effects are stored and managed in the backend.
-- The frontend displays state and collects user input.
+- Frontend in `src/` is UI and interaction logic only.
+- Pure timeline, playback, and export rules belong in `src/lib/` first, with tests.
+- Rust/Tauri owns export, file access, and persisted state.
+- Keep React components small; do not grow `App.jsx` for new core behavior.
+- If a change affects release flow, update `README.md`, `CHANGELOG.md`, and the release scripts together.
 
 ## Execution
 
-- Finish one feature before starting the next one.
+- Finish one feature or fix before starting the next one.
 - Use the simplest working solution first.
-- Prototype or fake implementations are acceptable when they create visible progress.
-- Every change should have a visible or testable result.
-- Keep related project files up to date when behavior changes, especially `CHANGELOG.md`, documentation, and agent rules.
+- Prefer visible, testable progress over hidden refactors.
+- Do not introduce fake implementations unless they unblock a visible editor flow.
+- Do not claim a build, installer, or release succeeded unless it was actually run in this workspace.
+- Keep related project files up to date when behavior changes, especially `CHANGELOG.md`, documentation, and release rules.
 
-## Early-Stage Constraints
+## Quality Gates
 
-- Do not start with complex video processing.
-- Do not start with FFmpeg integration unless explicitly required.
-- Do not start with GPU or shader optimization.
+- Run the relevant tests before marking work done.
+- For release or installer changes, verify `npm.cmd test`, `npm.cmd run lint`, and the affected release script.
+- Keep the Git worktree clean before creating a release tag or installer artifact.
+- Do not silently ignore broken scripts, failed commands, or exit-code issues.
 
 ## Debugging
 
-- When something fails, simplify instead of expanding scope.
-- Test after each meaningful change.
-- Fix breakages immediately rather than deferring them.
-- If blocked, step back and reduce the problem size.
-
-## Mindset
-
-- Progress before perfection.
-- Rough working code is better than no code.
-- Make it work first, then clean it up.
+- When something fails, reduce scope before adding complexity.
+- Fix breakages immediately instead of stacking temporary workarounds.
+- Prefer small pure functions that are easy to test.
 
 ## Windows Dev Environment
 
+- Use `npm.cmd` in PowerShell.
 - Rust/Cargo is installed at `C:\Users\viuser\.cargo\bin\` but may not be in PATH for IDE terminals.
-- Before running `npm run tauri dev`, ensure cargo is available: `$env:PATH += ";C:\Users\viuser\.cargo\bin"`
-- PowerShell execution policy must be set: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
-- First Tauri build takes 3–10 minutes; subsequent builds are fast (~30s).
-- FFmpeg must be in system PATH for the export feature to work.
-- Git remote is `https://github.com/MuduYT/StoneCutter.git` — push with MuduYT credentials.
+- Before running `npm.cmd run tauri dev` or any installer build, ensure cargo is available in the current shell.
+- PowerShell execution policy may need `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`.
+- First Tauri build takes longer than later builds.
+- FFmpeg is only needed for the export path and must be present in system PATH at runtime.
+- Release tags use the annotated `vX.Y.Z` format.
+- Release builds must use the scripted workflow, not manual copying of artifacts.
