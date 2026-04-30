@@ -1,5 +1,11 @@
 # StoneCutter Update Log
 
+## 2026-04-30 - Codex Project Rules
+
+- Added Codex project rules under `.codex/rules/stonecutter.codexrules.md`.
+- Added `AGENTS.md` so Codex agents can find and follow the project rules.
+- Added maintenance rule: keep related files such as `CHANGELOG.md`, README/docs, and agent rules up to date when changes affect them.
+
 ## Version 1.0.0 - Complete Video Editor
 
 ### 🎬 Major Features

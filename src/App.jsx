@@ -386,6 +386,7 @@ function App() {
     return { imageDuration: 3 }
   })
   const [showSettings, setShowSettings] = useState(false)
+  const [aspectRatio, setAspectRatio] = useState('16:9')
   useEffect(() => {
     try { localStorage.setItem('stonecutter.settings', JSON.stringify(settings)) } catch { /* ignored */ }
   }, [settings])
@@ -1795,39 +1796,57 @@ function App() {
 
       {/* ===== Player ===== */}
       <main className="main-content">
-        <div className="video-container">
-          {videoSrc && activeVideo?.mediaType === 'image' ? (
-            <img
-              key={videoSrc}
-              src={videoSrc}
-              className="video player-image"
-              alt={activeVideo?.name}
-              draggable={false}
-            />
-          ) : videoSrc ? (
-            <video
-              ref={videoRef}
-              key={videoSrc}
-              className="video"
-              onClick={handlePlay}
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
-              onLoadedMetadata={handleLoadedMetadata}
-              src={videoSrc}
-            />
-          ) : (
-            <div className="empty-overlay">
-              <p>Wähle ein Medium aus der Mediathek</p>
-              <p className="hint">Doppelklick zur Vorschau · Ziehen auf die Timeline</p>
+        <div className={`player-wrapper ${aspectRatio === '9:16' ? 'ar-portrait' : 'ar-landscape'}`}>
+          {/* Aspect Ratio Switcher */}
+          <div className="ar-switcher">
+            {['16:9', '9:16'].map((ar) => (
+              <button
+                key={ar}
+                className={`ar-btn ${aspectRatio === ar ? 'active' : ''}`}
+                onClick={() => setAspectRatio(ar)}
+                title={ar === '16:9' ? 'Querformat (16:9)' : 'Hochformat (9:16)'}
+              >
+                <span className={`ar-icon ar-icon-${ar.replace(':', '-')}`} />
+                {ar}
+              </button>
+            ))}
+          </div>
+
+          <div className="video-container">
+            {videoSrc && activeVideo?.mediaType === 'image' ? (
+              <img
+                key={videoSrc}
+                src={videoSrc}
+                className="video player-image"
+                alt={activeVideo?.name}
+                draggable={false}
+              />
+            ) : videoSrc ? (
+              <video
+                ref={videoRef}
+                key={videoSrc}
+                className="video"
+                onClick={handlePlay}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onLoadedMetadata={handleLoadedMetadata}
+                src={videoSrc}
+              />
+            ) : (
+              <div className="empty-overlay">
+                <p>Wähle ein Medium aus der Mediathek</p>
+                <p className="hint">Doppelklick zur Vorschau · Ziehen auf die Timeline</p>
+              </div>
+            )}
+          </div>
+
+          {activeVideo && (
+            <div className="video-title-bar">
+              <span className="title-name">{activeVideo.name}</span>
+              {activeVideo.mediaType === 'image' && <span className="media-type-badge">Bild · {settings.imageDuration}s</span>}
             </div>
           )}
         </div>
-        {activeVideo && (
-          <div className="video-title-bar">
-            <span className="title-name">{activeVideo.name}</span>
-            {activeVideo.mediaType === 'image' && <span className="media-type-badge">Bild · {settings.imageDuration}s</span>}
-          </div>
-        )}
       </main>
 
       {/* ===== Timeline ===== */}
