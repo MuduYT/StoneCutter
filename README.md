@@ -1,6 +1,6 @@
 # StoneCutter
 
-StoneCutter is a Tauri 2 + React 19 desktop video editor prototype. The app currently supports project folders, `.stonecutter` project files, recent projects, media import, source-preview In/Out ranges, timeline drag/drop, snapping, trimming, multi-selection, image clips, audio-only clips, playback, and FFmpeg-based MP4 export.
+StoneCutter is a Tauri 2 + React 19 desktop video editor prototype. The app currently supports project folders, `.stonecutter` project files, recent projects, video/audio/image media import, media-bin search/filter/sort, source-preview In/Out ranges, timeline drag/drop, snapping, trimming, Resolve-style same-type track moves with auto-track creation, multi-selection, stacked video/image preview layers, mixed multi-track audio preview, image clips, audio-only clips, playback, and FFmpeg-based MP4 export with multi-track video overlays and audio mixing.
 
 ## Development
 
@@ -94,20 +94,24 @@ Keep feature logic out of `App.jsx` when it can be expressed as pure data transf
 
 - `src/lib/timeline.js`: core timeline rules such as ripple insert, overwrite resolution, gap handling, trim bounds, media type detection, and source range normalization.
 - `src/lib/playback.js`: pure playback decisions such as clip lookup, next clip lookup, playback target selection, source-time mapping, and virtual image playback time.
-- `src/lib/exportSegments.js`: conversion from timeline clips/media into FFmpeg export segments, including gaps, media types, track modes, and absolute path validation.
+- `src/lib/trackStore.js`: pure track layout and track-move planning, including compatible move targets and auto-track insertion plans.
+- `src/lib/exportSegments.js`: conversion from timeline clips/media into FFmpeg export segments, including media types, timeline start times, track mute/solo, clip volume/fades, transforms, and absolute path validation.
+- `src/lib/mediaBin.js`: pure media-bin search, type filtering, and sorting rules.
 - `src/lib/project.js`: `.stonecutter` project schema, project-name sanitizing, project document creation, and hydration from disk.
 - `src/lib/*.test.js`: Node `node:test` coverage for core editor behavior. Add tests here before or with behavior changes.
 
 ## Project Files
 
-New projects create a project folder with a `ProjectName.stonecutter` JSON file and a `Media/` folder reserved for future managed media.
-The current implementation references imported media by absolute file path, so moving or deleting source media can make a project unable to preview or export those assets.
+New projects create a project folder with a `ProjectName.stonecutter` JSON file and a `Media/` folder for managed media.
+When a Tauri project is saved, imported media referenced by the Mediathek is copied into `Media/` and the project file stores relative `Media/...` paths plus the original source path as metadata.
+Opening a project resolves those relative media paths from the project folder, so a project folder can be moved together with its `Media/` directory.
 Use `Ctrl+S` or the project save button to write the current timeline, media list, source ranges, UI state, settings, and playhead to disk.
 
 ## Timeline Playback
 
 The main timeline has its own playback focus separate from the source monitor. Playback continues through empty gaps and past the last clip using a virtual timeline clock, so the playhead does not stop just because no clip is under it.
 Scrubbing resumes at the exact position: inside a clip it starts that clip, inside empty space it keeps running as gap playback.
+When the timeline has focus, the preview composites every active video or image clip at the playhead so upper video tracks render above lower video tracks. Audio clips on active audio tracks are played together as a preview mix for sound effects, voice, and background music; audio track mute/solo controls affect that preview mix.
 
 Useful shortcuts:
 
@@ -117,8 +121,19 @@ Useful shortcuts:
 - `Comma` / `Period`: frame-step backward or forward.
 - `Home` / `End`: jump to timeline start or current content end.
 
+## Timeline Editing
+
+Timeline clips can be dragged vertically without changing their time position. Video and image clips target video tracks only, audio clips target audio tracks only, and locked tracks are skipped as drop targets.
+Linked V+A halves can be moved vertically as separate video/audio clips, but horizontal left/right drags keep their linked partner in sync. If the partner's current track is occupied at the synced target time, StoneCutter places it on a free compatible track above for video or below for audio, planning a new matching track when needed. Dragging past the top or bottom compatible track shows a `+ Video-Spur` or `+ Audio-Spur` zone and commits that new track together with the drop, so undo restores both the track layout and clip `trackId`s.
+
+## Media Bin
+
+The Mediathek includes a search field plus type and sort controls. Search matches media name, project-managed path, and original source path. Type filters cover all media, video, audio, and image. Sorting supports newest import, name, probed duration, and media type.
+
 ## Export Notes
 
 The Tauri export path uses FFmpeg from the system PATH. Browser-imported files only have object URLs or filenames and cannot be exported by FFmpeg; use the Tauri file dialog for exportable source paths.
 
-Audio-only timeline clips export as black video with trimmed audio so the MP4 timeline remains continuous.
+MP4 export now renders a timeline-composition plan instead of rejecting normal multi-track overlaps. Video and image clips are layered over a black canvas by track order, and audio clips are mixed with FFmpeg `amix`. Export applies clip volume, audio fades, video opacity fades, position, scale, rotation, opacity, flip, brightness, contrast, and saturation. Audio-only timelines export as black video with mixed audio so the MP4 timeline remains continuous.
+
+Known export limitations: master preview volume/mute are not treated as export settings, Inspector speed/pan/temperature are not exported yet, and source files without an audio stream can still trigger the no-audio fallback.

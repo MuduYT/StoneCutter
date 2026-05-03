@@ -34,12 +34,28 @@ test('clamps source time and range to duration and minimum clip length', () => {
   })
   assert.equal(nearStart.inPoint, 2)
   assert.equal(nearStart.outPoint, 2 + MIN_CLIP_DURATION)
+
+  const fallback = clampSourceRange({ duration: MIN_CLIP_DURATION, currentRange: null, patch: null })
+  assert.equal(fallback.inPoint, 0)
+  assert.equal(fallback.outPoint, MIN_CLIP_DURATION)
+  assert.ok(fallback.inPoint < fallback.outPoint)
+
+  const corrupt = clampSourceRange({
+    duration: 10,
+    currentRange: { inPoint: 'bad', outPoint: 'also bad' },
+    patch: {},
+  })
+  assert.equal(corrupt.inPoint, 0)
+  assert.equal(corrupt.outPoint, 10)
+  assert.ok(corrupt.inPoint < corrupt.outPoint)
 })
 
 test('maps source preview timeline pointer position to source time', () => {
   assert.equal(timeFromClientX({ clientX: 150, rect: { left: 50, width: 200 }, duration: 20 }), 10)
   assert.equal(timeFromClientX({ clientX: 10, rect: { left: 50, width: 200 }, duration: 20 }), 0)
   assert.equal(timeFromClientX({ clientX: 300, rect: { left: 50, width: 200 }, duration: 20 }), 20)
+  assert.equal(timeFromClientX({ clientX: 150, rect: { left: 50, width: 0 }, duration: 20 }), 0)
+  assert.equal(Number.isFinite(timeFromClientX({ clientX: undefined, rect: { left: 50, width: 200 }, duration: 20 })), true)
 })
 
 test('steps source preview keyboard commands independently of the timeline', () => {

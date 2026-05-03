@@ -2,11 +2,101 @@ import { MIN_CLIP_DURATION, clipEnd } from './timeline.js'
 
 export const TIMELINE_TRANSITION_EPSILON = 0.02
 
+const clipContainsTime = (time, clip) => {
+  return time >= clip.startTime - 1e-3 && time < clipEnd(clip) - 1e-3
+}
+
+const preferPlaybackClip = (current, candidate) => {
+  if (!current) return candidate
+  if (candidate.startTime < current.startTime - 1e-3) return candidate
+  if (Math.abs(candidate.startTime - current.startTime) > 1e-3) return current
+  if (current.trackMode === 'audio' && candidate.trackMode !== 'audio') return candidate
+  return current
+}
+
+const getTrackIndex = (trackOrder, clip) => {
+  const index = trackOrder.get(clip.trackId)
+  return Number.isFinite(index) ? index : Number.MAX_SAFE_INTEGER
+}
+
+const getTrackType = (track, clip) => {
+  if (track?.type) return track.type
+  return clip.trackMode === 'audio' ? 'audio' : 'video'
+}
+
 export const findClipAtTime = (time, clips) => {
+  let best = null
   for (const clip of clips) {
-    if (time >= clip.startTime - 1e-3 && time < clipEnd(clip) - 1e-3) return clip
+    if (clipContainsTime(time, clip)) {
+      best = preferPlaybackClip(best, clip)
+    }
   }
-  return null
+  return best
+}
+
+export const findClipsAtTime = (time, clips) => {
+  return clips.filter((clip) => clipContainsTime(time, clip))
+}
+
+export const getTimelineVisualClips = ({ time, clips, tracks = [], videos = [] }) => {
+  const mediaById = new Map(videos.map((media) => [media.id, media]))
+  const trackById = new Map(tracks.map((track) => [track.id, track]))
+  const trackOrder = new Map(tracks.map((track, index) => [track.id, index]))
+
+  return findClipsAtTime(time, clips)
+    .map((clip) => {
+      const media = mediaById.get(clip.videoId)
+      const track = trackById.get(clip.trackId)
+      return {
+        clip,
+        media,
+        track,
+        trackIndex: getTrackIndex(trackOrder, clip),
+      }
+    })
+    .filter(({ clip, media, track }) => {
+      const mediaType = media?.mediaType || 'video'
+      return getTrackType(track, clip) === 'video' &&
+        clip.trackMode !== 'audio' &&
+        (mediaType === 'video' || mediaType === 'image')
+    })
+    .sort((a, b) => b.trackIndex - a.trackIndex ||
+      a.clip.startTime - b.clip.startTime ||
+      String(a.clip.id).localeCompare(String(b.clip.id)))
+}
+
+export const getTimelineAudibleClips = ({ time, clips, tracks = [], videos = [] }) => {
+  const mediaById = new Map(videos.map((media) => [media.id, media]))
+  const trackById = new Map(tracks.map((track) => [track.id, track]))
+  const trackOrder = new Map(tracks.map((track, index) => [track.id, index]))
+  const hasSoloAudio = tracks.some((track) => track.type === 'audio' && track.solo)
+
+  return findClipsAtTime(time, clips)
+    .map((clip) => {
+      const media = mediaById.get(clip.videoId)
+      const track = trackById.get(clip.trackId)
+      return {
+        clip,
+        media,
+        track,
+        trackIndex: getTrackIndex(trackOrder, clip),
+      }
+    })
+    .filter(({ clip, media, track }) => {
+      if (!media?.src) return false
+      if (getTrackType(track, clip) !== 'audio' && clip.trackMode !== 'audio') return false
+      if (track?.muted) return false
+      if (hasSoloAudio && !track?.solo) return false
+      return true
+    })
+    .sort((a, b) => a.trackIndex - b.trackIndex ||
+      a.clip.startTime - b.clip.startTime ||
+      String(a.clip.id).localeCompare(String(b.clip.id)))
+}
+
+export const getTopVisibleTimelineClip = ({ time, clips, tracks = [], videos = [] }) => {
+  const visualClips = getTimelineVisualClips({ time, clips, tracks, videos })
+  return visualClips.length > 0 ? visualClips[visualClips.length - 1].clip : findClipAtTime(time, clips)
 }
 
 export const getClipTimelineEnd = (clip) => clipEnd(clip)
@@ -20,7 +110,7 @@ export const findNextClipAfter = (time, clips, excludeId = null) => {
   for (const clip of clips) {
     if (clip.id === excludeId) continue
     if (clip.startTime >= time - 1e-3) {
-      if (!best || clip.startTime < best.startTime) best = clip
+      best = preferPlaybackClip(best, clip)
     }
   }
   return best
@@ -71,7 +161,7 @@ export const getClipPlaybackPosition = (clip, startAtTime) => {
 }
 
 export const getImagePlaybackTimelineTime = ({ clip, imagePlayback, nowMs, fallbackTimelineTime }) => {
-  const duration = clip.outPoint - clip.inPoint
+  const duration = Math.max(MIN_CLIP_DURATION, clip.outPoint - clip.inPoint)
   const endTime = clip.startTime + duration
   const timelineStart = imagePlayback?.clipId === clip.id
     ? imagePlayback.timelineStart
@@ -79,11 +169,15 @@ export const getImagePlaybackTimelineTime = ({ clip, imagePlayback, nowMs, fallb
   const startedAtMs = imagePlayback?.clipId === clip.id ? imagePlayback.startedAtMs : nowMs
   const elapsed = (nowMs - startedAtMs) / 1000
   const timelineTime = timelineStart + elapsed
+  const transitionThreshold = Math.min(
+    TIMELINE_TRANSITION_EPSILON,
+    Math.max(0, duration - MIN_CLIP_DURATION)
+  )
   return {
     timelineStart,
     startedAtMs,
     timelineTime,
     endTime,
-    ended: timelineTime >= endTime - 0.02,
+    ended: timelineTime >= endTime - transitionThreshold,
   }
 }

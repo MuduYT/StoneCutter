@@ -1,5 +1,176 @@
 # StoneCutter Update Log
 
+## 2026-05-03 - Export-Paritaet: Overlays, Audio-Mix & Media-Bin Organisation
+
+### Features
+- MP4-Export plant jetzt eine echte Timeline-Komposition statt eines linearen Clip-Concats: Video- und Bildclips werden mit FFmpeg `overlay` nach Spur-Reihenfolge auf eine schwarze Canvas gerendert.
+- Export mischt mehrere aktive Audio-Clips mit `amix` und respektiert Audio-Track Mute/Solo sowie `clipMuted`.
+- Per-Clip Volume, Audio-Fades, Video-Fades/Opacity, Position, Scale, Rotation, Flip, Brightness, Contrast und Saturation werden in den Exportplan uebernommen.
+- Linked V+A-Clips werden fuer den Export als getrennte Video- und Audio-Layer behandelt, sodass gemutete Audiospuren das Video nicht mehr faelschlich mit Quell-Audio exportieren.
+- Mediathek erweitert um Suche, Typfilter (Video/Audio/Bild) und Sortierung nach Importzeit, Name, Dauer oder Typ.
+
+### Technical Changes
+- `src/lib/exportSegments.js` erzeugt timeline-aware Composition-Segmente mit Startzeit, Dauer, Track-/Audio-State, Clip-Fades und Transform-/Color-Werten.
+- `src-tauri/src/lib.rs` baut einen `filter_complex` mit schwarzer Canvas, Video/Image-Overlays, optionalem `amix`, Clip-Volume und Fade-Filtern.
+- Neue pure Helper in `src/lib/mediaBin.js` plus Tests fuer Suche, Filter, Sortierung und stabile Reihenfolge.
+- Projektdateien speichern und hydratisieren jetzt `importedAt` fuer Medien, damit die Mediathek dauerhaft nach Importzeit sortieren kann.
+
+### Known Limitations
+- Master-Preview-Volume/Mute sind weiterhin keine Export-Einstellungen.
+- Inspector-Speed, Pan und Temperature sind noch nicht exportiert.
+- Quellen ohne Audiospur koennen weiterhin den vorhandenen No-Audio-Fallback ausloesen.
+
+## 2026-05-03 - DaVinci Fade Handles, Drag-to-Scrub Inspector & Linked Clip View
+
+### Features
+- **DaVinci Resolve-style fade handles**: Every clip in the timeline now shows small white rectangular handles in its top-left (fade-in) and top-right (fade-out) corners when hovered or selected. Dragging the fade-in handle right increases the fade-in duration; dragging the fade-out handle left increases fade-out — identical to the DaVinci Resolve workflow. Handles update the fade envelope live as you drag.
+- **Drag-to-scrub Inspector fields**: All Inspector number fields (Pos X, Pos Y, Rotation, Volume, Fade In, Fade Out) now use a custom `InspectorDragger` component. Dragging the label or value display left/right scrubs the value continuously. Mouse-wheel over any row increments/decrements by one step. Clicking the value display enters a text-input mode for precise keyboard entry (Enter to commit, Escape to cancel).
+- **Linked clip Inspector view**: When a linked V+A pair is selected, the Inspector shows a unified view — the Video Transform section reads from the video clip and the Audio section reads from the audio clip. Changes to each section update the correct clip independently. A `V+A` badge appears in the Inspector header to indicate a linked selection.
+- **Redesigned Inspector panel**: Width increased to 300 px. Scrollable body with styled scrollbar. Gradient header, section dividers, subtitle rows for Fade sub-sections, and a progress bar under each scrub field showing the current value position within the allowed range.
+- **Diagonal fade overlays**: Fade region overlays now use a diagonal (`to bottom-right` / `to bottom-left`) gradient matching DaVinci’s visual style instead of the previous flat horizontal gradient.
+
+### Technical Changes
+- New `InspectorDragger` function component defined before `App`; uses `useState` from existing named import.
+- `fadeDragRef` added alongside `volumeLineDragRef`; a dedicated `useEffect` handles `mousemove`/`mouseup` globally for fade dragging.
+- `has-inspector` CSS class now also applied to the root `.app` div, allowing `.app.has-inspector .logo-area` to shift the logo 310 px left (with 200 ms ease transition) when inspector is open.
+- Inspector JSX replaced with an IIFE that resolves the linked group, finds the video and audio halves, and renders each section via `InspectorDragger`.
+- `idf-row`, `idf-label`, `idf-scrub`, `idf-value`, `idf-input`, `idf-progress`, `idf-progress-fill` CSS classes added for the scrub-field UI.
+- `fade-handle-in`, `fade-handle-out` CSS classes added; handles sit at the transition point of the fade region and move as the fade duration changes.
+
+## 2026-05-03 - Inspector Panel, Fade Controls, Volume Line & Transform System
+
+### Features
+- **Inspector Panel** (top-right): When a clip is selected the inspector panel appears showing per-clip properties. Video clips show Position X/Y sliders (−960–960 / −540–540), Rotation (−180–180°), Fade In/Out (seconds). All clips show an Audio section with Volume (0–200%) and audio Fade In/Out.
+- **Per-clip data model extended**: Every clip now carries `volume` (0–2, default 1), `fadeIn` (seconds), `fadeOut` (seconds), `positionX`, `positionY`, and `rotation` fields. All are optional with safe defaults so existing projects load without migration.
+- **Filmora-style volume line on audio clips**: A draggable yellow horizontal line inside every audio clip in the timeline shows and controls the clip's volume. Dragging up increases volume (top = 200%), dragging down decreases it (bottom = 0%). The line position updates live as the clip volume changes.
+- **Fade overlays on all clips**: A dark gradient overlay is rendered at the left edge (fade-in) and right edge (fade-out) of every clip proportional to the configured fade duration, giving instant visual feedback of the fade region.
+- **Real-time transform in preview**: The timeline composite preview applies each video clip's `positionX`, `positionY`, and `rotation` via CSS `transform: translate() rotate()` so changes in the inspector are reflected immediately in the preview player.
+- **Per-clip volume & fade envelope on audio playback**: The timeline audio bus now computes an effective volume per clip from `volume × globalVolume × fadeGain`, where `fadeGain` ramps from 0→1 over the fadeIn period and 1→0 over the fadeOut period. The envelope is recalculated every animation frame.
+- **Video opacity fade in preview**: Video layers in the composite preview have their `opacity` driven by the same fade-in/out envelope so fade-out actually darkens the video frame in real time.
+- **Non-overlapping layout**: The logo/toolbar area smoothly slides left (200ms ease) when the inspector opens, preventing overlap. The player area (`main-content`) shrinks its right boundary accordingly.
+
+### Technical Changes
+- `volumeLineDragRef` added to `App` refs; a dedicated `useEffect` listens for `mousemove`/`mouseup` to update `clip.volume` during volume-line drags.
+- `has-inspector` class applied to both the root `.app` div and `<main>` when `activeClipId` is set.
+- `.app.has-inspector .logo-area` CSS shifts the logo 280px left with a smooth transition.
+- `.main-content.has-inspector` shrinks right boundary by 280px so the player does not extend under the inspector.
+- Inspector uses `setClips` with `prev.map(…)` pattern — no history push, changes are live and undoable via the existing undo stack.
+
+## 2026-05-03 - Timeline Overlay Preview & Audio Mix
+
+### Features
+- Timeline-Fokus zeigt jetzt eine echte Mehrspur-Vorschau: aktive Video- und Bildclips am Playhead werden nach Video-Spurreihenfolge uebereinander gerendert, sodass PNG- oder Video-Overlays ueber darunterliegenden Clips sichtbar sind.
+- Die Videospur-Reihenfolge ist fuer die Preview gedreht: obere Videospuren rendern jetzt sichtbar ueber unteren Videospuren.
+- Clips koennen jetzt DaVinci-Resolve-artig vertikal zwischen kompatiblen Spuren gezogen werden: Video/Bild bleibt auf Videospuren, Audio bleibt auf Audiospuren, locked Tracks werden nicht als Ziel verwendet, gelinkte V+A-Partner und Multi-Selektionen folgen relativ innerhalb ihres Spurtyps mit.
+- Beim Ziehen ueber die oberste oder unterste passende Spur hinaus zeigt die Timeline eine Auto-Spur-Zone an und legt die neue Video- oder Audio-Spur erst beim Drop zusammen mit dem Clip-Move an.
+- Gelinkte V+A-Clips koennen jetzt vertikal getrennt bewegt werden: Der geklickte Video- oder Audio-Teil wechselt seine Spur separat, waehrend Links/Rechts-Drags den Partner zeitlich synchron halten. Ist die Partner-Spur am Ziel belegt, wird der Partner automatisch auf eine freie passende Spur darueber bzw. darunter gelegt oder eine neue passende Spur geplant.
+- Folgefehler beim Multi-Clip-Move behoben: Ripple-Insert verschiebt jetzt nur noch Clips auf der betroffenen Zielspur statt unbeabsichtigt alle Spuren rechts vom Insert-Punkt.
+- Die Timeline-Wiedergabe mixt alle aktiven Audio-Clips auf nicht stummgeschalteten Audio-Spuren parallel, inklusive Soundeffekten, Voiceover und Hintergrundmusik. Solo-Spuren bleiben fuer die Preview wirksam.
+- Timeline-Play nutzt jetzt eine virtuelle Timeline-Uhr als zentrale Playback-Quelle; Video-Layer und Audioelemente synchronisieren sich daran statt an einem einzelnen aktiven `<video>`.
+- Die Timeline-Toolbar startet nun immer die Timeline-Wiedergabe, auch wenn im Source-Monitor noch ein Medium ausgewaehlt ist.
+
+### Technical Changes
+- Neue Playback-Helfer in `src/lib/playback.js`: `findClipsAtTime`, `getTimelineVisualClips`, `getTimelineAudibleClips`, `getTopVisibleTimelineClip`.
+- Neue Track-Helfer in `src/lib/trackStore.js`: `getTrackTypeIndex`, `shiftTrackIdByType`, `getCompatibleTrackMoveTarget`, `getCollisionFreeTrackForClip`, `planTrackMove`, `applyTrackMovePlan`, `createAutoTrackForMove`.
+- `src/App.jsx` rendert fuer Timeline-Fokus einen Composite-Preview-Stack plus versteckten Audio-Bus und synchronisiert alle Medienelemente mit dem Playhead.
+- Tests erweitert auf 78 Faelle inklusive Layer-Reihenfolge, Audio-Mute/Solo-Filterung, Resolve-artiger Track-Verschiebung, Link-Partner-Platzierung und Auto-Track-Planung.
+
+### Known Limitations
+- Export unterstuetzt weiterhin kein echtes Video-Stacking oder `amix` ueber mehrere unabhaengige Spuren; ueberlappende Clips unterschiedlicher Quellen werden beim Export weiter abgelehnt.
+
+## 2026-05-03 - Project Media Save & Audio Import
+
+### Bug Fixes
+- Projektspeichern verwaltet importierte Medien jetzt im Projektordner: Tauri kopiert referenzierte Mediathek-Dateien nach `Media/` und speichert relative `Media/...`-Pfade, waehrend der urspruengliche Quellpfad als `originalPath` erhalten bleibt.
+- Beim Oeffnen eines Projekts werden relative Medienpfade wieder relativ zum Projektordner aufgeloest, sodass verschobene Projektordner ihre Medien weiter finden.
+- Mediathek-Drag nutzt jetzt immer das volle Medium ab Anfang; nur die expliziten Source-Buttons ("Video + Audio", "Nur Audio") verwenden die gesetzte Source-In/Out-Auswahl. Dadurch werden Clips beim Drop nicht mehr ungewollt am Anfang gekuerzt.
+- Drops auf bestehende Spuren treffen jetzt die sichtbare Spur statt durch die Sticky-Ruler-Hoehe um eine Spur nach unten versetzt zu werden.
+- Die Drop-Zone-Beschriftung nutzt State statt Ref-Zugriff im Render-Pfad und ist damit React-Lint-konform.
+
+### Features
+- Der Importdialog unterstuetzt jetzt Audio-Dateien (`mp3`, `wav`, `ogg`, `flac`, `aac`, `m4a`) und bietet eine sichtbare "Alle Dateien"-Filteroption.
+- Audio-Dateien aus Datei-Import, Mediathek oder Explorer-Drop werden als Audio-Medien erkannt und automatisch auf Audio-Spuren platziert.
+
+## 2026-05-03 - Multi-Track Timeline: Sticky Ruler & Linked V+A Import
+
+### Bug Fixes
+- **Sticky Time-Ruler**: Die Zeitleiste (0:00, 0:05 ...) bleibt beim vertikalen Scrollen der Tracks dauerhaft oben sichtbar und laeuft beim horizontalen Scrollen weiterhin synchron mit den Clips. Playhead-Handle und Scrub-Tooltip sind jetzt Teil des stickyen Ruler-Layers, die rote Playhead-Linie spannt weiterhin ueber alle Tracks.
+- **Video-Import splittet Audio jetzt auf eigene Spur**: Beim Drag-and-Drop eines Videos mit Tonspur (Sidebar oder Explorer) erzeugt StoneCutter jetzt zwei gelinkte Clips (Video + Audio) auf getrennten Spuren, wie in Filmora/DaVinci Resolve. Fehlt eine Audio-Spur, wird sie automatisch angelegt.
+- **Legacy-Projekte migrieren automatisch**: Alte `.stonecutter`-Projekte (SchemaVersion 1) mit `trackMode: "av"` werden beim Oeffnen in gelinkte V+A-Paare aufgeteilt. Neue Projekte speichern Schema v2 inklusive `linkGroupId`.
+
+### Features
+- **Link-Groups fuer V+A**: Clips eines Imports teilen eine `linkGroupId`. Bewegen, Trimmen, Teilen und Loeschen einer Seite wirkt automatisch auf den Partner.
+- **`Ctrl+Shift+L` entkoppelt**: Ein Shortcut und ein Kontextmenue-Eintrag ("Link aufheben") trennen die V+A-Verknuepfung fuer freie Bearbeitung.
+- **Link-Badge**: Gelinkte Clips zeigen eine kleine Kette im Clip-Block + dezenten gelben Inset-Glow.
+- **Export versteht gelinkte V+A**: Der Export fusioniert V+A-Paare wieder zu einem AV-Segment pro Quelle, statt sie als ueberlappende Multi-Track-Clips abzulehnen. Muted/Solo auf Audio-Spuren bleibt wirksam.
+- **Bessere Drop-Toast statt blockierenden Alerts** bei inkompatiblen Drop-Targets (z.B. Audio-Clip auf Video-Spur).
+
+### Technical Changes
+- Neue reine Funktionen in `src/lib/timeline.js`: `splitMediaIntoLinkedClips`, `getLinkedClipIds`, `expandWithLinkedPartners`, `applyGroupShift`, `applyGroupTrimLeft`, `applyGroupTrimRight`, `applyGroupSplit`, `unlinkClipGroup`, `nextLinkGroupId`, `isAudioOnlyMedia`.
+- `src/lib/exportSegments.js` entfernt doppelte Linked-Partner vor dem Overlap-Check.
+- `src/lib/project.js`: `PROJECT_SCHEMA_VERSION = 2`, akzeptierte Versionen `{1, 2}`, Legacy-`av`-Split in `hydrateProjectState`.
+- CSS: `.time-ruler` ist jetzt `position: sticky` mit opakem Hintergrund; separates Playhead-Handle im Ruler-Layer, neue `.clip-link-badge` und `.clip.linked`-States.
+- `src/App.jsx`: Drop-Handler nutzt `splitMediaIntoLinkedClips`, legt Audio-Track bei Bedarf an, Explorer-Drop geht denselben Pfad. Trim/Split/Delete propagieren ueber Link-Partner.
+- Tests: 13 neue Node-Tests (Linked-Clip-Helper, Linked-Export, Legacy-v1-Migration). Gesamtsumme 59 Tests in `src/lib/*.test.js`.
+
+### Known Limitations
+- Export unterstuetzt noch kein echtes Video-Stacking mehrerer Video-Tracks oder `amix` ueber mehrere Audio-Tracks; ueberlappende Clips unterschiedlicher Quellen werden weiter abgelehnt.
+
+## 2026-05-03 - Logic Hardening Audit
+
+### Bug Fixes
+- Timeline move constraints now merge unsorted/overlapping blockers and handle zero-length gaps deterministically.
+- Ripple delete now shifts later clips by the merged removed time ranges instead of double-counting overlapping deleted clips.
+- Overwrite splitting uses explicit source-time offsets for trimmed source clips.
+- Playback edge handling covers exact clip ends, tail gaps, repeated virtual-gap clocks, and minimum-duration image clips.
+- Export segment building now tolerates overlapping clips, clamps source ranges to source duration, and passes audio-only media through safely.
+- Project hydration now normalizes partial or corrupt persisted fields instead of trusting invalid arrays, objects, numbers, and UI values.
+- Source monitor range and pointer helpers now avoid invalid ranges and zero-width seek math.
+- Timeline play and seek logic now clears stale playback refs, avoids redundant pending seeks, and skips redundant duration probes.
+- Project save/load now preserves the new track layout including track IDs, names, heights, lock state, and audio mute/solo state.
+- Export planning now respects muted/solo audio tracks and rejects unsupported overlapping active track clips with a clear error instead of generating a wrong linear export.
+- Timeline playback now prefers aligned video clips over audio-only clips, so audio tracks do not steal the preview image.
+- Media-library thumbnails are generated from imported media, so the new library layout is populated before clips are placed on the timeline.
+- Tauri export retry detection now recognizes FFmpeg "Stream specifier" and "matches no streams" missing-audio errors.
+
+### Tests
+- Added edge-case coverage for timeline overlap resolution, ripple delete, playback transitions, export segments, track-aware project hydration, source monitor math, and Tauri FFmpeg argument construction.
+
+## 2026-05-03 - UI/UX Polish Pass
+
+### UX Changes
+- Smooth 0.15s transitions auf Toolbar-Buttons, Tabs, Listenelementen und Aspect-Ratio-Buttons.
+- Einheitliche, schmale 5px-Scrollbars (Accent-Violett) in Mediathek, Timeline, Modaldialogen und Recent-Projects-Liste.
+- Clip-Bloecke: subtiler weisser Top-Highlight + inset Box-Shadow fuer mehr Tiefe.
+- Clip-Beschriftungen mit zusaetzlichem Text-Shadow fuer bessere Lesbarkeit auf Thumbnails.
+- Playhead-Linie hat jetzt einen weichen roten Glow fuer bessere Sichtbarkeit waehrend der Wiedergabe.
+- Aktive Gap-Wiedergabe zeigt einen sanft animierten Cyan-Shimmer.
+- Time-Ruler mit subtiler Hintergrundabstufung; Tick-Labels in `tabular-nums`.
+- Track-Headers durch eine 2px-Accent-Linie sichtbar von der Clip-Flaeche getrennt.
+- Source-Monitor: weicher Verlauf am unteren Rand des Previews statt harter Kante zur Player-Leiste.
+- Source-In/Out-Handles bekommen einen violetten Glow beim Hover.
+- Source-Timeline-Fortschrittsbalken animiert Width-Aenderungen smooth.
+- Mediathek-Eintraege zeigen einen 40x28-Thumbnail-Strip-Vorschau (sobald Thumbs verfuegbar sind) anstelle des Icon-Platzhalters.
+- Aktiver Mediathek-Eintrag erhaelt einen 3px-Accent-Streifen am linken Rand statt nur Hintergrundwechsel.
+- Import-Button pulsiert leicht, solange die Mediathek leer ist (Onboarding-Hinweis).
+- Project-Start-Screen mit weichem, animiertem Radial-Gradient-Hintergrund hinter dem Logo.
+- Logo auf dem Startscreen wird jetzt mit einer kurzen Fade-In + TranslateY-Animation eingeblendet.
+- Recent-Projects-Eintraege zeigen einen einsliegenden `→`-Pfeil beim Hover.
+- Modal-Dialoge (Settings, Export, Neues Projekt) blurren jetzt den Hintergrund (`backdrop-filter: blur(6px)`).
+- Modal-Container haben einen feinen Accent-Glow als Rahmen und eine sanfte Scale-In-Entrance-Animation.
+- Toast-Notifications skalieren beim Erscheinen leicht hoch und besitzen einen farbigen 3px-Linksrand-Streifen (Gruen=ok, Rot=err).
+- Snap-Toolbar-Button bekommt im aktiven Zustand einen deutlichen Glow-Ring.
+- Export-Button pulsiert mit einem Gradient-Shimmer waehrend ein Export laeuft.
+- Undo/Redo-Buttons sind bei leerer History nicht mehr klickbar (`pointer-events: none`, opacity 0.35).
+- Keyboard-Shortcut-Hint-Bar in der Status-Zeile mit kleineren Badges, klaren Trennstrichen (`|`) und Tabular-Numerics-Schrift.
+
+### Technical Changes
+- `.clip.dragging` nutzt `will-change: transform` fuer GPU-Compositing waehrend Drag-Operationen.
+- Waveform-Container hat `image-rendering: crisp-edges` und sauberen Overflow-Clip.
+- Statusbar-Shortcuts in `App.jsx` als strukturierte `kbd-group`/`kbd-sep`-Spans gruppiert.
+- Sidebar-Eintraege rendern Thumbnails per `thumbsMap`-Lookup (nur Praesentation, keine Logikaenderung).
+- Logo-Export-Button und Import-Button erhalten neue Modifier-Klassen (`exporting`, `pulse`) ueber bestehenden State (`exportStatus`, `videos.length`).
+
 ## 2026-04-30 - Timeline Smooth Playback
 
 ### Bug Fixes
