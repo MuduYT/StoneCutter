@@ -1829,6 +1829,8 @@ button {
 
 .waveform-shell {
     position: relative;
+    width: 100%;
+    flex: 1;
     min-height: 30px;
     border-radius: 6px;
     overflow: hidden;
@@ -1991,52 +1993,69 @@ button {
     max-width: 3px;
 }
 
-.waveform-volume-overlay {
-    position: absolute;
-    left: 8px;
-    right: 12px;
-    transform: translateY(-50%);
-    height: 18px;
-    pointer-events: all;
-    cursor: ns-resize;
-    z-index: 4;
-}
-
-.waveform-volume-line {
+/* ===== Volume line (Filmora-style, outside clip-content so pointer-events work) ===== */
+.vol-line-overlay {
     position: absolute;
     left: 0;
-    right: 18px;
+    right: 0;
+    height: 20px;
+    transform: translateY(-50%);
+    pointer-events: all;
+    cursor: ns-resize;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+}
+
+.vol-line-bar {
+    position: absolute;
+    left: 6px;
+    right: 20px;
     top: 50%;
     height: 2px;
     border-radius: 999px;
-    background: linear-gradient(90deg, rgba(249, 115, 22, 0.18), var(--orange-accent), rgba(249, 115, 22, 0.22));
-    box-shadow: 0 0 10px rgba(249, 115, 22, 0.4);
+    background: #f97316;
+    box-shadow: 0 0 6px rgba(249, 115, 22, 0.55);
+    pointer-events: none;
 }
 
-.waveform-volume-handle {
+.clip:hover .vol-line-bar,
+.clip.active .vol-line-bar {
+    background: #fb923c;
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.8);
+}
+
+.vol-line-handle {
     position: absolute;
-    right: 0;
+    right: 6px;
     top: 50%;
-    width: 12px;
-    height: 12px;
-    border-radius: 999px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
     transform: translateY(-50%);
-    background: linear-gradient(180deg, #fdba74, var(--orange-accent));
-    box-shadow:
-        0 0 0 1px rgba(255, 255, 255, 0.16),
-        0 0 10px rgba(249, 115, 22, 0.45);
+    background: #f97316;
+    border: 1.5px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 0 6px rgba(249, 115, 22, 0.6);
+    pointer-events: none;
 }
 
-.waveform-volume-label {
+.vol-line-label {
     position: absolute;
-    right: 18px;
-    top: -14px;
+    right: 20px;
+    top: -13px;
     font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
     font-size: 9px;
     font-weight: 700;
-    color: #fed7aa;
-    letter-spacing: 0;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    color: #fdba74;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s;
+}
+
+.clip:hover .vol-line-label,
+.clip.active .vol-line-label {
+    opacity: 1;
 }
 
 /* Drag Ghost */
@@ -2364,10 +2383,11 @@ button {
     position: absolute;
     top: 0;
     bottom: 0;
+    left: 0;
     width: 2px;
     z-index: 10;
     pointer-events: none;
-    transform: translateX(-1px);
+    transform: translateX(calc(var(--playhead-x, 0px) - 1px));
     will-change: transform;
 }
 
@@ -2375,8 +2395,8 @@ button {
 .playhead-handle {
     position: absolute;
     top: 16px;
-    left: 50%;
-    transform: translateX(-50%);
+    left: -6px;
+    transform: translateX(var(--playhead-x, 0px));
     width: 12px;
     height: 14px;
     background: linear-gradient(180deg, #f87171, #dc2626);
@@ -2403,12 +2423,12 @@ button {
     border-color: #dc2626 transparent transparent transparent;
 }
 .playhead-handle:hover {
-    transform: translateX(-50%) scale(1.15);
+    transform: translateX(var(--playhead-x, 0px)) scale(1.15);
     box-shadow: 0 4px 12px rgba(239, 68, 68, 0.7);
 }
 .playhead.dragging .playhead-handle,
 .playhead-handle.dragging {
-    transform: translateX(-50%) scale(1.2);
+    transform: translateX(var(--playhead-x, 0px)) scale(1.2);
     box-shadow: 0 4px 16px rgba(239, 68, 68, 0.9);
 }
 
@@ -4631,4 +4651,275 @@ button {
 
 .scrub-tooltip::after {
     border-color: var(--orange-accent) transparent transparent transparent;
+}
+
+/* ── Sidebar Placeholder (Effects / Transitions / Text / Audio / Elements) ── */
+.sidebar-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    height: 100%;
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-faint);
+}
+.sidebar-placeholder-icon {
+    font-size: 36px;
+    opacity: 0.35;
+    line-height: 1;
+}
+.sidebar-placeholder-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim, #8a8a9a);
+    margin: 0;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.sidebar-placeholder-hint {
+    font-size: 11px;
+    font-style: italic;
+    color: var(--text-faint);
+    margin: 0;
+}
+
+/* ── Inspector Placeholder (Effects / History tabs) ── */
+.inspector-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 32px 14px;
+    text-align: center;
+}
+.inspector-placeholder-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim, #8a8a9a);
+    margin: 0;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.inspector-placeholder-hint {
+    font-size: 11px;
+    font-style: italic;
+    color: var(--text-faint);
+    margin: 0;
+}
+
+/* ===== DaVinci Resolve-style fade overlays ===== */
+.fade-in-overlay,
+.fade-out-overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 3;
+    overflow: hidden;
+}
+
+.fade-in-overlay {
+    left: 0;
+}
+
+.fade-out-overlay {
+    right: 0;
+}
+
+.fade-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.fade-poly {
+    fill: rgba(0, 0, 0, 0.42);
+}
+
+.video-clip .fade-poly {
+    fill: rgba(0, 0, 0, 0.38);
+}
+
+.audio-clip .fade-poly {
+    fill: rgba(0, 0, 0, 0.38);
+}
+
+
+/* ===== Fade handles (draggable) ===== */
+.fade-handle-in,
+.fade-handle-out {
+    position: absolute;
+    top: 0;
+    width: 12px;
+    height: 100%;
+    z-index: 6;
+    cursor: ew-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.fade-handle-in {
+    transform: translateX(-50%);
+}
+
+.fade-handle-out {
+    transform: translateX(50%);
+}
+
+.clip:hover .fade-handle-in,
+.clip:hover .fade-handle-out,
+.clip.active .fade-handle-in,
+.clip.active .fade-handle-out {
+    opacity: 1;
+}
+
+.fade-handle-in::before,
+.fade-handle-out::before {
+    content: "";
+    display: block;
+    width: 3px;
+    height: 60%;
+    min-height: 16px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.75);
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
+}
+
+.fade-handle-in:hover::before,
+.fade-handle-out:hover::before {
+    background: #fff;
+    box-shadow: 0 0 8px rgba(255,255,255,0.5);
+}
+
+/* ===== Volume drag tooltip (fixed viewport overlay) ===== */
+.vol-drag-tooltip {
+    position: fixed;
+    background: rgba(15, 10, 30, 0.92);
+    border: 1px solid rgba(249, 115, 22, 0.6);
+    color: #fdba74;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    padding: 3px 8px;
+    border-radius: 5px;
+    pointer-events: none;
+    z-index: 9999;
+    white-space: nowrap;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.audio-clip {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 34%),
+        linear-gradient(180deg, rgba(79, 179, 114, 0.96), rgba(42, 126, 77, 0.96));
+    border-color: rgba(98, 192, 128, 0.7);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.22),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+        0 1px 6px rgba(12, 72, 36, 0.45);
+}
+
+.audio-clip:hover {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 34%),
+        linear-gradient(180deg, rgba(86, 191, 123, 0.98), rgba(45, 135, 82, 0.98));
+}
+
+.audio-clip.audio-only {
+    background:
+        repeating-linear-gradient(
+            135deg,
+            rgba(255, 255, 255, 0.08) 0 6px,
+            transparent 6px 12px
+        ),
+        linear-gradient(180deg, rgba(79, 179, 114, 0.96), rgba(42, 126, 77, 0.96));
+    border-color: rgba(124, 218, 152, 0.78);
+}
+
+.audio-clip .waveform-shell {
+    margin: 3px 2px 2px;
+    min-height: 36px;
+    border-radius: 3px;
+    background:
+        linear-gradient(180deg, transparent calc(50% - 1px), rgba(8, 58, 31, 0.36) calc(50% - 1px), rgba(8, 58, 31, 0.36) calc(50% + 1px), transparent calc(50% + 1px)),
+        linear-gradient(180deg, rgba(19, 104, 57, 0.18), rgba(6, 53, 29, 0.08));
+}
+
+.audio-clip .waveform {
+    gap: 0;
+    justify-content: stretch;
+    padding: 5px 2px;
+    mix-blend-mode: screen;
+}
+
+.audio-clip .wave-bar {
+    min-width: 1px;
+    max-width: none;
+    border-radius: 1px;
+    background: linear-gradient(180deg, rgba(244, 255, 242, 0.94), rgba(205, 239, 206, 0.82));
+    box-shadow: 0 0 1px rgba(8, 45, 24, 0.8);
+    opacity: 0.92;
+}
+
+.audio-clip .wave-bar[style*="height: 0%"] {
+    opacity: 0;
+}
+
+.audio-clip .clip-name {
+    position: absolute;
+    left: 8px;
+    bottom: 3px;
+    right: 32px;
+    z-index: 4;
+    opacity: 0.82;
+}
+
+.audio-clip .fade-poly {
+    fill: rgba(5, 35, 20, 0.46);
+}
+
+.audio-clip .fade-envelope-line {
+    fill: none;
+    stroke: rgba(12, 59, 32, 0.9);
+    stroke-width: 2.2;
+    vector-effect: non-scaling-stroke;
+}
+
+.audio-clip .fade-envelope-point {
+    fill: rgba(242, 248, 240, 0.94);
+    stroke: rgba(7, 45, 24, 0.78);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.audio-clip .vol-line-overlay {
+    z-index: 7;
+}
+
+.audio-clip .vol-line-bar {
+    left: 2px;
+    right: 2px;
+    height: 1px;
+    background: rgba(14, 73, 38, 0.7);
+    box-shadow: none;
+}
+
+.audio-clip .vol-line-handle {
+    right: 50%;
+    width: 7px;
+    height: 7px;
+    transform: translate(50%, -50%);
+    background: rgba(245, 250, 242, 0.96);
+    border-color: rgba(20, 80, 42, 0.78);
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.38);
+}
+
+.audio-clip .vol-line-label {
+    right: 8px;
 }

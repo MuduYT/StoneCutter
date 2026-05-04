@@ -1,5 +1,57 @@
 # StoneCutter Update Log
 
+## 2026-05-04 - Timeline Performance Optimization
+
+### Performance
+- Timeline-Playback nutzt jetzt einen gedrosselten State-Update-Pfad: Der Playhead wird imperativ via CSS-Variable bei 60 FPS aktualisiert, während React-State-Updates nur bei Layer-Wechseln oder ca. 12 FPS erfolgen. Das reduziert unnötige Full-Render-Zyklen während der Wiedergabe.
+- Timeline-Clips werden virtualisiert: Nur Clips im sichtbaren Zeitbereich (plus Overscan) werden gerendert. Projekte mit vielen Clips bleiben dadurch bedienbar.
+- Audio-Waveform-Bars sind auf max. 240 pro Clip begrenzt, Video-Thumbnails auf max. 80 pro Clip. Das verhindert extreme DOM-Mengen bei langen Clips.
+- Media-Analyse (Waveform/Thumbnail-Generation) ist queue-basiert: Maximal 2 parallele Decode-Jobs laufen gleichzeitig, mit Cancel-on-unmount und Caching, um veraltete State-Updates zu vermeiden.
+- Playback-Helper (`getTimelineVisualClips`, `getTimelineAudibleClips`, `getTopVisibleTimelineClip`) nutzen jetzt vorbereitete Lookup-Strukturen (`mediaById`, `trackById`, `trackOrder`) statt pro Frame Maps neu zu erstellen.
+
+### Technical Changes
+- Neue pure Helper in `src/lib/timelineRender.js`: `getVisibleTimelineRange`, `groupVisibleClipsByTrack`, `buildWaveformBars`, `buildThumbnailItems`.
+- `src/lib/playback.js` um `buildTimelinePlaybackLookups` erweitert; alle Playback-Helper akzeptieren optionale `lookups`-Parameter.
+- Tests für die neuen Helper in `src/lib/playback.test.js` hinzugefügt.
+- `App.jsx` Refs für `timelineTimeRef`, `timelinePlayheadRefs`, `activeTimelineLayersRef`, `mediaAnalysisRef` hinzugefügt.
+- Playhead-Positionierung in `App.jsx` und `App.css` auf CSS-Variable `--playhead-x` umgestellt.
+
+## 2026-05-04 - Resolve-Style Audio Waveform Visuals
+
+### UI
+- Audio clips now use a green Resolve-like track fill with compact light waveform peaks around the center line.
+- Waveform peak height now follows both clip volume and the visible fade envelope, so lowering the audio line makes the waveform shrink immediately.
+- Audio fade overlays now draw the diagonal envelope line and endpoint dot on top of the dark triangular fade region.
+
+## 2026-05-04 - Volume Line & Fade Overlay Overhaul
+
+### Fixes
+- Volume drag line in audio clips was completely non-functional: the overlay was inside `.clip-content` which has `pointer-events: none`. Moved `vol-line-overlay` outside that container so mouse events register correctly.
+- Volume drag now measures the `waveform-shell` height for accurate 1:1 drag-to-volume mapping instead of the full track height.
+
+### UI
+- Volume line restyled as a clean Filmora-style horizontal orange line with a round handle on the right; percentage label fades in on hover.
+- Fade-in/fade-out overlays completely reworked: now render as DaVinci Resolve-style dark diagonal triangle SVGs (no more invisible/unstyled divs).
+- Fade handles are now visible white grip bars that appear on clip hover/active, positioned at the end of each fade region.
+- Vol-drag tooltip styled properly (dark panel, orange border/text, monospace font, fixed viewport positioning).
+
+## 2026-05-04 - Import Media Bin Selection Bug Fixes
+
+### Fixes
+- Importing new media (via button, file dialog, or drag-and-drop) no longer auto-selects the first new item when another item is already selected in the media bin.
+- Importing no longer auto-selects any item at all — the user must explicitly click a media item to select it.
+- Clicking an already-selected media item in the media bin now deselects it (allows clearing the selection).
+
+## 2026-05-04 - Release QA Stability Pass
+
+### Fixes
+- Browser-imported media object URLs are now tracked and revoked when media is removed, projects are replaced, or the app unmounts, preventing leaked Blob URLs during long editing sessions.
+- Removing a media-bin item now also removes dependent timeline clips and clears related duration, source-range, waveform, thumbnail, selection, and active-clip state so the project cannot keep orphaned clips that fail export later.
+- Inspector linked-clip data is resolved outside the render-time JSX IIFE and inspector edits continue to go through the undo-aware `commitClips` path.
+
+### Verification
+- `npm.cmd test`, `npm.cmd run lint`, `npm.cmd run build`, and `cargo.exe test` pass in this workspace.
+
 ## 2026-05-04 - Timeline Playback Start & Clip Interaction Polish
 
 ### Fixes

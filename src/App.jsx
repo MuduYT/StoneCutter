@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/refs */
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import logoUrl from "../media/Logo/StoneCutter-Logo.png";
 import "./App.css";
@@ -53,6 +54,7 @@ import {
   sanitizeProjectName,
 } from "./lib/project.js";
 import {
+  buildTimelinePlaybackLookups,
   findClipAtTime,
   getTopVisibleTimelineClip,
   getTimelineAudibleClips,
@@ -69,6 +71,12 @@ import {
   stepSourcePreviewTime,
   timeFromClientX,
 } from "./lib/sourceMonitor.js";
+import {
+  buildThumbnailItems,
+  buildWaveformBars,
+  getVisibleTimelineRange,
+  groupVisibleClipsByTrack,
+} from "./lib/timelineRender.js";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const RECENT_PROJECTS_KEY = "stonecutter.recentProjects";
@@ -79,6 +87,7 @@ const MEDIA_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
 const MEDIA_ACCEPT = "video/*,audio/*,image/*";
 const TIMELINE_MEDIA_SEEK_GRACE_MS = 90;
 const TIMELINE_MEDIA_SEEK_TIMEOUT_MS = 350;
+const TIMELINE_STATE_FPS = 12;
 
 let _idCounter = 0;
 const nextId = (prefix) => `${prefix}-${++_idCounter}`;
@@ -676,6 +685,16 @@ function App() {
   const timelinePlaybackStartTokenRef = useRef(0);
   const timelineSeekGraceUntilRef = useRef(0);
   const timelineMediaSeekPromisesRef = useRef(new WeakMap());
+  const timelineTimeRef = useRef(0);
+  const timelinePlayheadRefs = useRef([]);
+  const timelineLastStateUpdateRef = useRef(0);
+  const activeTimelineLayersRef = useRef({ key: "", visualLayers: [], audioLayers: [] });
+  const mediaAnalysisRef = useRef({
+    waveformStarted: new Set(),
+    thumbnailStarted: new Set(),
+    cancelled: false,
+  });
+  const browserObjectUrlsRef = useRef(new Set());
   const clipboardRef = useRef([]); // copied clips (with relative startTimes)
   const volumeLineDragRef = useRef(null); // { clipId, startY, startVolume, trackHeight }
   const fadeDragRef = useRef(null); // { clipId, side:'in'|'out', startX, startFade, dur, pxPerSec }
@@ -690,6 +709,7 @@ function App() {
   const [clips, setClips] = useState([]);
   const [activeClipId, setActiveClipId] = useState(null);
   const [timelineTime, setTimelineTime] = useState(0);
+  const [visibleTimelineRange, setVisibleTimelineRange] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [dropIndicatorTime, setDropIndicatorTime] = useState(null);
   const [snapIndicatorTime, setSnapIndicatorTime] = useState(null);
@@ -761,6 +781,23 @@ function App() {
   const [sidebarTab, setSidebarTab] = useState("media"); // "media" | "audio" | "text" | "effects" | "transitions" | "elements"
   const [activeNavTab, setActiveNavTab] = useState("media"); // top nav active tab
 
+  const revokeBrowserObjectUrls = useCallback((items) => {
+    for (const item of items || []) {
+      if (typeof item?.src === "string" && item.src.startsWith("blob:")) {
+        URL.revokeObjectURL(item.src);
+        browserObjectUrlsRef.current.delete(item.src);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const urls = browserObjectUrlsRef.current;
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
+      urls.clear();
+    };
+  }, []);
+
   const persistRecentProjects = useCallback((items) => {
     setRecentProjects(items);
     try {
@@ -826,6 +863,7 @@ function App() {
   const applyProjectState = useCallback(
     (state, projectInfo) => {
       projectHydratingRef.current = true;
+      revokeBrowserObjectUrls(videos);
       setVideos(state.videos);
       setClips(state.clips);
       setSourceRanges(state.sourceRanges);
@@ -833,6 +871,9 @@ function App() {
       setTracks(state.tracks);
       setPeaksMap({});
       setThumbsMap({});
+      mediaAnalysisRef.current.waveformStarted = new Set();
+      mediaAnalysisRef.current.thumbnailStarted = new Set();
+      timelineTimeRef.current = state.timelineTime;
       setTimelineTime(state.timelineTime);
       setSettings((prev) => ({ ...prev, ...state.settings }));
       setAspectRatio(state.ui.aspectRatio);
@@ -855,7 +896,7 @@ function App() {
         projectHydratingRef.current = false;
       }, 0);
     },
-    [setSettings],
+    [revokeBrowserObjectUrls, setSettings, videos],
   );
 
   const handleCreateProject = useCallback(async () => {
@@ -1101,25 +1142,27 @@ function App() {
   const isSourceMonitorActive =
     isSourceMonitorVisible({ media: activeVideo, sourceMonitorId }) &&
     activeSourceSelection;
+  const timelinePlaybackLookups = useMemo(
+    () => buildTimelinePlaybackLookups({ tracks, videos }),
+    [tracks, videos],
+  );
   const timelineVisualLayers = useMemo(
     () =>
       getTimelineVisualClips({
         time: timelineTime,
         clips,
-        tracks,
-        videos,
+        lookups: timelinePlaybackLookups,
       }),
-    [clips, timelineTime, tracks, videos],
+    [clips, timelinePlaybackLookups, timelineTime],
   );
   const timelineAudioLayers = useMemo(
     () =>
       getTimelineAudibleClips({
         time: timelineTime,
         clips,
-        tracks,
-        videos,
+        lookups: timelinePlaybackLookups,
       }),
-    [clips, timelineTime, tracks, videos],
+    [clips, timelinePlaybackLookups, timelineTime],
   );
   const isTimelineMonitorActive =
     !isSourceMonitorActive &&
@@ -1129,10 +1172,9 @@ function App() {
       getTopVisibleTimelineClip({
         time: timelineTime,
         clips,
-        tracks,
-        videos,
+        lookups: timelinePlaybackLookups,
       }),
-    [clips, timelineTime, tracks, videos],
+    [clips, timelinePlaybackLookups, timelineTime],
   );
 
   const updateSourceRange = useCallback(
@@ -1349,6 +1391,22 @@ function App() {
   const totalEnd = useMemo(
     () => getTimelineContentEnd(displayClips),
     [displayClips],
+  );
+  const forcedVisibleClipIds = useMemo(() => {
+    const ids = new Set();
+    if (activeClipId) ids.add(activeClipId);
+    selectedClipIds.forEach((id) => ids.add(id));
+    draggingIds?.forEach((id) => ids.add(id));
+    return ids;
+  }, [activeClipId, draggingIds, selectedClipIds]);
+  const clipsByTrack = useMemo(
+    () =>
+      groupVisibleClipsByTrack({
+        clips: displayClips,
+        visibleRange: visibleTimelineRange,
+        includeIds: forcedVisibleClipIds,
+      }),
+    [displayClips, forcedVisibleClipIds, visibleTimelineRange],
   );
   const totalWidth = Math.max(
     800,
@@ -1598,11 +1656,48 @@ function App() {
     [tracks],
   );
 
+  const updateTimelinePlayheadPosition = useCallback(
+    (time) => {
+      const x = Math.max(0, time) * pxPerSec;
+      timelinePlayheadRefs.current.forEach((node) => {
+        if (node) node.style.setProperty("--playhead-x", `${x}px`);
+      });
+    },
+    [pxPerSec],
+  );
+
+  const setTimelinePlayheadRef = useCallback(
+    (index) => (node) => {
+      timelinePlayheadRefs.current[index] = node;
+      if (node) updateTimelinePlayheadPosition(timelineTimeRef.current);
+    },
+    [updateTimelinePlayheadPosition],
+  );
+
+  const updateVisibleTimelineRange = useCallback(() => {
+    const tc = tracksContentRef.current;
+    if (!tc) return;
+    setVisibleTimelineRange(
+      getVisibleTimelineRange({
+        scrollLeft: tc.scrollLeft,
+        clientWidth: tc.clientWidth,
+        pxPerSec,
+      }),
+    );
+  }, [pxPerSec]);
+
   const handleTracksScroll = useCallback((e) => {
     if (trackHeadersListRef.current) {
       trackHeadersListRef.current.scrollTop = e.target.scrollTop;
     }
-  }, []);
+    setVisibleTimelineRange(
+      getVisibleTimelineRange({
+        scrollLeft: e.target.scrollLeft,
+        clientWidth: e.target.clientWidth,
+        pxPerSec,
+      }),
+    );
+  }, [pxPerSec]);
 
   const setTimelineVisualRef = useCallback(
     (clipId) => (node) => {
@@ -1683,14 +1778,12 @@ function App() {
       const visualLayers = getTimelineVisualClips({
         time,
         clips,
-        tracks,
-        videos,
+        lookups: timelinePlaybackLookups,
       });
       const audioLayers = getTimelineAudibleClips({
         time,
         clips,
-        tracks,
-        videos,
+        lookups: timelinePlaybackLookups,
       });
       const seekPromises = [];
 
@@ -1734,8 +1827,7 @@ function App() {
       clips,
       getTimelineClipSourceTime,
       muted,
-      tracks,
-      videos,
+      timelinePlaybackLookups,
       volume,
       waitForTimelineMediaSeek,
     ],
@@ -1756,6 +1848,8 @@ function App() {
     pendingPlayRef.current = false;
     timelinePlaybackRef.current = null;
     if (target?.videoId) setActiveId(target.videoId);
+    timelineTimeRef.current = timelineStart;
+    updateTimelinePlayheadPosition(timelineStart);
     setTimelineTime(timelineStart);
     await primeTimelinePlayback(timelineStart);
     if (timelinePlaybackStartTokenRef.current !== startToken) return;
@@ -1768,7 +1862,7 @@ function App() {
       timelineStart,
     };
     setIsPlaying(true);
-  }, [primeTimelinePlayback]);
+  }, [primeTimelinePlayback, updateTimelinePlayheadPosition]);
 
   const startClipPlayback = useCallback(
     (target, startAtTime) => {
@@ -1793,6 +1887,7 @@ function App() {
     imagePlaybackRef.current = null;
     timelinePlaybackRef.current = null;
     pendingPlayRef.current = false;
+    setTimelineTime(timelineTimeRef.current);
     setPlaybackMode(null);
     setIsPlaying(false);
   }, [pauseTimelinePreviewMedia]);
@@ -2042,6 +2137,26 @@ function App() {
     waitForTimelineMediaSeek,
   ]);
 
+  useEffect(() => {
+    timelineTimeRef.current = timelineTime;
+    updateTimelinePlayheadPosition(timelineTime);
+  }, [timelineTime, updateTimelinePlayheadPosition]);
+
+  useEffect(() => {
+    activeTimelineLayersRef.current = {
+      key: [
+        ...timelineVisualLayers.map(({ clip }) => `v:${clip.id}`),
+        ...timelineAudioLayers.map(({ clip }) => `a:${clip.id}`),
+      ].join("|"),
+      visualLayers: timelineVisualLayers,
+      audioLayers: timelineAudioLayers,
+    };
+  }, [timelineAudioLayers, timelineVisualLayers]);
+
+  useEffect(() => {
+    updateVisibleTimelineRange();
+  }, [tracks, totalWidth, updateVisibleTimelineRange]);
+
   // Keep playbackRef synced (used inside rAF loop without re-binding)
   useEffect(() => {
     playbackRef.current = {
@@ -2060,7 +2175,7 @@ function App() {
     if (!timelinePlaybackRef.current) {
       timelinePlaybackRef.current = {
         startedAtMs: performance.now(),
-        timelineStart: playbackRef.current.timelineTime,
+        timelineStart: timelineTimeRef.current,
       };
     }
     let raf = 0;
@@ -2075,7 +2190,7 @@ function App() {
         if (timelinePlaybackRef.current) {
           timelinePlaybackRef.current = {
             startedAtMs: nowMs,
-            timelineStart: state.timelineTime,
+            timelineStart: timelineTimeRef.current,
           };
         }
         raf = requestAnimationFrame(tick);
@@ -2084,17 +2199,41 @@ function App() {
       const timelineState = getVirtualTimelinePlaybackTime({
         timelinePlayback: timelinePlaybackRef.current,
         nowMs,
-        fallbackTimelineTime: state.timelineTime,
+        fallbackTimelineTime: timelineTimeRef.current,
       });
       const nextTime = timelineState.timelineTime;
+      timelineTimeRef.current = nextTime;
+      updateTimelinePlayheadPosition(nextTime);
       const currentClip = findClipAtTime(nextTime, state.clips);
       playingClipIdRef.current = currentClip?.id || null;
-      setTimelineTime(nextTime);
+      const visualLayers = getTimelineVisualClips({
+        time: nextTime,
+        clips: state.clips,
+        lookups: timelinePlaybackLookups,
+      });
+      const audioLayers = getTimelineAudibleClips({
+        time: nextTime,
+        clips: state.clips,
+        lookups: timelinePlaybackLookups,
+      });
+      const layerKey = [
+        ...visualLayers.map(({ clip }) => `v:${clip.id}`),
+        ...audioLayers.map(({ clip }) => `a:${clip.id}`),
+      ].join("|");
+      const shouldSyncLayers = layerKey !== activeTimelineLayersRef.current.key;
+      const shouldSyncState =
+        shouldSyncLayers ||
+        nowMs - timelineLastStateUpdateRef.current >= 1000 / TIMELINE_STATE_FPS;
+      if (shouldSyncState) {
+        timelineLastStateUpdateRef.current = nowMs;
+        activeTimelineLayersRef.current = { key: layerKey, visualLayers, audioLayers };
+        setTimelineTime(nextTime);
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [isPlaying, playbackMode]);
+  }, [isPlaying, playbackMode, timelinePlaybackLookups, updateTimelinePlayheadPosition]);
 
   // --- import ---
   // Probe duration for newly imported videos so drag-from-sidebar can show a real-width preview.
@@ -2120,7 +2259,6 @@ function App() {
         const items = await openMediaDialog();
         if (items && items.length > 0) {
           setVideos((prev) => [...prev, ...items]);
-          if (!activeId) setActiveId(items[0].id);
           probeAndCacheDurations(items);
         }
       } catch (err) {
@@ -2135,22 +2273,30 @@ function App() {
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return [];
-    const items = files.map((f) => ({
-      id: nextId("vid"),
-      name: f.name,
-      path: f.name,
-      src: URL.createObjectURL(f),
-      mediaType: getFileMediaType(f),
-      importedAt: new Date().toISOString(),
-    }));
+    const items = files.map((f) => {
+      const src = URL.createObjectURL(f);
+      browserObjectUrlsRef.current.add(src);
+      return {
+        id: nextId("vid"),
+        name: f.name,
+        path: f.name,
+        src,
+        mediaType: getFileMediaType(f),
+        importedAt: new Date().toISOString(),
+      };
+    });
     setVideos((prev) => [...prev, ...items]);
-    if (!activeId && items.length > 0) setActiveId(items[0].id);
     probeAndCacheDurations(items);
     if (e.target && "value" in e.target) e.target.value = "";
     return items;
   };
 
   const handleSelectMedia = (id) => {
+    if (activeId === id) {
+      setActiveId(null);
+      setSourceMonitorId(null);
+      return;
+    }
     stopPlayback();
     setEditorFocus(FOCUS_SOURCE);
     setActiveId(id);
@@ -2196,7 +2342,41 @@ function App() {
   };
   const handleRemoveMedia = (id, e) => {
     e.stopPropagation();
+    const removedMedia = videos.find((v) => v.id === id);
+    if (removedMedia) revokeBrowserObjectUrls([removedMedia]);
+    const removedClipIds = new Set(
+      clips.filter((clip) => clip.videoId === id).map((clip) => clip.id),
+    );
+    if (removedClipIds.size > 0) {
+      commitClips(clips.filter((clip) => clip.videoId !== id));
+      setSelectedClipIds((prev) => {
+        const next = new Set(prev);
+        removedClipIds.forEach((clipId) => next.delete(clipId));
+        return next;
+      });
+      if (removedClipIds.has(activeClipId)) setActiveClipId(null);
+    }
     setVideos((prev) => prev.filter((v) => v.id !== id));
+    setVideoDurations((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setSourceRanges((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setPeaksMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setThumbsMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     if (activeId === id) {
       setActiveId(null);
       setIsPlaying(false);
@@ -2988,12 +3168,13 @@ function App() {
       t = Math.max(0, t);
       setSourceMonitorId(null);
       setEditorFocus(FOCUS_TIMELINE);
+      timelineTimeRef.current = t;
+      updateTimelinePlayheadPosition(t);
       setTimelineTime(t);
       const clip = getTopVisibleTimelineClip({
         time: t,
         clips,
-        tracks,
-        videos,
+        lookups: timelinePlaybackLookups,
       });
       if (clip) {
         playingClipIdRef.current = clip.id;
@@ -3017,7 +3198,7 @@ function App() {
         timelinePlaybackRef.current = null;
       }
     },
-    [clips, isPlaying, tracks, videos],
+    [clips, isPlaying, timelinePlaybackLookups, updateTimelinePlayheadPosition],
   );
 
   const getXInTracks = (clientX) => {
@@ -3713,12 +3894,11 @@ function App() {
       }
       // Resume timeline playback at the scrubbed position, including empty gaps.
       if (it && it.type === "seek" && it.wasPlaying) {
-        const resumeTime = playbackRef.current.timelineTime;
+        const resumeTime = timelineTimeRef.current;
         const resumeClip = getTopVisibleTimelineClip({
           time: resumeTime,
           clips: playbackRef.current.clips,
-          tracks,
-          videos,
+          lookups: timelinePlaybackLookups,
         });
         if (resumeClip) startClipPlayback(resumeClip, resumeTime);
         else startTimelineGapPlayback(resumeTime);
@@ -3926,6 +4106,8 @@ function App() {
     setSourceMonitorId(null);
     setActiveClipId(clip.id);
     setActiveId(clip.videoId);
+    timelineTimeRef.current = clip.startTime;
+    updateTimelinePlayheadPosition(clip.startTime);
     setTimelineTime(clip.startTime);
     startClipPlayback(clip, clip.startTime);
   };
@@ -4360,37 +4542,79 @@ function App() {
 
   // Generate waveforms for clips' source videos (cached per videoId)
   useEffect(() => {
-    const needed = new Set(clips.map((c) => c.videoId));
-    needed.forEach((vid) => {
-      if (vid in peaksMap) return;
-      const video = videos.find((v) => v.id === vid);
-      if (!video) return;
-      setPeaksMap((prev) => ({ ...prev, [vid]: null }));
-      generateWaveform(video.src).then((peaks) => {
-        setPeaksMap((prev) => ({ ...prev, [vid]: peaks || [] }));
-      });
+    let cancelled = false;
+    const videoById = new Map(videos.map((video) => [video.id, video]));
+    const jobs = [...new Set(clips.map((clip) => clip.videoId))]
+      .map((videoId) => videoById.get(videoId))
+      .filter((video) => video && !mediaAnalysisRef.current.waveformStarted.has(video.id));
+    if (jobs.length === 0) return undefined;
+    jobs.forEach((video) => {
+      mediaAnalysisRef.current.waveformStarted.add(video.id);
+      setPeaksMap((prev) =>
+        prev[video.id] != null ? prev : { ...prev, [video.id]: null },
+      );
     });
-  }, [clips, videos, peaksMap]);
+    let cursor = 0;
+    const runNext = async () => {
+      if (cancelled) return;
+      const video = jobs[cursor];
+      cursor += 1;
+      if (!video) return;
+      const peaks = await generateWaveform(video.src);
+      if (!cancelled) {
+        setPeaksMap((prev) =>
+          videoById.has(video.id) ? { ...prev, [video.id]: peaks || [] } : prev,
+        );
+      }
+      await runNext();
+    };
+    const workers = Array.from({ length: Math.min(2, jobs.length) }, runNext);
+    Promise.all(workers).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [clips, videos]);
 
   // Generate media thumbnails for the library and timeline (cached per videoId)
   useEffect(() => {
-    const needed = new Set(videos.map((video) => video.id));
-    needed.forEach((vid) => {
-      if (vid in thumbsMap) return;
-      const video = videos.find((v) => v.id === vid);
+    let cancelled = false;
+    const videoById = new Map(videos.map((video) => [video.id, video]));
+    const jobs = videos.filter(
+      (video) => !mediaAnalysisRef.current.thumbnailStarted.has(video.id),
+    );
+    if (jobs.length === 0) return undefined;
+    jobs.forEach((video) => {
+      mediaAnalysisRef.current.thumbnailStarted.add(video.id);
+      setThumbsMap((prev) =>
+        prev[video.id] != null ? prev : { ...prev, [video.id]: null },
+      );
+    });
+    let cursor = 0;
+    const runNext = async () => {
+      if (cancelled) return;
+      const video = jobs[cursor];
+      cursor += 1;
       if (!video) return;
-      setThumbsMap((prev) => ({ ...prev, [vid]: null }));
       const genFn =
         video.mediaType === "image"
           ? generateImageThumbnails
           : video.mediaType === "audio"
             ? async () => []
             : generateThumbnails;
-      genFn(video.src).then((thumbs) => {
-        setThumbsMap((prev) => ({ ...prev, [vid]: thumbs || [] }));
-      });
-    });
-  }, [videos, thumbsMap]);
+      const thumbs = await genFn(video.src);
+      if (!cancelled) {
+        setThumbsMap((prev) =>
+          videoById.has(video.id) ? { ...prev, [video.id]: thumbs || [] } : prev,
+        );
+      }
+      await runNext();
+    };
+    const workers = Array.from({ length: Math.min(2, jobs.length) }, runNext);
+    Promise.all(workers).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [videos]);
 
   // Close context menu on outside click / scroll
   useEffect(() => {
@@ -4482,6 +4706,42 @@ function App() {
       el.scrollLeft = playheadX - el.clientWidth + margin;
     }
   }, [playheadX]);
+
+  const tracksById = useMemo(
+    () => new Map(tracks.map((track) => [track.id, track])),
+    [tracks],
+  );
+  const inspectorLinkedGroup = useMemo(() => {
+    if (!activeClip) return [];
+    return activeClip.linkGroupId
+      ? clips.filter((clip) => clip.linkGroupId === activeClip.linkGroupId)
+      : [activeClip];
+  }, [activeClip, clips]);
+  const inspectorVideoClip =
+    inspectorLinkedGroup.find(
+      (clip) => tracksById.get(clip.trackId)?.type === "video",
+    ) ?? (activeTrack?.type === "video" ? activeClip : null);
+  const inspectorAudioClip =
+    inspectorLinkedGroup.find(
+      (clip) => tracksById.get(clip.trackId)?.type === "audio",
+    ) ?? (activeTrack?.type === "audio" ? activeClip : null);
+  const inspectorIsLinked = inspectorLinkedGroup.length > 1;
+  const inspectorDisplayName = inspectorIsLinked
+    ? inspectorVideoClip?.name || inspectorAudioClip?.name
+    : activeClip?.name;
+  const updateInspectorClip = useCallback(
+    (clipId, patch) => {
+      commitClips(
+        clips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
+      );
+    },
+    [clips, commitClips],
+  );
+  const vidClip = inspectorVideoClip;
+  const audClip = inspectorAudioClip;
+  const isLinked = inspectorIsLinked;
+  const displayName = inspectorDisplayName;
+  const updClip = updateInspectorClip;
 
   const stepBack = () => seekToTime(Math.max(0, timelineTime - 1));
   const stepFwd = () => seekToTime(timelineTime + 1);
@@ -4634,6 +4894,8 @@ function App() {
                 else if (id === "media") setSidebarTab("media");
                 else if (id === "audio") setSidebarTab("audio");
                 else if (id === "effects") setSidebarTab("effects");
+                else if (id === "transitions") setSidebarTab("transitions");
+                else if (id === "text") setSidebarTab("text");
               }}
             >
               <TabIcon />
@@ -4747,7 +5009,9 @@ function App() {
       <aside
         className={`sidebar ${editorFocus === FOCUS_SOURCE ? "focus-source" : ""}`}
       >
-        <div className="sidebar-header">
+        {sidebarTab === "media" ? (
+          <>
+          <div className="sidebar-header">
           <h2 className="sidebar-title">Project Media</h2>
           <button
             className={`import-btn ${videos.length === 0 ? "pulse" : ""}`}
@@ -4877,6 +5141,26 @@ function App() {
             </div>
           ))}
         </div>
+          </>
+        ) : (
+          <div className="sidebar-placeholder">
+            <div className="sidebar-placeholder-icon">
+              {sidebarTab === "effects" && "✨"}
+              {sidebarTab === "transitions" && "↔"}
+              {sidebarTab === "text" && "T"}
+              {sidebarTab === "audio" && "♪"}
+              {sidebarTab === "elements" && "⬡"}
+            </div>
+            <p className="sidebar-placeholder-title">
+              {sidebarTab === "effects" && "Effects"}
+              {sidebarTab === "transitions" && "Transitions"}
+              {sidebarTab === "text" && "Text"}
+              {sidebarTab === "audio" && "Audio"}
+              {sidebarTab === "elements" && "Elements"}
+            </p>
+            <p className="sidebar-placeholder-hint">Hier wird diese Funktion verfügbar sein.</p>
+          </div>
+        )}
       </aside>
 
       {/* ===== Player ===== */}
@@ -5495,7 +5779,8 @@ function App() {
                 {/* Playhead handle lives inside the sticky ruler so it stays visible while scrolling. */}
                 <div
                   className={`playhead-handle ruler-handle ${interaction?.type === "seek" ? "dragging" : ""}`}
-                  style={{ left: `${playheadX}px` }}
+                  ref={setTimelinePlayheadRef(0)}
+                  style={{ "--playhead-x": `${playheadX}px` }}
                   onMouseDown={handlePlayheadMouseDown}
                   title="Ziehen zum Spulen"
                 />
@@ -5520,9 +5805,7 @@ function App() {
                   }}
                   data-track-id={track.id}
                 >
-                  {displayClips
-                    .filter((c) => c.trackId === track.id)
-                    .map((clip) => {
+                  {(clipsByTrack.get(track.id) || []).map((clip) => {
                       const dur = clip.outPoint - clip.inPoint;
                       const left = clip.startTime * pxPerSec;
                       const width = Math.max(20, dur * pxPerSec);
@@ -5564,43 +5847,27 @@ function App() {
                               {(() => {
                                 const thumbs = thumbsMap[clip.videoId];
                                 if (thumbs && thumbs.length > 0) {
-                                  const sd = Math.max(
-                                    0.001,
-                                    clip.sourceDuration,
-                                  );
-                                  const startIdx = Math.max(
-                                    0,
-                                    Math.floor(
-                                      (clip.inPoint / sd) * thumbs.length,
-                                    ),
-                                  );
-                                  const endIdx = Math.min(
-                                    thumbs.length,
-                                    Math.max(
-                                      startIdx + 1,
-                                      Math.ceil(
-                                        (clip.outPoint / sd) * thumbs.length,
-                                      ),
-                                    ),
-                                  );
-                                  const visible = thumbs.slice(
-                                    startIdx,
-                                    endIdx,
-                                  );
+                                  const visible = buildThumbnailItems({
+                                    width,
+                                    thumbs,
+                                    inPoint: clip.inPoint,
+                                    outPoint: clip.outPoint,
+                                    sourceDuration: clip.sourceDuration,
+                                  });
                                   return (
                                     <div className="video-thumb-strip">
-                                      {visible.map((url, i) =>
-                                        url ? (
+                                      {visible.map((item) =>
+                                        item.url ? (
                                           <div
-                                            key={i}
+                                            key={item.sourceIndex}
                                             className="video-thumb"
                                             style={{
-                                              backgroundImage: `url(${url})`,
+                                              backgroundImage: `url(${item.url})`,
                                             }}
                                           />
                                         ) : (
                                           <div
-                                            key={i}
+                                            key={item.sourceIndex}
                                             className="video-thumb empty"
                                           />
                                         ),
@@ -5626,50 +5893,27 @@ function App() {
                               <div className="waveform-shell">
                                 {(() => {
                                   const peaks = peaksMap[clip.videoId];
-                                  const barCount = Math.max(
-                                    8,
-                                    Math.floor(width / 3),
-                                  );
+                                  const bars = buildWaveformBars({
+                                    width,
+                                    peaks,
+                                    inPoint: clip.inPoint,
+                                    outPoint: clip.outPoint,
+                                    sourceDuration: clip.sourceDuration,
+                                    volume: clip.volume ?? 1,
+                                    fadeIn: clip.fadeIn ?? 0,
+                                    fadeOut: clip.fadeOut ?? 0,
+                                    seed: clip.id.length,
+                                  });
                                   if (peaks && peaks.length > 0) {
-                                    const startIdx = Math.floor(
-                                      (clip.inPoint /
-                                        Math.max(0.001, clip.sourceDuration)) *
-                                        peaks.length,
-                                    );
-                                    const endIdx = Math.max(
-                                      startIdx + 1,
-                                      Math.floor(
-                                        (clip.outPoint /
-                                          Math.max(0.001, clip.sourceDuration)) *
-                                          peaks.length,
-                                      ),
-                                    );
-                                    const segLen = endIdx - startIdx;
                                     return (
                                       <div className="waveform">
-                                        {Array.from({ length: barCount }).map(
-                                          (_, i) => {
-                                            const idx =
-                                              startIdx +
-                                              Math.floor(
-                                                (i / barCount) * segLen,
-                                              );
-                                            const v = Math.min(
-                                              1,
-                                              (peaks[idx] || 0) *
-                                                (clip.volume ?? 1),
-                                            );
-                                            return (
-                                              <span
-                                                key={i}
-                                                className="wave-bar"
-                                                style={{
-                                                  height: `${Math.max(6, v * 100)}%`,
-                                                }}
-                                              />
-                                            );
-                                          },
-                                        )}
+                                        {bars.map((bar, i) => (
+                                          <span
+                                            key={i}
+                                            className="wave-bar"
+                                            style={{ height: `${bar.height}%` }}
+                                          />
+                                        ))}
                                       </div>
                                     );
                                   }
@@ -5677,64 +5921,66 @@ function App() {
                                     <div
                                       className={`waveform ${peaks === null ? "loading" : ""}`}
                                     >
-                                      {Array.from({ length: barCount }).map(
-                                        (_, i) => (
-                                          <span
-                                            key={i}
-                                            className="wave-bar placeholder"
-                                            style={{
-                                              height: `${20 + Math.abs(Math.sin((i + clip.inPoint * 4) * 0.7 + clip.id.length)) * 50}%`,
-                                            }}
-                                          />
-                                        ),
-                                      )}
+                                      {bars.map((bar, i) => (
+                                        <span
+                                          key={i}
+                                          className="wave-bar placeholder"
+                                          style={{ height: `${bar.height}%` }}
+                                        />
+                                      ))}
                                     </div>
                                   );
                                 })()}
-                                <div
-                                  className="waveform-volume-overlay"
-                                  style={{
-                                    top: `${Math.max(
-                                      8,
-                                      Math.min(
-                                        92,
-                                        (1 - (clip.volume ?? 1) / 2) * 100,
-                                      ),
-                                    )}%`,
-                                  }}
-                                  onMouseDown={(e) => {
-                                    e.stopPropagation();
-                                    const trackEl =
-                                      e.currentTarget.closest(".track-lane");
-                                    const trackHeight = trackEl
-                                      ? trackEl.offsetHeight
-                                      : 60;
-                                    volumeLineDragRef.current = {
-                                      clipId: clip.id,
-                                      startY: e.clientY,
-                                      startVolume: clip.volume ?? 1,
-                                      trackHeight,
-                                    };
-                                  }}
-                                >
-                                  <span className="waveform-volume-line" />
-                                  <span className="waveform-volume-handle" />
-                                  <span className="waveform-volume-label">
-                                    {Math.round((clip.volume ?? 1) * 100)}%
-                                  </span>
-                                </div>
+                              </div>
+                              {/* Volume line — outside waveform-shell so pointer-events work */}
+                              <div
+                                className="vol-line-overlay"
+                                style={{
+                                  top: `${Math.max(8, Math.min(88, (1 - Math.min(2, clip.volume ?? 1) / 2) * 100))}%`,
+                                }}
+                                onMouseDown={(e) => {
+                                  e.stopPropagation();
+                                  const shellEl = e.currentTarget
+                                    .closest(".clip")
+                                    ?.querySelector(".waveform-shell");
+                                  const shellHeight = shellEl
+                                    ? shellEl.offsetHeight
+                                    : 48;
+                                  volumeLineDragRef.current = {
+                                    clipId: clip.id,
+                                    startY: e.clientY,
+                                    startVolume: clip.volume ?? 1,
+                                    trackHeight: shellHeight,
+                                  };
+                                }}
+                              >
+                                <span className="vol-line-bar" />
+                                <span className="vol-line-handle" />
+                                <span className="vol-line-label">
+                                  {Math.round((clip.volume ?? 1) * 100)}%
+                                </span>
                               </div>
                               <span className="clip-name">{clip.name}</span>
                             </>
                           )}
-                          {/* Fade region overlays */}
+                          {/* DaVinci Resolve-style fade overlays */}
                           {(clip.fadeIn ?? 0) > 0 && (
                             <div
                               className="fade-in-overlay"
                               style={{
                                 width: `${Math.min(width, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width)}px`,
                               }}
-                            />
+                            >
+                              <svg
+                                className="fade-svg"
+                                preserveAspectRatio="none"
+                                viewBox="0 0 100 100"
+                              >
+                                <polygon points="0,100 100,0 100,100" className="fade-poly" />
+                                <polyline points="0,100 100,0" className="fade-envelope-line" />
+                                <circle cx="100" cy="0" r="4" className="fade-envelope-point" />
+                              </svg>
+                            </div>
                           )}
                           {(clip.fadeOut ?? 0) > 0 && (
                             <div
@@ -5742,13 +5988,23 @@ function App() {
                               style={{
                                 width: `${Math.min(width, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width)}px`,
                               }}
-                            />
+                            >
+                              <svg
+                                className="fade-svg"
+                                preserveAspectRatio="none"
+                                viewBox="0 0 100 100"
+                              >
+                                <polygon points="0,0 0,100 100,100" className="fade-poly" />
+                                <polyline points="0,0 100,100" className="fade-envelope-line" />
+                                <circle cx="0" cy="0" r="4" className="fade-envelope-point" />
+                              </svg>
+                            </div>
                           )}
-                          {/* DaVinci-style draggable fade handles */}
+                          {/* Draggable fade handles (always rendered so user can set a fade) */}
                           <div
                             className="fade-handle-in"
                             style={{
-                              left: `${Math.max(0, Math.min(width - 14, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width - 7))}px`,
+                              left: `${Math.max(0, Math.min(width - 12, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width))}px`,
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -5761,12 +6017,12 @@ function App() {
                                 pxPerSec,
                               };
                             }}
-                            title={`Fade-In: ${(clip.fadeIn ?? 0).toFixed(1)}s – ziehen zum Ändern`}
+                            title={`Fade-In: ${(clip.fadeIn ?? 0).toFixed(1)}s`}
                           />
                           <div
                             className="fade-handle-out"
                             style={{
-                              right: `${Math.max(0, Math.min(width - 14, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width - 7))}px`,
+                              right: `${Math.max(0, Math.min(width - 12, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width))}px`,
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -5779,7 +6035,7 @@ function App() {
                                 pxPerSec,
                               };
                             }}
-                            title={`Fade-Out: ${(clip.fadeOut ?? 0).toFixed(1)}s – ziehen zum Ändern`}
+                            title={`Fade-Out: ${(clip.fadeOut ?? 0).toFixed(1)}s`}
                           />
                           <button
                             className="clip-remove"
@@ -5809,9 +6065,7 @@ function App() {
                   track.edge || "end",
                 );
                 const isVideo = track.type === "video";
-                const zoneClips = displayClips.filter(
-                  (clip) => clip.trackId === track.id,
-                );
+                const zoneClips = clipsByTrack.get(track.id) || [];
                 return (
                   <div
                     key={track.id}
@@ -5970,7 +6224,8 @@ function App() {
               {/* Playhead line spans below the sticky ruler over all tracks */}
               <div
                 className={`playhead ${interaction?.type === "seek" ? "dragging" : ""}`}
-                style={{ left: `${playheadX}px` }}
+                ref={setTimelinePlayheadRef(1)}
+                style={{ "--playhead-x": `${playheadX}px` }}
               >
                 <div className="playhead-line" />
               </div>
@@ -6272,34 +6527,17 @@ function App() {
               </button>
             ))}
           </div>
-          <div className="inspector-empty">Kein Clip ausgewählt</div>
+          {inspectorTab === "inspector" ? (
+            <div className="inspector-empty">Kein Clip ausgewählt</div>
+          ) : (
+            <div className="inspector-placeholder">
+              <p className="inspector-placeholder-title">{inspectorTab === "effects" ? "Effects" : "History"}</p>
+              <p className="inspector-placeholder-hint">Hier wird diese Funktion verfügbar sein.</p>
+            </div>
+          )}
         </div>
       )}
-      {activeClipId &&
-        activeClip &&
-        (() => {
-          // Resolve linked group (V+A pair or single clip)
-          const linkedGroup = activeClip.linkGroupId
-            ? clips.filter((c) => c.linkGroupId === activeClip.linkGroupId)
-            : [activeClip];
-          const vidClip =
-            linkedGroup.find(
-              (c) => tracks.find((t) => t.id === c.trackId)?.type === "video",
-            ) ?? (activeTrack?.type === "video" ? activeClip : null);
-          const audClip =
-            linkedGroup.find(
-              (c) => tracks.find((t) => t.id === c.trackId)?.type === "audio",
-            ) ?? (activeTrack?.type === "audio" ? activeClip : null);
-          const updClip = (clipId, patch) =>
-            setClips((prev) =>
-              prev.map((c) => (c.id === clipId ? { ...c, ...patch } : c)),
-            );
-          const isLinked = linkedGroup.length > 1;
-          const displayName = isLinked
-            ? vidClip?.name || audClip?.name
-            : activeClip.name;
-
-          return (
+      {activeClipId && activeClip && (
             <div className="inspector-panel">
               <div className="inspector-tabs">
                 {["Inspector", "Effects", "History"].map(tab => (
@@ -6324,6 +6562,12 @@ function App() {
                 </div>
               </div>
               <div className="inspector-body">
+                {inspectorTab !== "inspector" ? (
+                  <div className="inspector-placeholder">
+                    <p className="inspector-placeholder-title">{inspectorTab === "effects" ? "Effects" : "History"}</p>
+                    <p className="inspector-placeholder-hint">Hier wird diese Funktion verfügbar sein.</p>
+                  </div>
+                ) : (<>
                 {/* ─── VIDEO TRANSFORM + FADE ─── */}
                 {vidClip &&
                   (() => {
@@ -6629,10 +6873,10 @@ function App() {
                     </InspectorCollapsible>
                   ) : null;
                 })()}
+                </>)}
               </div>
             </div>
-          );
-        })()}
+      )}
 
       {/* Context menu */}
       {contextMenu &&
@@ -6667,7 +6911,7 @@ function App() {
               </button>
               <button
                 className="cm-item"
-                onClick={() => handleContextMenuDuplicate(clip.id)} // eslint-disable-line react-hooks/refs
+                onClick={() => handleContextMenuDuplicate(clip.id)}
               >
                 <Icon.Plus /> Duplizieren{" "}
                 <span className="cm-shortcut">Ctrl+D</span>
