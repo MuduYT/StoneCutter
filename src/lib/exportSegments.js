@@ -189,6 +189,7 @@ export const buildExportSegments = ({ clips, videos, tracks }) => {
 };
 
 export const totalExportDuration = (segments) => {
+  if (!segments || segments.length === 0) return 0;
   return segments.reduce((total, segment) => {
     const duration = Number.isFinite(segment.duration)
       ? segment.duration
@@ -200,5 +201,6 @@ export const totalExportDuration = (segments) => {
 };
 
 export const totalTimelineDuration = (clips) => {
+  if (!clips || clips.length === 0) return 0;
   return clips.reduce((total, clip) => Math.max(total, clipEnd(clip)), 0);
 };

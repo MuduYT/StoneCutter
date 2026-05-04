@@ -1,4 +1,4 @@
-import { clipEnd } from './timeline.js'
+import { clipEnd, MIN_CLIP_DURATION } from './timeline.js'
 
 export const MAX_WAVEFORM_BARS = 240
 export const MAX_THUMBNAIL_ITEMS = 80
@@ -84,10 +84,11 @@ export const buildWaveformBars = ({
       placeholder: true,
     }))
   }
-  const startIdx = Math.max(0, Math.floor((inPoint / sourceLength) * peaks.length))
+  const safeSourceLength = Math.max(MIN_CLIP_DURATION, sourceLength || MIN_CLIP_DURATION);
+  const startIdx = Math.max(0, Math.floor((inPoint / safeSourceLength) * peaks.length))
   const endIdx = Math.min(
     peaks.length,
-    Math.max(startIdx + 1, Math.ceil((outPoint / sourceLength) * peaks.length))
+    Math.max(startIdx + 1, Math.ceil((outPoint / safeSourceLength) * peaks.length))
   )
   const segLen = endIdx - startIdx
   return Array.from({ length: count }, (_, index) => {
@@ -112,10 +113,11 @@ export const buildThumbnailItems = ({
 }) => {
   if (!thumbs || thumbs.length === 0) return []
   const sourceLength = Math.max(0.001, sourceDuration)
-  const startIdx = Math.max(0, Math.floor((inPoint / sourceLength) * thumbs.length))
+  const safeSourceLength = Math.max(MIN_CLIP_DURATION, sourceLength || MIN_CLIP_DURATION);
+  const startIdx = Math.max(0, Math.floor((inPoint / safeSourceLength) * thumbs.length))
   const endIdx = Math.min(
     thumbs.length,
-    Math.max(startIdx + 1, Math.ceil((outPoint / sourceLength) * thumbs.length))
+    Math.max(startIdx + 1, Math.ceil((outPoint / safeSourceLength) * thumbs.length))
   )
   const available = endIdx - startIdx
   const count = Math.min(available, clampCount(Math.max(1, width) / minItemWidth, maxItems))

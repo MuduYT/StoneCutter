@@ -1,5 +1,12 @@
 # StoneCutter Update Log
 
+## 2026-05-04 - App.jsx Refactor Start
+
+### Technical Changes
+- Inspector UI controls (`InspectorCollapsible`, `InspectorDragger`) wurden aus `src/App.jsx` nach `src/components/inspector/InspectorControls.jsx` extrahiert.
+- Das komplette Inspector-Panel wurde nach `src/components/inspector/InspectorPanel.jsx` ausgelagert; `App.jsx` haelt nur noch die Zustandsableitung und die Update-Callbacks.
+- Das Refactoring ist funktional neutral gehalten und dient nur dazu, `App.jsx` schrittweise in kleinere, fokussierte Komponenten zu zerlegen.
+
 ## 2026-05-04 - Timeline Performance Optimization
 
 ### Performance
@@ -48,6 +55,11 @@
 - Browser-imported media object URLs are now tracked and revoked when media is removed, projects are replaced, or the app unmounts, preventing leaked Blob URLs during long editing sessions.
 - Removing a media-bin item now also removes dependent timeline clips and clears related duration, source-range, waveform, thumbnail, selection, and active-clip state so the project cannot keep orphaned clips that fail export later.
 - Inspector linked-clip data is resolved outside the render-time JSX IIFE and inspector edits continue to go through the undo-aware `commitClips` path.
+- Timeline playback scans active media layers only on UI ticks or clip boundaries instead of every animation frame.
+- Active preview media now tolerates small playback drift before re-seeking, avoiding repeated micro-seeks that caused visible stutter and audio/video lag.
+- Inspector, volume-line, and fade-handle drags now update live but create only one undo history entry per edit burst/drag instead of flooding the undo stack during scrubbing.
+- Tauri export now has a progress-capable FFmpeg path, frontend progress bar, elapsed timeline time, and cancel button.
+- Development builds show a small performance overlay with FPS, active preview media nodes, and JS heap memory when available.
 
 ### Verification
 - `npm.cmd test`, `npm.cmd run lint`, `npm.cmd run build`, and `cargo.exe test` pass in this workspace.

@@ -6,7 +6,12 @@ export const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']
 export const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']
 export const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a']
 
-export const clipDuration = (clip) => clip.outPoint - clip.inPoint
+export const clipDuration = (clip) => {
+  if (!clip || !Number.isFinite(clip.outPoint) || !Number.isFinite(clip.inPoint)) {
+    return 0;
+  }
+  return clip.outPoint - clip.inPoint;
+}
 
 export const clipEnd = (clip) => clip.startTime + clipDuration(clip)
 
@@ -85,9 +90,9 @@ export const constrainMoveStart = (desired, dur, others) => {
     }
     prevEnd = Math.max(prevEnd, oE)
   }
-  gaps.push([prevEnd, Infinity])
+  gaps.push([prevEnd, Number.MAX_SAFE_INTEGER])
   let best = desired
-  let bestDist = Infinity
+  let bestDist = Number.MAX_SAFE_INTEGER
   for (const [lo, hi] of gaps) {
     const candidate = Math.max(lo, Math.min(hi, desired))
     const distance = Math.abs(candidate - desired)
@@ -96,7 +101,7 @@ export const constrainMoveStart = (desired, dur, others) => {
       best = candidate
     }
   }
-  return Math.max(0, best)
+  return Math.max(0, Number.isFinite(best) ? best : desired)
 }
 
 export const minStartForTrimLeft = (fixedRight, others) => {
@@ -109,11 +114,11 @@ export const minStartForTrimLeft = (fixedRight, others) => {
 }
 
 export const maxEndForTrimRight = (fixedLeft, others) => {
-  let limit = Infinity
+  let limit = Number.MAX_SAFE_INTEGER
   for (const clip of others) {
     if (clip.startTime >= fixedLeft - 1e-3 && clip.startTime < limit) limit = clip.startTime
   }
-  return limit
+  return Number.isFinite(limit) ? limit : Number.MAX_SAFE_INTEGER
 }
 
 export const detectInsertPoint = (excludeId, center, dur, snapshot) => {

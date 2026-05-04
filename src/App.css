@@ -2920,6 +2920,32 @@ button {
     animation: spin 0.8s linear infinite;
 }
 
+.export-progress-shell {
+    width: min(100%, 360px);
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.export-progress-bar {
+    height: 100%;
+    min-width: 2px;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent), var(--orange-accent));
+    transition: width 160ms linear;
+}
+
+.export-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    width: min(100%, 360px);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
 .export-result {
     display: flex;
     flex-direction: column;
@@ -2952,6 +2978,37 @@ button {
 }
 .export-action-btn:hover {
     background: var(--bg-hover);
+}
+.export-action-btn.danger {
+    background: linear-gradient(135deg, #b91c1c, #ef4444);
+    border-color: rgba(248, 113, 113, 0.7);
+    box-shadow: 0 3px 12px rgba(239, 68, 68, 0.25);
+}
+.export-action-btn.danger:hover {
+    background: linear-gradient(135deg, #991b1b, #dc2626);
+}
+
+.perf-overlay {
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    z-index: 120;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    background: rgba(12, 14, 18, 0.86);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    backdrop-filter: blur(8px);
+}
+
+.perf-overlay span {
+    white-space: nowrap;
 }
 
 /* Responsive: small windows */
@@ -4007,6 +4064,13 @@ button {
     min-width: 0;
 }
 
+.topbar-project-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
 .topbar-project-name {
     display: inline-flex;
     align-items: center;
@@ -4029,6 +4093,33 @@ button {
 .topbar-project-name:hover {
     border-color: var(--border-strong);
     background: rgba(255, 255, 255, 0.04);
+}
+
+.topbar-project-name-input {
+    padding: 5px 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 200px;
+    max-width: 280px;
+    outline: none;
+}
+
+.topbar-project-name-input:focus {
+    border-color: var(--accent);
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.topbar-project-path {
+    font-size: 11px;
+    color: var(--text-dim);
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .topbar-project-chevron {

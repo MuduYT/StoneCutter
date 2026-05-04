@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import logoUrl from "../media/Logo/StoneCutter-Logo.png";
 import "./App.css";
+import { InspectorPanel } from "./components/inspector/InspectorPanel.jsx";
 import {
   SNAP_THRESHOLD_PX,
   MOVE_THRESHOLD_PX,
@@ -79,6 +80,7 @@ import {
 } from "./lib/timelineRender.js";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
+const isDevMode = import.meta.env.DEV;
 const RECENT_PROJECTS_KEY = "stonecutter.recentProjects";
 const PROJECT_FILTER = [
   { name: "StoneCutter Project", extensions: ["stonecutter"] },
@@ -88,6 +90,10 @@ const MEDIA_ACCEPT = "video/*,audio/*,image/*";
 const TIMELINE_MEDIA_SEEK_GRACE_MS = 90;
 const TIMELINE_MEDIA_SEEK_TIMEOUT_MS = 350;
 const TIMELINE_STATE_FPS = 12;
+const TIMELINE_LAYER_BOUNDARY_EPSILON = 0.015;
+const TIMELINE_PLAYING_VIDEO_DRIFT_TOLERANCE = 0.22;
+const TIMELINE_PLAYING_AUDIO_DRIFT_TOLERANCE = 0.16;
+const TIMELINE_PAUSED_DRIFT_TOLERANCE = 0.02;
 
 let _idCounter = 0;
 const nextId = (prefix) => `${prefix}-${++_idCounter}`;
@@ -539,127 +545,6 @@ const NavIcon = {
   ),
 };
 
-// ─── Collapsible Inspector Section wrapper ──────────────────────────────────
-function InspectorCollapsible({ title, icon, children, defaultOpen = true }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="inspector-section">
-      <div className="inspector-section-header" onClick={() => setOpen(v => !v)}>
-        <span className="inspector-section-label">
-          {icon && <span className="section-dot" />}
-          {title}
-        </span>
-        <span className={`inspector-section-chevron ${open ? '' : 'collapsed'}`}>▾</span>
-      </div>
-      <div className={`inspector-section-content ${open ? '' : 'collapsed'}`} style={open ? {} : { maxHeight: 0 }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ─── Drag-to-scrub number field with mouse-wheel + click-to-type ───────────
-function InspectorDragger({
-  label,
-  value,
-  onChange,
-  min = 0,
-  max = 100,
-  step = 1,
-  unit = "",
-  decimals,
-}) {
-  const [editing, setEditing] = useState(false);
-  const [editVal, setEditVal] = useState("");
-  const dec = decimals != null ? decimals : step < 1 ? 1 : 0;
-  const clamp = (v) => Math.max(min, Math.min(max, v));
-  const disp = Number(value ?? 0).toFixed(dec);
-  const pct =
-    max > min
-      ? Math.max(0, Math.min(100, (((value ?? 0) - min) / (max - min)) * 100))
-      : 0;
-
-  const beginDrag = (e) => {
-    if (editing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const startX = e.clientX;
-    const startVal = value ?? 0;
-    const range = Math.max(0.001, max - min);
-    const pxFull = 220;
-    let moved = false;
-    const onMove = (ev) => {
-      const dx = ev.clientX - startX;
-      if (Math.abs(dx) > 3) moved = true;
-      if (!moved) return;
-      const delta = (dx / pxFull) * range;
-      const snapped = Math.round((startVal + delta) / step) * step;
-      onChange(clamp(snapped));
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      if (!moved) {
-        setEditVal(disp);
-        setEditing(true);
-      }
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
-  const onWheel = (e) => {
-    e.stopPropagation();
-    const dir = e.deltaY > 0 ? -1 : 1;
-    onChange(clamp(Math.round(((value ?? 0) + dir * step) / step) * step));
-  };
-
-  const commitEdit = (raw) => {
-    const v = parseFloat(raw ?? editVal);
-    if (!isNaN(v)) onChange(clamp(v));
-    setEditing(false);
-  };
-
-  return (
-    <div className="idf-row" onWheel={onWheel}>
-      <span
-        className="idf-label"
-        onMouseDown={beginDrag}
-        title="Ziehen zum Ändern · Scrollen zum Anpassen"
-      >
-        {label}
-      </span>
-      <div className="idf-scrub" onMouseDown={beginDrag}>
-        {editing ? (
-          <input
-            className="idf-input"
-            type="number"
-            id={`idf-input-${label.replace(/\s+/g, '-').toLowerCase()}`}
-            value={editVal}
-            step={step}
-            autoFocus
-            onChange={(e) => setEditVal(e.target.value)}
-            onBlur={(e) => commitEdit(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitEdit(e.target.value);
-              if (e.key === "Escape") setEditing(false);
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-          />
-        ) : (
-          <div className="idf-value">
-            {disp}
-            {unit}
-          </div>
-        )}
-        <div className="idf-progress">
-          <div className="idf-progress-fill" style={{ width: `${pct}%` }} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function App() {
   const videoRef = useRef(null);
   const timelineVisualRefs = useRef(new Map());
@@ -669,6 +554,7 @@ function App() {
   const pendingSeekRef = useRef(null);
   const pendingPlayRef = useRef(false); // play after src change + metadata
   const historyRef = useRef({ past: [], future: [] });
+  const inspectorEditTimerRef = useRef(0);
   const interactionRef = useRef(null);
   const playbackRef = useRef({
     clips: [],
@@ -688,7 +574,12 @@ function App() {
   const timelineTimeRef = useRef(0);
   const timelinePlayheadRefs = useRef([]);
   const timelineLastStateUpdateRef = useRef(0);
-  const activeTimelineLayersRef = useRef({ key: "", visualLayers: [], audioLayers: [] });
+  const activeTimelineLayersRef = useRef({
+    key: "",
+    visualLayers: [],
+    audioLayers: [],
+    nextBoundary: Number.MAX_SAFE_INTEGER,
+  });
   const mediaAnalysisRef = useRef({
     waveformStarted: new Set(),
     thumbnailStarted: new Set(),
@@ -745,20 +636,34 @@ function App() {
   const [dropZoneTrackMode, setDropZoneTrackMode] = useState("av");
 
   // --- Settings (persisted in localStorage) ---
-  const [settings, setSettings] = useState(() => {
+  const loadSettings = useCallback(() => {
     try {
       const raw = localStorage.getItem("stonecutter.settings");
-      if (raw) return { imageDuration: 3, ...JSON.parse(raw) };
-    } catch {
-      /* ignored */
+      if (raw) {
+        try {
+          return { imageDuration: 3, ...JSON.parse(raw) };
+        } catch (e) {
+          console.error("Error parsing settings:", e);
+          return { imageDuration: 3 };
+        }
+      }
+    } catch (e) {
+      console.error("Error loading settings:", e);
     }
     return { imageDuration: 3 };
-  });
+  }, []);
+
+  const [settings, setSettings] = useState(loadSettings());
   const [showSettings, setShowSettings] = useState(false);
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [showExport, setShowExport] = useState(false);
   const [exportQuality, setExportQuality] = useState("medium");
   const [exportStatus, setExportStatus] = useState(null); // null | 'running' | { ok, msg }
+  const [exportProgress, setExportProgress] = useState({
+    progress: 0,
+    seconds: 0,
+    phase: "idle",
+  });
   const [previewTime, setPreviewTime] = useState(0);
   const [playbackMode, setPlaybackMode] = useState(null); // "timeline" | "source" | null
   const [currentProject, setCurrentProject] = useState(null); // { name, path, directory }
@@ -767,6 +672,7 @@ function App() {
   const [newProjectName, setNewProjectName] = useState("Untitled Project");
   const [projectStatus, setProjectStatus] = useState(null);
   const [isProjectDirty, setIsProjectDirty] = useState(false);
+  const [perfStats, setPerfStats] = useState(null);
   const [recentProjects, setRecentProjects] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem(RECENT_PROJECTS_KEY) || "[]");
@@ -780,6 +686,7 @@ function App() {
   const [inspectorTab, setInspectorTab] = useState("inspector"); // "inspector" | "effects" | "history"
   const [sidebarTab, setSidebarTab] = useState("media"); // "media" | "audio" | "text" | "effects" | "transitions" | "elements"
   const [activeNavTab, setActiveNavTab] = useState("media"); // top nav active tab
+  const [editingProjectName, setEditingProjectName] = useState(false);
 
   const revokeBrowserObjectUrls = useCallback((items) => {
     for (const item of items || []) {
@@ -1015,6 +922,60 @@ function App() {
     volume,
   ]);
 
+  useEffect(() => {
+    if (!isTauri) return undefined;
+    let unlisten = null;
+    let disposed = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen("export-progress", (event) => {
+          if (disposed || !event.payload) return;
+          const payload = event.payload;
+          setExportProgress({
+            progress: Math.max(0, Math.min(1, Number(payload.progress) || 0)),
+            seconds: Math.max(0, Number(payload.seconds) || 0),
+            phase: String(payload.phase || "render"),
+          });
+        }),
+      )
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch((err) => console.error('Tauri event listener error:', err));
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isDevMode) return undefined;
+    let raf = 0;
+    let frames = 0;
+    let last = performance.now();
+    const tick = () => {
+      frames += 1;
+      const now = performance.now();
+      if (now - last >= 1000) {
+        const memory = performance.memory
+          ? Math.round(performance.memory.usedJSHeapSize / 1024 / 1024)
+          : null;
+        setPerfStats({
+          fps: Math.round((frames * 1000) / (now - last)),
+          visualNodes: timelineVisualRefs.current.size,
+          audioNodes: timelineAudioRefs.current.size,
+          memory,
+        });
+        frames = 0;
+        last = now;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   const handleExport = async () => {
     if (!isTauri) return;
     const exportPlan = buildExportSegments({ clips, videos, tracks });
@@ -1040,9 +1001,10 @@ function App() {
       });
       if (!outputPath) return;
 
+      setExportProgress({ progress: 0, seconds: 0, phase: "render_audio_video" });
       setExportStatus("running");
       const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke("export_video", {
+      const result = await invoke("export_video_progress", {
         segments,
         outputPath,
         width: w,
@@ -1059,6 +1021,17 @@ function App() {
           ? "Export erfolgreich (kein Audiotrack in den Quellen – stilles Video)."
           : "Export erfolgreich!",
       });
+      setExportProgress({ progress: 1, seconds: totalEnd, phase: "done" });
+    } catch (err) {
+      setExportStatus({ ok: false, msg: String(err) });
+    }
+  };
+
+  const handleCancelExport = async () => {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("cancel_export");
     } catch (err) {
       setExportStatus({ ok: false, msg: String(err) });
     }
@@ -1076,7 +1049,7 @@ function App() {
   }, [playbackMode]);
 
   useEffect(() => {
-    if (!projectStatus) return undefined;
+    if (!projectStatus) return;
     const clearTimer = window.setTimeout(() => setProjectStatus(null), 1500);
     return () => {
       window.clearTimeout(clearTimer);
@@ -1388,6 +1361,7 @@ function App() {
     if (interaction.clipId) return new Set([interaction.clipId]);
     return null;
   }, [interaction]);
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const totalEnd = useMemo(
     () => getTimelineContentEnd(displayClips),
     [displayClips],
@@ -1462,6 +1436,16 @@ function App() {
     [createHistorySnapshot, pushHistory],
   );
 
+  const scheduleInspectorHistoryCommit = useCallback(() => {
+    if (!inspectorEditTimerRef.current) {
+      pushHistory(createHistorySnapshot());
+    }
+    window.clearTimeout(inspectorEditTimerRef.current);
+    inspectorEditTimerRef.current = window.setTimeout(() => {
+      inspectorEditTimerRef.current = 0;
+    }, 350);
+  }, [createHistorySnapshot, pushHistory]);
+
   const undo = useCallback(() => {
     const past = historyRef.current.past;
     if (past.length === 0) return;
@@ -1492,11 +1476,26 @@ function App() {
   const handleAddTrack = useCallback((type) => {
     setTracks((prev) => addTrackToList(prev, type));
   }, []);
+
   const handleRemoveTrack = useCallback((trackId) => {
     setTracks((prev) => removeTrackFromList(prev, trackId));
-    // Remove all clips on this track
-    setClips((prev) => prev.filter((c) => c.trackId !== trackId));
+    setClips((prev) => {
+      const clipsToRemove = prev.filter((c) => c.trackId === trackId);
+      // Clean up linkGroupId for clips being removed to prevent orphaned groups
+      const removedLinkGroupIds = new Set(clipsToRemove.map(c => c.linkGroupId).filter(Boolean));
+      if (removedLinkGroupIds.size > 0) {
+        // If any clips remain with these linkGroupIds, they should be unlinked
+        return prev.map(c => {
+          if (c.trackId !== trackId && c.linkGroupId && removedLinkGroupIds.has(c.linkGroupId)) {
+            return { ...c, linkGroupId: null };
+          }
+          return c.trackId === trackId ? null : c;
+        }).filter(Boolean);
+      }
+      return prev.filter((c) => c.trackId !== trackId);
+    });
   }, []);
+
   const handleUpdateTrack = useCallback((trackId, changes) => {
     setTracks((prev) => updateTrackInList(prev, trackId, changes));
   }, []);
@@ -1666,6 +1665,20 @@ function App() {
     [pxPerSec],
   );
 
+  const getNextTimelineLayerBoundary = useCallback((time, clipList = clips) => {
+    let boundary = Number.MAX_SAFE_INTEGER;
+    for (const clip of clipList) {
+      const end = clip.startTime + (clip.outPoint - clip.inPoint);
+      if (clip.startTime > time + TIMELINE_LAYER_BOUNDARY_EPSILON) {
+        boundary = Math.min(boundary, clip.startTime);
+      }
+      if (end > time + TIMELINE_LAYER_BOUNDARY_EPSILON) {
+        boundary = Math.min(boundary, end);
+      }
+    }
+    return Number.isFinite(boundary) ? boundary : Number.MAX_SAFE_INTEGER;
+  }, [clips]);
+
   const setTimelinePlayheadRef = useCallback(
     (index) => (node) => {
       timelinePlayheadRefs.current[index] = node;
@@ -1749,7 +1762,12 @@ function App() {
     let promise;
     promise = new Promise((resolve) => {
       let done = false;
-      let timeoutId = 0;
+      let timeoutId = window.setTimeout(() => {
+        if (done) return;
+        done = true;
+        node.removeEventListener("seeked", finish);
+        resolve();
+      }, TIMELINE_MEDIA_SEEK_TIMEOUT_MS);
       const finish = () => {
         if (done) return;
         done = true;
@@ -1758,12 +1776,6 @@ function App() {
         resolve();
       };
       node.addEventListener("seeked", finish, { once: true });
-      timeoutId = window.setTimeout(finish, TIMELINE_MEDIA_SEEK_TIMEOUT_MS);
-      try {
-        node.currentTime = sourceTime;
-      } catch {
-        finish();
-      }
     }).finally(() => {
       if (timelineMediaSeekPromisesRef.current.get(node) === promise) {
         timelineMediaSeekPromisesRef.current.delete(node);
@@ -1925,7 +1937,7 @@ function App() {
     pauseTimelinePreviewMedia();
     setPlaybackMode("source");
     setEditorFocus(FOCUS_SOURCE);
-    videoEl.play().catch(() => {});
+    videoEl.play().catch((err) => console.error('Source preview play error:', err));
   }, [
     activeSourceSelection,
     activeVideo,
@@ -2014,7 +2026,7 @@ function App() {
       }
       if (pendingPlayRef.current) {
         pendingPlayRef.current = false;
-        videoRef.current.play().catch(() => {});
+        videoRef.current.play().catch((err) => console.error('Video play error:', err));
       }
     }
   };
@@ -2057,12 +2069,15 @@ function App() {
       if (!node) continue;
       const sourceTime = getTimelineClipSourceTime(clip, timelineTime);
       const drift = Math.abs((node.currentTime || 0) - sourceTime);
+      const driftTolerance = shouldPlay
+        ? TIMELINE_PLAYING_VIDEO_DRIFT_TOLERANCE
+        : TIMELINE_PAUSED_DRIFT_TOLERANCE;
       node.muted = true;
       node.volume = 0;
-      if (drift > (shouldPlay ? 0.05 : 0.02)) {
+      if (drift > driftTolerance) {
         waitForTimelineMediaSeek(node, sourceTime).then(() => {
           if (playbackModeRef.current === "timeline" && playbackRef.current.isPlaying) {
-            node.play().catch(() => {});
+            node.play().catch((err) => console.error('Timeline visual play error after seek:', err));
           }
         });
         continue;
@@ -2072,7 +2087,7 @@ function App() {
         !node.seeking &&
         performance.now() >= timelineSeekGraceUntilRef.current
       ) {
-        node.play().catch(() => {});
+        node.play().catch((err) => console.error('Timeline visual play error:', err));
       } else if (!node.paused) {
         node.pause();
       }
@@ -2083,6 +2098,9 @@ function App() {
       if (!node) continue;
       const sourceTime = getTimelineClipSourceTime(clip, timelineTime);
       const drift = Math.abs((node.currentTime || 0) - sourceTime);
+      const driftTolerance = shouldPlay
+        ? TIMELINE_PLAYING_AUDIO_DRIFT_TOLERANCE
+        : TIMELINE_PAUSED_DRIFT_TOLERANCE;
       const clipVolume = clip.volume ?? 1;
       const clipDurAudio = clip.outPoint - clip.inPoint;
       const fadeInAudio = clip.fadeIn ?? 0;
@@ -2100,14 +2118,14 @@ function App() {
       );
       node.volume = Math.min(1, effectiveVolume);
       node.muted = muted || effectiveVolume <= 0 || !!clip.clipMuted;
-      if (drift > (shouldPlay ? 0.05 : 0.02)) {
+      if (drift > driftTolerance) {
         waitForTimelineMediaSeek(node, sourceTime).then(() => {
           if (
             playbackModeRef.current === "timeline" &&
             playbackRef.current.isPlaying &&
             !node.muted
           ) {
-            node.play().catch(() => {});
+            node.play().catch((err) => console.error('Timeline audio play error after seek:', err));
           }
         });
         continue;
@@ -2118,7 +2136,7 @@ function App() {
         !node.seeking &&
         performance.now() >= timelineSeekGraceUntilRef.current
       ) {
-        node.play().catch(() => {});
+        node.play().catch((err) => console.error('Timeline audio play error:', err));
       } else if (!node.paused) {
         node.pause();
       }
@@ -2150,8 +2168,14 @@ function App() {
       ].join("|"),
       visualLayers: timelineVisualLayers,
       audioLayers: timelineAudioLayers,
+      nextBoundary: getNextTimelineLayerBoundary(timelineTime),
     };
-  }, [timelineAudioLayers, timelineVisualLayers]);
+  }, [
+    getNextTimelineLayerBoundary,
+    timelineAudioLayers,
+    timelineTime,
+    timelineVisualLayers,
+  ]);
 
   useEffect(() => {
     updateVisibleTimelineRange();
@@ -2204,8 +2228,18 @@ function App() {
       const nextTime = timelineState.timelineTime;
       timelineTimeRef.current = nextTime;
       updateTimelinePlayheadPosition(nextTime);
-      const currentClip = findClipAtTime(nextTime, state.clips);
-      playingClipIdRef.current = currentClip?.id || null;
+      const shouldSyncState =
+        nowMs - timelineLastStateUpdateRef.current >= 1000 / TIMELINE_STATE_FPS;
+      const shouldCheckLayers =
+        shouldSyncState ||
+        nextTime >=
+          activeTimelineLayersRef.current.nextBoundary -
+            TIMELINE_LAYER_BOUNDARY_EPSILON;
+      if (!shouldCheckLayers) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+
       const visualLayers = getTimelineVisualClips({
         time: nextTime,
         clips: state.clips,
@@ -2221,19 +2255,37 @@ function App() {
         ...audioLayers.map(({ clip }) => `a:${clip.id}`),
       ].join("|");
       const shouldSyncLayers = layerKey !== activeTimelineLayersRef.current.key;
-      const shouldSyncState =
-        shouldSyncLayers ||
-        nowMs - timelineLastStateUpdateRef.current >= 1000 / TIMELINE_STATE_FPS;
+      const activePlaybackClip =
+        visualLayers.at(-1)?.clip || (audioLayers.length > 0 ? audioLayers[0]?.clip : null) || null;
+      playingClipIdRef.current = activePlaybackClip?.id || null;
       if (shouldSyncState) {
         timelineLastStateUpdateRef.current = nowMs;
-        activeTimelineLayersRef.current = { key: layerKey, visualLayers, audioLayers };
+      }
+      if (shouldSyncState || shouldSyncLayers) {
+        activeTimelineLayersRef.current = {
+          key: layerKey,
+          visualLayers,
+          audioLayers,
+          nextBoundary: getNextTimelineLayerBoundary(nextTime, state.clips),
+        };
         setTimelineTime(nextTime);
+      } else {
+        activeTimelineLayersRef.current = {
+          ...activeTimelineLayersRef.current,
+          nextBoundary: getNextTimelineLayerBoundary(nextTime, state.clips),
+        };
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [isPlaying, playbackMode, timelinePlaybackLookups, updateTimelinePlayheadPosition]);
+  }, [
+    getNextTimelineLayerBoundary,
+    isPlaying,
+    playbackMode,
+    timelinePlaybackLookups,
+    updateTimelinePlayheadPosition,
+  ]);
 
   // --- import ---
   // Probe duration for newly imported videos so drag-from-sidebar can show a real-width preview.
@@ -2336,7 +2388,7 @@ function App() {
         videoRef.current
           .play()
           .then(() => setIsPlaying(true))
-          .catch(() => {});
+          .catch((err) => console.error('Video play error:', err));
       }
     }, 50);
   };
@@ -2593,7 +2645,7 @@ function App() {
       setDropZoneTrackMode(mediaType === "audio" ? "audio" : "av");
       const targetTrack =
         targetTrackId && targetTrackId !== "__below__"
-          ? tracks.find((t) => t.id === targetTrackId)
+          ? tracks.find((t) => t.id === targetTrackId) || null
           : null;
       const preview = computeImportPreview(
         "__explorer__",
@@ -2629,7 +2681,7 @@ function App() {
       const useSourceRange = draggedUseSourceRangeRef.current;
       const targetTrack =
         targetTrackId && targetTrackId !== "__below__"
-          ? tracks.find((t) => t.id === targetTrackId)
+          ? tracks.find((t) => t.id === targetTrackId) || null
           : null;
       const preview = computeImportPreview(
         videoId,
@@ -2694,7 +2746,7 @@ function App() {
     const dropTargetId = getTrackAtClientY(e.clientY);
     let targetTrack =
       dropTargetId && dropTargetId !== "__below__"
-        ? tracks.find((t) => t.id === dropTargetId)
+        ? tracks.find((t) => t.id === dropTargetId) || null
         : null;
 
     // Check for dropped files from Explorer
@@ -2887,7 +2939,7 @@ function App() {
 
     // Handle drag from sidebar
     const videoId = droppedVideoId;
-    const video = videos.find((v) => v.id === videoId);
+    const video = videos.find((v) => v.id === videoId) || null;
     if (!video) return;
     const trackMode = droppedTrackMode;
     const selection = droppedUsesSourceRange
@@ -3396,7 +3448,7 @@ function App() {
     if (playbackModeRef.current === "source") stopPlayback();
     setActiveClipId(clip.id);
     setActiveId(clip.videoId);
-    const media = videos.find((v) => v.id === clip.videoId);
+    const media = videos.find((v) => v.id === clip.videoId) || null;
     const x = getXInTracks(e.clientX);
     const i = {
       type: side === "left" ? "trim-left" : "trim-right",
@@ -3594,8 +3646,8 @@ function App() {
           const trackNonSelected = nonSelected.filter(
             (c) => c.trackId === primaryTargetTrackId,
           );
-          let maxRightShift = Infinity,
-            maxLeftShift = Infinity;
+          let maxRightShift = Number.MAX_SAFE_INTEGER,
+            maxLeftShift = Number.MAX_SAFE_INTEGER;
           for (const s of targetTrackSnaps) {
             const sE = s.startTime + (s.outPoint - s.inPoint);
             for (const n of trackNonSelected) {
@@ -3762,7 +3814,7 @@ function App() {
         it.moved = true;
       } else if (it.type === "trim-right") {
         const maxOutPoint =
-          orig.mediaType === "image" ? Infinity : orig.sourceDuration;
+          orig.mediaType === "image" ? Number.MAX_SAFE_INTEGER : (orig.sourceDuration || Number.MAX_SAFE_INTEGER);
         let newOutPoint = Math.max(
           orig.inPoint + MIN_CLIP_DURATION,
           Math.min(maxOutPoint, orig.outPoint + deltaSec),
@@ -3953,7 +4005,7 @@ function App() {
           if (oE <= clip.startTime + 1e-3 && oE > leftLimit) leftLimit = oE;
         }
         const oldRight = clip.startTime + (clip.outPoint - clip.inPoint);
-        let rightLimit = Infinity;
+        let rightLimit = Number.MAX_SAFE_INTEGER;
         for (const o of others) {
           if (o.startTime >= oldRight - 1e-3 && o.startTime < rightLimit)
             rightLimit = o.startTime;
@@ -4388,7 +4440,7 @@ function App() {
           }
           commitClips(merged);
           setSelectedClipIds(new Set(newIds));
-          setActiveClipId(newIds[0]);
+          setActiveClipId(newIds.length > 0 ? newIds[0] : null);
         }
       } else if (
         e.code === "ArrowLeft" &&
@@ -4492,6 +4544,10 @@ function App() {
         0,
         Math.min(2, d.startVolume - (dy / trackHeight) * 2),
       );
+      if (!d.historyPushed) {
+        pushHistory(d.historyBefore);
+        d.historyPushed = true;
+      }
       setClips((prev) =>
         prev.map((c) => (c.id === d.clipId ? { ...c, volume: newVol } : c)),
       );
@@ -4507,7 +4563,7 @@ function App() {
       document.removeEventListener("mousemove", onVolLineMove);
       document.removeEventListener("mouseup", onVolLineUp);
     };
-  }, []);
+  }, [pushHistory]);
 
   // Fade handle drag (DaVinci Resolve style)
   useEffect(() => {
@@ -4517,6 +4573,10 @@ function App() {
       const dx = e.clientX - d.startX;
       const deltaSec = dx / d.pxPerSec;
       const maxFade = d.dur * 0.95;
+      if (!d.historyPushed) {
+        pushHistory(d.historyBefore);
+        d.historyPushed = true;
+      }
       if (d.side === "in") {
         const newFade = Math.max(0, Math.min(maxFade, d.startFade + deltaSec));
         setClips((prev) =>
@@ -4538,7 +4598,7 @@ function App() {
       document.removeEventListener("mousemove", onFadeMove);
       document.removeEventListener("mouseup", onFadeUp);
     };
-  }, []);
+  }, [pushHistory]);
 
   // Generate waveforms for clips' source videos (cached per videoId)
   useEffect(() => {
@@ -4569,7 +4629,7 @@ function App() {
       await runNext();
     };
     const workers = Array.from({ length: Math.min(2, jobs.length) }, runNext);
-    Promise.all(workers).catch(() => {});
+    Promise.all(workers).catch((err) => console.error('Waveform generation error:', err));
     return () => {
       cancelled = true;
     };
@@ -4610,7 +4670,7 @@ function App() {
       await runNext();
     };
     const workers = Array.from({ length: Math.min(2, jobs.length) }, runNext);
-    Promise.all(workers).catch(() => {});
+    Promise.all(workers).catch((err) => console.error('Thumbnail generation error:', err));
     return () => {
       cancelled = true;
     };
@@ -4731,12 +4791,16 @@ function App() {
     : activeClip?.name;
   const updateInspectorClip = useCallback(
     (clipId, patch) => {
-      commitClips(
-        clips.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
+      scheduleInspectorHistoryCommit();
+      setClips((prev) =>
+        prev.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
       );
     },
-    [clips, commitClips],
+    [scheduleInspectorHistoryCommit],
   );
+  useEffect(() => {
+    return () => window.clearTimeout(inspectorEditTimerRef.current);
+  }, [pushHistory]);
   const vidClip = inspectorVideoClip;
   const audClip = inspectorAudioClip;
   const isLinked = inspectorIsLinked;
@@ -4876,43 +4940,46 @@ function App() {
           <img src={logoUrl} alt="StoneCutter" className="topbar-logo" draggable={false} />
           <span className="topbar-app-name">StoneCutter</span>
         </div>
-        <div className="topbar-nav">
-          {[
-            { id: "media", label: "Media", icon: NavIcon.Media },
-            { id: "effects", label: "Effects", icon: NavIcon.Effects },
-            { id: "transitions", label: "Transitions", icon: NavIcon.Transitions },
-            { id: "text", label: "Text", icon: NavIcon.Text },
-            { id: "audio", label: "Audio", icon: NavIcon.Audio },
-            { id: "export", label: "Export", icon: NavIcon.ExportNav },
-          ].map(({ id, label, icon: TabIcon }) => (
-            <button
-              key={id}
-              className={`topbar-nav-btn ${activeNavTab === id ? "active" : ""}`}
-              onClick={() => {
-                setActiveNavTab(id);
-                if (id === "export") { setExportStatus(null); setShowExport(true); }
-                else if (id === "media") setSidebarTab("media");
-                else if (id === "audio") setSidebarTab("audio");
-                else if (id === "effects") setSidebarTab("effects");
-                else if (id === "transitions") setSidebarTab("transitions");
-                else if (id === "text") setSidebarTab("text");
-              }}
-            >
-              <TabIcon />
-              {label}
-            </button>
-          ))}
-        </div>
         <div className="topbar-center">
-          <button
-            className="topbar-project-name"
-            onClick={() => setShowProjectStart(true)}
-            title="Startscreen anzeigen"
-          >
-            {currentProject?.name || "Untitled Project"}
-            {isProjectDirty && <span className="topbar-save-indicator" />}
-            <span className="topbar-project-chevron">▾</span>
-          </button>
+          <div className="topbar-project-info">
+            {editingProjectName ? (
+              <input
+                type="text"
+                className="topbar-project-name-input"
+                defaultValue={currentProject?.name || "Untitled Project"}
+                autoFocus
+                onBlur={(e) => {
+                  const newName = e.target.value.trim();
+                  if (newName && currentProject) {
+                    setCurrentProject({ ...currentProject, name: newName });
+                    setIsProjectDirty(true);
+                  }
+                  setEditingProjectName(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.target.blur();
+                  } else if (e.key === "Escape") {
+                    setEditingProjectName(false);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                className="topbar-project-name"
+                onClick={() => setEditingProjectName(true)}
+                title="Projekt umbenennen"
+              >
+                {currentProject?.name || "Untitled Project"}
+                {isProjectDirty && <span className="topbar-save-indicator" />}
+              </button>
+            )}
+            {currentProject?.path && (
+              <div className="topbar-project-path" title={currentProject.path}>
+                {currentProject.path}
+              </div>
+            )}
+          </div>
         </div>
         <div className="topbar-right">
           <button className="topbar-btn" onClick={undo} title="Rückgängig (Ctrl+Z)" disabled={historySizes.past === 0}>
@@ -5951,6 +6018,8 @@ function App() {
                                     startY: e.clientY,
                                     startVolume: clip.volume ?? 1,
                                     trackHeight: shellHeight,
+                                    historyBefore: createHistorySnapshot(),
+                                    historyPushed: false,
                                   };
                                 }}
                               >
@@ -6015,6 +6084,8 @@ function App() {
                                 startFade: clip.fadeIn ?? 0,
                                 dur,
                                 pxPerSec,
+                                historyBefore: createHistorySnapshot(),
+                                historyPushed: false,
                               };
                             }}
                             title={`Fade-In: ${(clip.fadeIn ?? 0).toFixed(1)}s`}
@@ -6033,6 +6104,8 @@ function App() {
                                 startFade: clip.fadeOut ?? 0,
                                 dur,
                                 pxPerSec,
+                                historyBefore: createHistorySnapshot(),
+                                historyPushed: false,
                               };
                             }}
                             title={`Fade-Out: ${(clip.fadeOut ?? 0).toFixed(1)}s`}
@@ -6313,6 +6386,15 @@ function App() {
         </div>
       </section>
 
+      {isDevMode && perfStats && (
+        <div className="perf-overlay" aria-label="Performance monitor">
+          <span>{perfStats.fps} FPS</span>
+          <span>V {perfStats.visualNodes}</span>
+          <span>A {perfStats.audioNodes}</span>
+          {perfStats.memory != null && <span>{perfStats.memory} MB</span>}
+        </div>
+      )}
+
       {/* Export modal */}
       {showExport && (
         <div
@@ -6346,6 +6428,22 @@ function App() {
                     FFmpeg läuft… Das kann bei langen Videos einige Minuten
                     dauern.
                   </p>
+                  <div className="export-progress-shell" aria-label="Export-Fortschritt">
+                    <div
+                      className="export-progress-bar"
+                      style={{ width: `${Math.round(exportProgress.progress * 100)}%` }}
+                    />
+                  </div>
+                  <div className="export-progress-meta">
+                    <span>{Math.round(exportProgress.progress * 100)}%</span>
+                    <span>{formatTC(exportProgress.seconds)} / {formatTC(totalEnd)}</span>
+                  </div>
+                  <button
+                    className="export-action-btn danger"
+                    onClick={handleCancelExport}
+                  >
+                    Export abbrechen
+                  </button>
                 </div>
               ) : exportStatus?.ok != null ? (
                 <div
@@ -6514,368 +6612,22 @@ function App() {
 
       {/* Inspector Panel – linked-clip-aware */}
       {/* Show "no selection" placeholder when timeline is focused but nothing is selected */}
-      {!activeClipId && editorFocus === FOCUS_TIMELINE && (
-        <div className="inspector-panel">
-          <div className="inspector-tabs">
-            {["Inspector", "Effects", "History"].map(tab => (
-              <button
-                key={tab}
-                className={`inspector-tab ${inspectorTab === tab.toLowerCase() ? "active" : ""}`}
-                onClick={() => setInspectorTab(tab.toLowerCase())}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
-          {inspectorTab === "inspector" ? (
-            <div className="inspector-empty">Kein Clip ausgewählt</div>
-          ) : (
-            <div className="inspector-placeholder">
-              <p className="inspector-placeholder-title">{inspectorTab === "effects" ? "Effects" : "History"}</p>
-              <p className="inspector-placeholder-hint">Hier wird diese Funktion verfügbar sein.</p>
-            </div>
-          )}
-        </div>
-      )}
-      {activeClipId && activeClip && (
-            <div className="inspector-panel">
-              <div className="inspector-tabs">
-                {["Inspector", "Effects", "History"].map(tab => (
-                  <button
-                    key={tab}
-                    className={`inspector-tab ${inspectorTab === tab.toLowerCase() ? "active" : ""}`}
-                    onClick={() => setInspectorTab(tab.toLowerCase())}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-              <div className="inspector-header">
-                <div className="inspector-title">
-                  {vidClip ? "Video" : "Audio"}
-                  {isLinked && (
-                    <span className="inspector-linked-badge">V+A</span>
-                  )}
-                </div>
-                <div className="inspector-clip-name" title={displayName}>
-                  {displayName}
-                </div>
-              </div>
-              <div className="inspector-body">
-                {inspectorTab !== "inspector" ? (
-                  <div className="inspector-placeholder">
-                    <p className="inspector-placeholder-title">{inspectorTab === "effects" ? "Effects" : "History"}</p>
-                    <p className="inspector-placeholder-hint">Hier wird diese Funktion verfügbar sein.</p>
-                  </div>
-                ) : (<>
-                {/* ─── VIDEO TRANSFORM + FADE ─── */}
-                {vidClip &&
-                  (() => {
-                    const vDur = vidClip.outPoint - vidClip.inPoint;
-                    return (
-                      <InspectorCollapsible title="Transform" icon>
-                        <InspectorDragger
-                          label="Pos X"
-                          value={vidClip.positionX ?? 0}
-                          onChange={(v) =>
-                            updClip(vidClip.id, { positionX: v })
-                          }
-                          min={-960}
-                          max={960}
-                          step={1}
-                        />
-                        <InspectorDragger
-                          label="Pos Y"
-                          value={vidClip.positionY ?? 0}
-                          onChange={(v) =>
-                            updClip(vidClip.id, { positionY: v })
-                          }
-                          min={-540}
-                          max={540}
-                          step={1}
-                        />
-                        <InspectorDragger
-                          label="Scale"
-                          value={vidClip.scale ?? 100}
-                          onChange={(v) => updClip(vidClip.id, { scale: v })}
-                          min={0}
-                          max={400}
-                          step={1}
-                          unit="%"
-                        />
-                        <InspectorDragger
-                          label="Rotation"
-                          value={vidClip.rotation ?? 0}
-                          onChange={(v) => updClip(vidClip.id, { rotation: v })}
-                          min={-180}
-                          max={180}
-                          step={1}
-                          unit="°"
-                        />
-                        <InspectorDragger
-                          label="Opacity"
-                          value={vidClip.opacity ?? 100}
-                          onChange={(v) => updClip(vidClip.id, { opacity: v })}
-                          min={0}
-                          max={100}
-                          step={1}
-                          unit="%"
-                        />
-                        {/* Flip toggles */}
-                        <div className="idf-row">
-                          <span className="idf-label">Flip</span>
-                          <div className="insp-flip-group">
-                            <button
-                              className={`insp-flip-btn ${vidClip.flipH ? "active" : ""}`}
-                              onClick={() =>
-                                updClip(vidClip.id, { flipH: !vidClip.flipH })
-                              }
-                              title="Horizontal spiegeln"
-                            >
-                              &#8596; H
-                            </button>
-                            <button
-                              className={`insp-flip-btn ${vidClip.flipV ? "active" : ""}`}
-                              onClick={() =>
-                                updClip(vidClip.id, { flipV: !vidClip.flipV })
-                              }
-                              title="Vertikal spiegeln"
-                            >
-                              &#8597; V
-                            </button>
-                          </div>
-                        </div>
-                        <div className="inspector-divider" />
-                        <div className="inspector-section-subtitle">
-                          Video Fade
-                        </div>
-                        <InspectorDragger
-                          label="Fade In"
-                          value={vidClip.fadeIn ?? 0}
-                          onChange={(v) =>
-                            updClip(vidClip.id, {
-                              fadeIn: Math.min(v, vDur * 0.95),
-                            })
-                          }
-                          min={0}
-                          max={Math.max(0.1, vDur)}
-                          step={0.1}
-                          unit="s"
-                          decimals={1}
-                        />
-                        <InspectorDragger
-                          label="Fade Out"
-                          value={vidClip.fadeOut ?? 0}
-                          onChange={(v) =>
-                            updClip(vidClip.id, {
-                              fadeOut: Math.min(v, vDur * 0.95),
-                            })
-                          }
-                          min={0}
-                          max={Math.max(0.1, vDur)}
-                          step={0.1}
-                          unit="s"
-                          decimals={1}
-                        />
-                      </InspectorCollapsible>
-                    );
-                  })()}
-
-                {/* ─── COLOR CORRECTION ─── */}
-                {vidClip && (
-                  <InspectorCollapsible title="Color" icon>
-                    <InspectorDragger
-                      label="Brightness"
-                      value={vidClip.brightness ?? 0}
-                      onChange={(v) => updClip(vidClip.id, { brightness: v })}
-                      min={-100}
-                      max={100}
-                      step={1}
-                    />
-                    <InspectorDragger
-                      label="Contrast"
-                      value={vidClip.contrast ?? 0}
-                      onChange={(v) => updClip(vidClip.id, { contrast: v })}
-                      min={-100}
-                      max={100}
-                      step={1}
-                    />
-                    <InspectorDragger
-                      label="Saturation"
-                      value={vidClip.saturation ?? 0}
-                      onChange={(v) => updClip(vidClip.id, { saturation: v })}
-                      min={-100}
-                      max={100}
-                      step={1}
-                    />
-                    <InspectorDragger
-                      label="Temperature"
-                      value={vidClip.temperature ?? 0}
-                      onChange={(v) => updClip(vidClip.id, { temperature: v })}
-                      min={-100}
-                      max={100}
-                      step={1}
-                    />
-                    {/* Reset color button */}
-                    {vidClip.brightness ||
-                    vidClip.contrast ||
-                    vidClip.saturation ||
-                    vidClip.temperature ? (
-                      <button
-                        className="insp-reset-btn"
-                        onClick={() =>
-                          updClip(vidClip.id, {
-                            brightness: 0,
-                            contrast: 0,
-                            saturation: 0,
-                            temperature: 0,
-                          })
-                        }
-                      >
-                        Reset Color
-                      </button>
-                    ) : null}
-                  </InspectorCollapsible>
-                )}
-
-                {/* ─── SPEED ─── */}
-                {vidClip && (
-                  <InspectorCollapsible title="Speed" icon>
-                    <InspectorDragger
-                      label="Speed"
-                      value={vidClip.speed ?? 100}
-                      onChange={(v) => updClip(vidClip.id, { speed: v })}
-                      min={10}
-                      max={400}
-                      step={1}
-                      unit="%"
-                    />
-                  </InspectorCollapsible>
-                )}
-
-                {/* ─── AUDIO ─── */}
-                {audClip &&
-                  (() => {
-                    const aDur = audClip.outPoint - audClip.inPoint;
-                    return (
-                      <InspectorCollapsible title="Audio" icon>
-                        <InspectorDragger
-                          label="Volume"
-                          value={Math.round((audClip.volume ?? 1) * 100)}
-                          onChange={(v) =>
-                            updClip(audClip.id, { volume: v / 100 })
-                          }
-                          min={0}
-                          max={200}
-                          step={1}
-                          unit="%"
-                        />
-                        <InspectorDragger
-                          label="Pan"
-                          value={audClip.pan ?? 0}
-                          onChange={(v) => updClip(audClip.id, { pan: v })}
-                          min={-100}
-                          max={100}
-                          step={1}
-                        />
-                        {/* Mute toggle */}
-                        <div className="idf-row">
-                          <span className="idf-label">Mute</span>
-                          <button
-                            className={`insp-toggle-btn ${audClip.clipMuted ? "active danger" : ""}`}
-                            onClick={() =>
-                              updClip(audClip.id, {
-                                clipMuted: !audClip.clipMuted,
-                              })
-                            }
-                            title={
-                              audClip.clipMuted
-                                ? "Stummschaltung aufheben"
-                                : "Clip stummschalten"
-                            }
-                          >
-                            {audClip.clipMuted ? "🔇 Muted" : "🔊 Unmuted"}
-                          </button>
-                        </div>
-                        <div className="inspector-divider" />
-                        <div className="inspector-section-subtitle">
-                          Audio Fade
-                        </div>
-                        <InspectorDragger
-                          label="Fade In"
-                          value={audClip.fadeIn ?? 0}
-                          onChange={(v) =>
-                            updClip(audClip.id, {
-                              fadeIn: Math.min(v, aDur * 0.95),
-                            })
-                          }
-                          min={0}
-                          max={Math.max(0.1, aDur)}
-                          step={0.1}
-                          unit="s"
-                          decimals={1}
-                        />
-                        <InspectorDragger
-                          label="Fade Out"
-                          value={audClip.fadeOut ?? 0}
-                          onChange={(v) =>
-                            updClip(audClip.id, {
-                              fadeOut: Math.min(v, aDur * 0.95),
-                            })
-                          }
-                          min={0}
-                          max={Math.max(0.1, aDur)}
-                          step={0.1}
-                          unit="s"
-                          decimals={1}
-                        />
-                      </InspectorCollapsible>
-                    );
-                  })()}
-
-                {/* ─── CLIP INFO (read-only) ─── */}
-                {(() => {
-                  const infoClip = vidClip || audClip;
-                  const infoTrack = tracks.find(
-                    (t) => t.id === infoClip?.trackId,
-                  );
-                  const infoDur = infoClip
-                    ? infoClip.outPoint - infoClip.inPoint
-                    : 0;
-                  return infoClip ? (
-                    <InspectorCollapsible title="Clip Info" icon defaultOpen={false}>
-                      <div className="insp-info-row">
-                        <span>Name</span>
-                        <span title={infoClip.name}>{infoClip.name}</span>
-                      </div>
-                      <div className="insp-info-row">
-                        <span>Type</span>
-                        <span>
-                          {infoTrack?.type ?? activeTrack?.type ?? "–"}
-                        </span>
-                      </div>
-                      <div className="insp-info-row">
-                        <span>Start</span>
-                        <span>{formatTC(infoClip.startTime)}</span>
-                      </div>
-                      <div className="insp-info-row">
-                        <span>End</span>
-                        <span>{formatTC(infoClip.startTime + infoDur)}</span>
-                      </div>
-                      <div className="insp-info-row">
-                        <span>Duration</span>
-                        <span>{formatTC(infoDur)}</span>
-                      </div>
-                      <div className="insp-info-row">
-                        <span>Linked</span>
-                        <span>{isLinked ? "✓ V+A" : "–"}</span>
-                      </div>
-                    </InspectorCollapsible>
-                  ) : null;
-                })()}
-                </>)}
-              </div>
-            </div>
+      {/* Inspector Panel */}
+      {editorFocus === FOCUS_TIMELINE && (
+        <InspectorPanel
+          activeClip={activeClip}
+          activeClipId={activeClipId}
+          activeTrack={activeTrack}
+          audClip={audClip}
+          displayName={displayName}
+          formatTC={formatTC}
+          inspectorTab={inspectorTab}
+          isLinked={isLinked}
+          onTabChange={setInspectorTab}
+          onUpdateClip={updClip}
+          tracksById={tracksById}
+          vidClip={vidClip}
+        />
       )}
 
       {/* Context menu */}

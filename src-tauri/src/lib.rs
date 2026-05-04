@@ -1,13 +1,32 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+use tauri::Emitter;
 
 #[derive(serde::Serialize)]
 struct ProjectFileInfo {
     path: String,
     directory: String,
     name: String,
+}
+
+#[derive(Default)]
+struct ExportState {
+    child: Mutex<Option<Arc<Mutex<Child>>>>,
+    cancel_requested: AtomicBool,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ExportProgress {
+    progress: f64,
+    seconds: f64,
+    phase: String,
 }
 
 fn sanitize_project_name(name: &str) -> String {
@@ -393,6 +412,9 @@ fn build_ffmpeg_args(
         "-hide_banner".to_string(),
         "-loglevel".to_string(),
         "error".to_string(),
+        "-nostats".to_string(),
+        "-progress".to_string(),
+        "pipe:1".to_string(),
     ];
     let mut filters: Vec<String> = Vec::new();
     let mut a_labels: Vec<String> = Vec::new();
@@ -604,8 +626,154 @@ fn ffmpeg_error_looks_like_missing_audio(stderr: &str) -> bool {
         || lower.contains("matches no streams")
 }
 
+fn stderr_tail(stderr: &str) -> String {
+    let chars: Vec<char> = stderr.chars().collect();
+    let start = chars.len().saturating_sub(800);
+    chars[start..].iter().collect()
+}
+
+fn parse_ffmpeg_progress_seconds(line: &str) -> Option<f64> {
+    let value = line
+        .strip_prefix("out_time_ms=")
+        .or_else(|| line.strip_prefix("out_time_us="))?;
+    let micros = value.trim().parse::<f64>().ok()?;
+    micros.is_finite().then_some((micros / 1_000_000.0).max(0.0))
+}
+
+fn parse_ffmpeg_out_time(line: &str) -> Option<f64> {
+    let value = line.strip_prefix("out_time=")?;
+    let mut parts = value.trim().split(':');
+    let hours = parts.next()?.parse::<f64>().ok()?;
+    let minutes = parts.next()?.parse::<f64>().ok()?;
+    let seconds = parts.next()?.parse::<f64>().ok()?;
+    Some((hours * 3600.0 + minutes * 60.0 + seconds).max(0.0))
+}
+
+fn emit_export_progress(app: &tauri::AppHandle, seconds: f64, total: f64, phase: &str) {
+    let progress = if total > 0.0 {
+        (seconds / total).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let _ = app.emit(
+        "export-progress",
+        ExportProgress {
+            progress,
+            seconds,
+            phase: phase.to_string(),
+        },
+    );
+}
+
+fn run_ffmpeg_with_progress(
+    app: &tauri::AppHandle,
+    state: &ExportState,
+    args: Vec<String>,
+    total_duration: f64,
+    phase: &str,
+) -> Result<std::process::Output, String> {
+    if state
+        .child
+        .lock()
+        .map_err(|_| "Export-Status konnte nicht gesperrt werden.".to_string())?
+        .is_some()
+    {
+        return Err("Es laeuft bereits ein Export.".to_string());
+    }
+
+    let mut child = Command::new("ffmpeg")
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "FFmpeg nicht gefunden. Bitte FFmpeg installieren und zum PATH hinzufuegen.\nDownload: https://ffmpeg.org/download.html".to_string()
+            } else {
+                format!("FFmpeg-Startfehler: {e}")
+            }
+        })?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child = Arc::new(Mutex::new(child));
+    *state
+        .child
+        .lock()
+        .map_err(|_| "Export-Status konnte nicht gesperrt werden.".to_string())? =
+        Some(child.clone());
+    emit_export_progress(app, 0.0, total_duration, phase);
+
+    let progress_app = app.clone();
+    let progress_phase = phase.to_string();
+    let progress_thread = stdout.map(|stdout| {
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                let seconds = parse_ffmpeg_progress_seconds(&line)
+                    .or_else(|| parse_ffmpeg_out_time(&line));
+                if let Some(seconds) = seconds {
+                    emit_export_progress(&progress_app, seconds, total_duration, &progress_phase);
+                }
+            }
+        })
+    });
+
+    let stderr_buffer = Arc::new(Mutex::new(String::new()));
+    let stderr_thread = stderr.map(|mut stderr| {
+        let stderr_buffer = stderr_buffer.clone();
+        thread::spawn(move || {
+            let mut text = String::new();
+            let _ = stderr.read_to_string(&mut text);
+            if let Ok(mut buffer) = stderr_buffer.lock() {
+                *buffer = text;
+            }
+        })
+    });
+
+    let status = loop {
+        if state.cancel_requested.load(Ordering::SeqCst) {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        }
+        let status = child
+            .lock()
+            .map_err(|_| "FFmpeg-Prozess konnte nicht gelesen werden.".to_string())?
+            .try_wait()
+            .map_err(|e| format!("FFmpeg-Fehler: {e}"))?;
+        if let Some(status) = status {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+
+    if let Some(handle) = progress_thread {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_thread {
+        let _ = handle.join();
+    }
+    *state
+        .child
+        .lock()
+        .map_err(|_| "Export-Status konnte nicht gesperrt werden.".to_string())? = None;
+
+    let stderr = stderr_buffer
+        .lock()
+        .map_err(|_| "FFmpeg-Fehlerausgabe konnte nicht gelesen werden.".to_string())?
+        .clone();
+    Ok(std::process::Output {
+        status,
+        stdout: Vec::new(),
+        stderr: stderr.into_bytes(),
+    })
+}
+
 #[tauri::command]
 fn export_video(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ExportState>,
     segments: Vec<ExportSegment>,
     output_path: String,
     width: u32,
@@ -616,16 +784,25 @@ fn export_video(
     if segments.is_empty() {
         return Err("Keine Clips auf der Timeline.".to_string());
     }
+    state.cancel_requested.store(false, Ordering::SeqCst);
+    let total_duration = segments
+        .iter()
+        .map(ExportSegment::end)
+        .fold(0.0, f64::max)
+        .max(0.001);
 
     // Try with audio first
     let args = build_ffmpeg_args(&segments, &output_path, width, height, true, crf, &preset);
-    let run = Command::new("ffmpeg").args(&args).output();
+    let run = run_ffmpeg_with_progress(
+        &app,
+        &state,
+        args,
+        total_duration,
+        "render_audio_video",
+    );
 
     match run {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err("FFmpeg nicht gefunden. Bitte FFmpeg installieren und zum PATH hinzufügen.\nDownload: https://ffmpeg.org/download.html".to_string());
-        }
-        Err(e) => return Err(format!("FFmpeg-Startfehler: {e}")),
+        Err(e) => return Err(e),
         Ok(out) if out.status.success() => return Ok(output_path),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -652,6 +829,96 @@ fn export_video(
             Err(format!("FFmpeg-Fehler:\n{}", &stderr[tail..]))
         }
     }
+}
+
+#[tauri::command]
+fn export_video_progress(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ExportState>,
+    segments: Vec<ExportSegment>,
+    output_path: String,
+    width: u32,
+    height: u32,
+    crf: u32,
+    preset: String,
+) -> Result<String, String> {
+    if segments.is_empty() {
+        return Err("Keine Clips auf der Timeline.".to_string());
+    }
+    state.cancel_requested.store(false, Ordering::SeqCst);
+    let total_duration = segments
+        .iter()
+        .map(ExportSegment::end)
+        .fold(0.0, f64::max)
+        .max(0.001);
+
+    let args = build_ffmpeg_args(&segments, &output_path, width, height, true, crf, &preset);
+    let run = run_ffmpeg_with_progress(
+        &app,
+        &state,
+        args,
+        total_duration,
+        "render_audio_video",
+    );
+
+    match run {
+        Err(e) => Err(e),
+        Ok(out) if out.status.success() => {
+            emit_export_progress(&app, total_duration, total_duration, "done");
+            Ok(output_path)
+        }
+        Ok(out) => {
+            if state.cancel_requested.load(Ordering::SeqCst) {
+                state.cancel_requested.store(false, Ordering::SeqCst);
+                return Err("Export abgebrochen.".to_string());
+            }
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if ffmpeg_error_looks_like_missing_audio(&stderr) {
+                let args2 =
+                    build_ffmpeg_args(&segments, &output_path, width, height, false, crf, &preset);
+                let run2 = run_ffmpeg_with_progress(
+                    &app,
+                    &state,
+                    args2,
+                    total_duration,
+                    "render_video_only",
+                )?;
+                if run2.status.success() {
+                    emit_export_progress(&app, total_duration, total_duration, "done");
+                    return Ok(format!("{output_path}|no_audio"));
+                }
+                if state.cancel_requested.load(Ordering::SeqCst) {
+                    state.cancel_requested.store(false, Ordering::SeqCst);
+                    return Err("Export abgebrochen.".to_string());
+                }
+                let stderr2 = String::from_utf8_lossy(&run2.stderr);
+                return Err(format!(
+                    "FFmpeg-Fehler (kein Audio):\n{}",
+                    stderr_tail(&stderr2)
+                ));
+            }
+            Err(format!("FFmpeg-Fehler:\n{}", stderr_tail(&stderr)))
+        }
+    }
+}
+
+#[tauri::command]
+fn cancel_export(state: tauri::State<'_, ExportState>) -> Result<(), String> {
+    state.cancel_requested.store(true, Ordering::SeqCst);
+    let Some(child) = state
+        .child
+        .lock()
+        .map_err(|_| "Export-Status konnte nicht gesperrt werden.".to_string())?
+        .clone()
+    else {
+        return Ok(());
+    };
+    child
+        .lock()
+        .map_err(|_| "FFmpeg-Prozess konnte nicht gesperrt werden.".to_string())?
+        .kill()
+        .map_err(|e| format!("Export konnte nicht abgebrochen werden: {e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -889,14 +1156,41 @@ mod tests {
         ));
         assert!(!ffmpeg_error_looks_like_missing_audio("Permission denied"));
     }
+
+    #[test]
+    fn parses_ffmpeg_progress_time_lines() {
+        assert_eq!(
+            parse_ffmpeg_progress_seconds("out_time_ms=2500000").unwrap(),
+            2.5
+        );
+        assert_eq!(
+            parse_ffmpeg_progress_seconds("out_time_us=1000000").unwrap(),
+            1.0
+        );
+        assert_eq!(
+            parse_ffmpeg_out_time("out_time=00:01:02.500000").unwrap(),
+            62.5
+        );
+        assert!(parse_ffmpeg_progress_seconds("progress=continue").is_none());
+    }
+
+    #[test]
+    fn stderr_tail_keeps_short_messages_and_truncates_long_messages() {
+        assert_eq!(stderr_tail("short"), "short");
+        let long = "x".repeat(900);
+        assert_eq!(stderr_tail(&long).len(), 800);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(ExportState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             export_video,
+            export_video_progress,
+            cancel_export,
             create_project_folder,
             save_project_file,
             load_project_file,

@@ -4,6 +4,7 @@ import {
   MIN_CLIP_DURATION,
 } from './timeline.js'
 import {
+  buildTimelinePlaybackLookups,
   findClipAtTime,
   findClipsAtTime,
   findNextClipAfter,
@@ -19,6 +20,12 @@ import {
   shouldLeaveClipPlayback,
   shouldStartNextClipFromGap,
 } from './playback.js'
+import {
+  buildThumbnailItems,
+  buildWaveformBars,
+  getVisibleTimelineRange,
+  groupVisibleClipsByTrack,
+} from './timelineRender.js'
 
 const clip = (id, startTime, inPoint, outPoint) => ({
   id,
@@ -93,6 +100,35 @@ test('returns audible clips while honoring audio mute and solo state', () => {
   assert.deepEqual(
     getTimelineAudibleClips({ time: 2, clips, tracks, videos }).map(({ clip }) => clip.id),
     ['solo']
+  )
+})
+
+test('reuses prepared playback lookups for visual and audible clip selection', () => {
+  const tracks = [
+    { id: 'track-v1', type: 'video' },
+    { id: 'track-a1', type: 'audio', muted: false },
+  ]
+  const videos = [
+    { id: 'image', mediaType: 'image', src: 'image.png' },
+    { id: 'voice', mediaType: 'audio', src: 'voice.wav' },
+  ]
+  const clips = [
+    { ...clip('image-clip', 0, 0, 5), videoId: 'image', trackId: 'track-v1', trackMode: 'video' },
+    { ...clip('voice-clip', 0, 0, 5), videoId: 'voice', trackId: 'track-a1', trackMode: 'audio' },
+  ]
+  const lookups = buildTimelinePlaybackLookups({ tracks, videos })
+
+  assert.equal(lookups.mediaById.get('image')?.src, 'image.png')
+  assert.equal(lookups.trackById.get('track-a1')?.type, 'audio')
+  assert.equal(lookups.trackOrder.get('track-a1'), 1)
+  assert.equal(lookups.hasSoloAudio, false)
+  assert.deepEqual(
+    getTimelineVisualClips({ time: 1, clips, lookups }).map(({ clip }) => clip.id),
+    ['image-clip']
+  )
+  assert.deepEqual(
+    getTimelineAudibleClips({ time: 1, clips, lookups }).map(({ clip }) => clip.id),
+    ['voice-clip']
   )
 })
 
@@ -223,6 +259,67 @@ test('plays tail gap without requesting a next clip transition', () => {
 
   assert.equal(tailState.timelineTime, 10.5)
   assert.equal(shouldStartNextClipFromGap({ timelineTime: tailState.timelineTime, nextClip: null }), false)
+})
+
+test('groups only visible timeline clips with overscan and forced includes', () => {
+  const clips = [
+    { ...clip('hidden-left', 0, 0, 2), trackId: 'v1' },
+    { ...clip('visible', 10, 0, 3), trackId: 'v1' },
+    { ...clip('included', 30, 0, 2), trackId: 'a1' },
+  ]
+  const range = getVisibleTimelineRange({
+    scrollLeft: 400,
+    clientWidth: 200,
+    pxPerSec: 40,
+    overscanPx: 0,
+  })
+  const grouped = groupVisibleClipsByTrack({
+    clips,
+    visibleRange: range,
+    includeIds: ['included'],
+  })
+
+  assert.deepEqual(grouped.get('v1').map((item) => item.id), ['visible'])
+  assert.deepEqual(grouped.get('a1').map((item) => item.id), ['included'])
+  assert.equal(grouped.has('missing'), false)
+})
+
+test('builds bounded waveform bars from peaks and placeholders', () => {
+  const peaks = Array.from({ length: 1000 }, (_, index) => index / 1000)
+  const bars = buildWaveformBars({
+    width: 3000,
+    peaks,
+    inPoint: 10,
+    outPoint: 90,
+    sourceDuration: 100,
+    volume: 2,
+  })
+  const placeholders = buildWaveformBars({
+    width: 3000,
+    peaks: null,
+    inPoint: 1,
+    seed: 4,
+  })
+
+  assert.equal(bars.length, 240)
+  assert.equal(bars.some((bar) => bar.placeholder), false)
+  assert.equal(placeholders.length, 240)
+  assert.equal(placeholders.every((bar) => bar.placeholder), true)
+})
+
+test('builds bounded thumbnail items from trimmed source ranges', () => {
+  const thumbs = Array.from({ length: 500 }, (_, index) => `thumb-${index}`)
+  const items = buildThumbnailItems({
+    width: 10000,
+    thumbs,
+    inPoint: 20,
+    outPoint: 80,
+    sourceDuration: 100,
+  })
+
+  assert.equal(items.length, 80)
+  assert.equal(items[0].url, 'thumb-100')
+  assert.equal(items.at(-1).sourceIndex < 400, true)
 })
 
 test('does not end a minimum-duration image clip before its exact end', () => {

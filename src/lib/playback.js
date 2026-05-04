@@ -25,6 +25,25 @@ const getTrackType = (track, clip) => {
   return clip.trackMode === 'audio' ? 'audio' : 'video'
 }
 
+export const buildTimelinePlaybackLookups = ({ tracks = [], videos = [] } = {}) => {
+  const mediaById = new Map()
+  const trackById = new Map()
+  const trackOrder = new Map()
+  let hasSoloAudio = false
+  videos.forEach((media) => mediaById.set(media.id, media))
+  tracks.forEach((track, index) => {
+    trackById.set(track.id, track)
+    trackOrder.set(track.id, index)
+    if (track.type === 'audio' && track.solo) hasSoloAudio = true
+  })
+  return {
+    mediaById,
+    trackById,
+    trackOrder,
+    hasSoloAudio,
+  }
+}
+
 export const findClipAtTime = (time, clips) => {
   let best = null
   for (const clip of clips) {
@@ -39,10 +58,9 @@ export const findClipsAtTime = (time, clips) => {
   return clips.filter((clip) => clipContainsTime(time, clip))
 }
 
-export const getTimelineVisualClips = ({ time, clips, tracks = [], videos = [] }) => {
-  const mediaById = new Map(videos.map((media) => [media.id, media]))
-  const trackById = new Map(tracks.map((track) => [track.id, track]))
-  const trackOrder = new Map(tracks.map((track, index) => [track.id, index]))
+export const getTimelineVisualClips = ({ time, clips, tracks = [], videos = [], lookups = null }) => {
+  const playbackLookups = lookups || buildTimelinePlaybackLookups({ tracks, videos })
+  const { mediaById, trackById, trackOrder } = playbackLookups
 
   return findClipsAtTime(time, clips)
     .map((clip) => {
@@ -66,11 +84,9 @@ export const getTimelineVisualClips = ({ time, clips, tracks = [], videos = [] }
       String(a.clip.id).localeCompare(String(b.clip.id)))
 }
 
-export const getTimelineAudibleClips = ({ time, clips, tracks = [], videos = [] }) => {
-  const mediaById = new Map(videos.map((media) => [media.id, media]))
-  const trackById = new Map(tracks.map((track) => [track.id, track]))
-  const trackOrder = new Map(tracks.map((track, index) => [track.id, index]))
-  const hasSoloAudio = tracks.some((track) => track.type === 'audio' && track.solo)
+export const getTimelineAudibleClips = ({ time, clips, tracks = [], videos = [], lookups = null }) => {
+  const playbackLookups = lookups || buildTimelinePlaybackLookups({ tracks, videos })
+  const { mediaById, trackById, trackOrder, hasSoloAudio } = playbackLookups
 
   return findClipsAtTime(time, clips)
     .map((clip) => {
@@ -95,14 +111,15 @@ export const getTimelineAudibleClips = ({ time, clips, tracks = [], videos = [] 
       String(a.clip.id).localeCompare(String(b.clip.id)))
 }
 
-export const getTopVisibleTimelineClip = ({ time, clips, tracks = [], videos = [] }) => {
-  const visualClips = getTimelineVisualClips({ time, clips, tracks, videos })
+export const getTopVisibleTimelineClip = ({ time, clips, tracks = [], videos = [], lookups = null }) => {
+  const visualClips = getTimelineVisualClips({ time, clips, tracks, videos, lookups })
   return visualClips.length > 0 ? visualClips[visualClips.length - 1].clip : findClipAtTime(time, clips)
 }
 
 export const getClipTimelineEnd = (clip) => clipEnd(clip)
 
 export const getTimelineContentEnd = (clips) => {
+  if (!clips || clips.length === 0) return 0;
   return clips.reduce((max, clip) => Math.max(max, clipEnd(clip)), 0)
 }
 
