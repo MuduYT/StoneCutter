@@ -4,6 +4,10 @@
   box-sizing: border-box;
 }
 
+::selection {
+  background: transparent;
+}
+
 body {
   font-family: system-ui, -apple-system, sans-serif;
 }

@@ -33,6 +33,7 @@ test('finds clips at the playhead and ignores exact clip end', () => {
 
   assert.equal(findClipAtTime(1, clips)?.id, 'a')
   assert.equal(findClipAtTime(3.99, clips)?.id, 'a')
+  assert.equal(findClipAtTime(3.999, clips)?.id, 'a')
   assert.equal(findClipAtTime(4, clips), null)
   assert.deepEqual(findClipsAtTime(1, clips).map((item) => item.id), ['a'])
 })

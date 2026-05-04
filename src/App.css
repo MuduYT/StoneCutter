@@ -1169,6 +1169,9 @@ button {
     transition:
         border-color 0.15s,
         background 0.15s;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
 }
 
 .timeline.drag-over {
@@ -1189,6 +1192,19 @@ button {
     background:
         linear-gradient(180deg, rgba(139, 92, 246, 0.14), transparent 60%),
         rgba(13, 10, 26, 0.96);
+}
+
+.timeline-container,
+.timeline-body,
+.timeline-tracks,
+.tracks,
+.tracks-content,
+.tracks-inner,
+.track-lane,
+.time-ruler {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
 }
 
 /* Toolbar */
@@ -1801,6 +1817,23 @@ button {
     padding: 3px 10px;
 }
 
+.audio-clip .clip-content {
+    position: relative;
+    z-index: 1;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 10px 5px;
+}
+
+.waveform-shell {
+    position: relative;
+    min-height: 30px;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
 .audio-clip {
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 50%),
@@ -1938,22 +1971,72 @@ button {
 
 /* Waveform */
 .waveform {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: space-around;
     width: 100%;
     height: 100%;
     gap: 1px;
-    padding: 0 6px;
+    padding: 0 8px;
     pointer-events: none;
 }
 
 .wave-bar {
     flex: 1;
-    background: rgba(255, 255, 255, 0.7);
-    border-radius: 1px;
+    background: rgba(255, 255, 255, 0.72);
+    border-radius: 999px;
     min-width: 2px;
     max-width: 3px;
+}
+
+.waveform-volume-overlay {
+    position: absolute;
+    left: 8px;
+    right: 12px;
+    transform: translateY(-50%);
+    height: 18px;
+    pointer-events: all;
+    cursor: ns-resize;
+    z-index: 4;
+}
+
+.waveform-volume-line {
+    position: absolute;
+    left: 0;
+    right: 18px;
+    top: 50%;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(249, 115, 22, 0.18), var(--orange-accent), rgba(249, 115, 22, 0.22));
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.4);
+}
+
+.waveform-volume-handle {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    transform: translateY(-50%);
+    background: linear-gradient(180deg, #fdba74, var(--orange-accent));
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.16),
+        0 0 10px rgba(249, 115, 22, 0.45);
+}
+
+.waveform-volume-label {
+    position: absolute;
+    right: 18px;
+    top: -14px;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    font-size: 9px;
+    font-weight: 700;
+    color: #fed7aa;
+    letter-spacing: 0;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 /* Drag Ghost */
@@ -2266,14 +2349,14 @@ button {
 
 /* Multi-selected clip highlight (in addition to .active) */
 .clip.selected {
-    outline: 2px solid rgba(124, 58, 237, 0.95);
+    outline: 2px solid rgba(249, 115, 22, 0.95);
     outline-offset: -2px;
     box-shadow:
-        0 0 0 1px rgba(255, 255, 255, 0.5),
-        0 4px 16px rgba(124, 58, 237, 0.5);
+        0 0 0 1px rgba(255, 255, 255, 0.35),
+        0 4px 16px rgba(249, 115, 22, 0.28);
 }
 .clip.selected.active {
-    outline-color: #ffffff;
+    outline-color: #fed7aa;
 }
 
 /* Playhead */
@@ -3581,7 +3664,7 @@ button {
     box-shadow: 0 0 4px rgba(250, 204, 21, 0.8);
 }
 
-/* ===== Fade Overlays (DaVinci-style diagonal gradient) ===== */
+/* ===== Fade Overlays ===== */
 .fade-in-overlay {
     position: absolute;
     left: 0;
@@ -3589,7 +3672,8 @@ button {
     bottom: 0;
     background: linear-gradient(
         to bottom-right,
-        rgba(0, 0, 0, 0.62) 0%,
+        rgba(0, 0, 0, 0.42) 0%,
+        rgba(13, 10, 26, 0.18) 42%,
         transparent 100%
     );
     pointer-events: none;
@@ -3604,7 +3688,8 @@ button {
     bottom: 0;
     background: linear-gradient(
         to bottom-left,
-        rgba(0, 0, 0, 0.62) 0%,
+        rgba(0, 0, 0, 0.42) 0%,
+        rgba(13, 10, 26, 0.18) 42%,
         transparent 100%
     );
     pointer-events: none;
@@ -3612,32 +3697,52 @@ button {
     border-radius: 0 5px 5px 0;
 }
 
-/* ===== DaVinci-style Fade Handles ===== */
+/* ===== Fade Handles ===== */
 .fade-handle-in,
 .fade-handle-out {
     position: absolute;
-    top: 0;
-    width: 12px;
-    height: 18px;
+    top: 3px;
+    width: 14px;
+    height: 14px;
     z-index: 6;
     cursor: ew-resize;
     opacity: 0;
     transition:
         opacity 0.14s,
         filter 0.1s;
-    border-bottom-right-radius: 4px;
-    box-shadow: 1px 1px 5px rgba(0, 0, 0, 0.5);
+    background: transparent;
+    border: 0;
+    box-shadow: none;
 }
 
 .fade-handle-in {
-    background: rgba(255, 255, 255, 0.82);
-    border-radius: 0 0 4px 0;
-    /* arrow right: sit at right edge of fade-in region */
+    left: 0;
 }
 
 .fade-handle-out {
-    background: rgba(255, 255, 255, 0.82);
-    border-radius: 0 0 0 4px;
+    right: 0;
+}
+
+.fade-handle-in::before,
+.fade-handle-out::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    width: 0;
+    height: 0;
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+}
+
+.fade-handle-in::before {
+    left: 0;
+    border-top: 11px solid rgba(196, 181, 253, 0.92);
+    border-right: 11px solid transparent;
+}
+
+.fade-handle-out::before {
+    right: 0;
+    border-top: 11px solid rgba(196, 181, 253, 0.92);
+    border-left: 11px solid transparent;
 }
 
 .clip:hover .fade-handle-in,
@@ -3649,25 +3754,13 @@ button {
 
 .fade-handle-in:hover,
 .fade-handle-out:hover {
-    background: rgba(255, 255, 255, 1);
-    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.65));
+    filter: drop-shadow(0 0 6px rgba(139, 92, 246, 0.55));
     opacity: 1 !important;
 }
 
-/* ===== Filmora volume drag tooltip (fixed position) ===== */
-.vol-drag-tooltip {
-    position: fixed;
-    background: rgba(0, 0, 0, 0.88);
-    color: #fde047;
-    font-size: 12px;
-    font-weight: 700;
-    padding: 4px 10px;
-    border-radius: 5px;
-    pointer-events: none;
-    z-index: 9999;
-    white-space: nowrap;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(250, 204, 21, 0.4);
+.fade-handle-in:hover::before,
+.fade-handle-out:hover::before {
+    border-top-color: #e9d5ff;
 }
 
 /* ===== Inspector – new controls ===== */

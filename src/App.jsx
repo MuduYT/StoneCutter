@@ -23,7 +23,6 @@ import {
   resolveOverlapsMulti,
   splitMediaIntoLinkedClips,
   expandWithLinkedPartners,
-  getLinkedClipIds,
   applyGroupTrimLeft,
   applyGroupTrimRight,
   applyGroupSplit,
@@ -78,6 +77,8 @@ const PROJECT_FILTER = [
 ];
 const MEDIA_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
 const MEDIA_ACCEPT = "video/*,audio/*,image/*";
+const TIMELINE_MEDIA_SEEK_GRACE_MS = 90;
+const TIMELINE_MEDIA_SEEK_TIMEOUT_MS = 350;
 
 let _idCounter = 0;
 const nextId = (prefix) => `${prefix}-${++_idCounter}`;
@@ -624,6 +625,7 @@ function InspectorDragger({
           <input
             className="idf-input"
             type="number"
+            id={`idf-input-${label.replace(/\s+/g, '-').toLowerCase()}`}
             value={editVal}
             step={step}
             autoFocus
@@ -671,6 +673,9 @@ function App() {
   const playingClipIdRef = useRef(null); // tracks current clip for playback engine — never touches user selection
   const imagePlaybackRef = useRef(null); // virtual playback clock for still-image clips
   const timelinePlaybackRef = useRef(null); // virtual clock for empty sequence/gap playback
+  const timelinePlaybackStartTokenRef = useRef(0);
+  const timelineSeekGraceUntilRef = useRef(0);
+  const timelineMediaSeekPromisesRef = useRef(new WeakMap());
   const clipboardRef = useRef([]); // copied clips (with relative startTimes)
   const volumeLineDragRef = useRef(null); // { clipId, startY, startVolume, trackHeight }
   const fadeDragRef = useRef(null); // { clipId, side:'in'|'out', startX, startFade, dur, pxPerSec }
@@ -1545,14 +1550,19 @@ function App() {
           ? trackMoveClipIds
           : new Set(trackMoveClipIds || []);
       const movingIds = new Set(movedClips.map((clip) => clip.id));
+      const originalClipById = new Map(
+        (interactionState.snapshotBefore || []).map((clip) => [clip.id, clip]),
+      );
       return movedClips.map((clip) => {
         if (explicitTrackMoveIds.has(clip.id)) return clip;
+        const originalTrackId =
+          originalClipById.get(clip.id)?.trackId || clip.trackId;
         const placement = getCollisionFreeTrackForClip({
           tracks,
           clips: interactionState.snapshotBefore,
           clip,
           startTime: clip.startTime,
-          preferredTrackId: clip.trackId,
+          preferredTrackId: originalTrackId,
           ignoreClipIds: movingIds,
         });
         if (placement.trackId) return { ...clip, trackId: placement.trackId };
@@ -1627,9 +1637,115 @@ function App() {
     );
   }, []);
 
+  const waitForTimelineMediaSeek = useCallback((node, sourceTime) => {
+    if (!node || !Number.isFinite(sourceTime)) return Promise.resolve();
+    const currentTime = Number.isFinite(node.currentTime)
+      ? node.currentTime
+      : 0;
+    if (Math.abs(currentTime - sourceTime) <= 0.01 && !node.seeking) {
+      return Promise.resolve();
+    }
+    const existing = timelineMediaSeekPromisesRef.current.get(node);
+    if (existing) return existing;
+    timelineSeekGraceUntilRef.current = Math.max(
+      timelineSeekGraceUntilRef.current,
+      performance.now() + TIMELINE_MEDIA_SEEK_GRACE_MS,
+    );
+    let promise;
+    promise = new Promise((resolve) => {
+      let done = false;
+      let timeoutId = 0;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window.clearTimeout(timeoutId);
+        node.removeEventListener("seeked", finish);
+        resolve();
+      };
+      node.addEventListener("seeked", finish, { once: true });
+      timeoutId = window.setTimeout(finish, TIMELINE_MEDIA_SEEK_TIMEOUT_MS);
+      try {
+        node.currentTime = sourceTime;
+      } catch {
+        finish();
+      }
+    }).finally(() => {
+      if (timelineMediaSeekPromisesRef.current.get(node) === promise) {
+        timelineMediaSeekPromisesRef.current.delete(node);
+      }
+    });
+    timelineMediaSeekPromisesRef.current.set(node, promise);
+    return promise;
+  }, []);
+
+  const primeTimelinePlayback = useCallback(
+    async (time) => {
+      const visualLayers = getTimelineVisualClips({
+        time,
+        clips,
+        tracks,
+        videos,
+      });
+      const audioLayers = getTimelineAudibleClips({
+        time,
+        clips,
+        tracks,
+        videos,
+      });
+      const seekPromises = [];
+
+      for (const { clip } of visualLayers) {
+        const node = timelineVisualRefs.current.get(clip.id);
+        if (!node) continue;
+        const sourceTime = getTimelineClipSourceTime(clip, time);
+        node.muted = true;
+        node.volume = 0;
+        seekPromises.push(waitForTimelineMediaSeek(node, sourceTime));
+      }
+
+      for (const { clip } of audioLayers) {
+        const node = timelineAudioRefs.current.get(clip.id);
+        if (!node) continue;
+        const sourceTime = getTimelineClipSourceTime(clip, time);
+        const clipVolume = clip.volume ?? 1;
+        const clipDurAudio = clip.outPoint - clip.inPoint;
+        const fadeInAudio = clip.fadeIn ?? 0;
+        const fadeOutAudio = clip.fadeOut ?? 0;
+        const timeInClipAudio = Math.max(0, time - clip.startTime);
+        let fadeGain = 1;
+        if (fadeInAudio > 0 && timeInClipAudio < fadeInAudio) {
+          fadeGain = timeInClipAudio / fadeInAudio;
+        }
+        const timeToEndAudio = clipDurAudio - timeInClipAudio;
+        if (fadeOutAudio > 0 && timeToEndAudio < fadeOutAudio) {
+          fadeGain = Math.min(fadeGain, timeToEndAudio / fadeOutAudio);
+        }
+        const effectiveVolume = Math.max(
+          0,
+          Math.min(2, volume * clipVolume * fadeGain),
+        );
+        node.volume = Math.min(1, effectiveVolume);
+        node.muted = muted || effectiveVolume <= 0 || !!clip.clipMuted;
+        seekPromises.push(waitForTimelineMediaSeek(node, sourceTime));
+      }
+      await Promise.all(seekPromises);
+    },
+    [
+      clips,
+      getTimelineClipSourceTime,
+      muted,
+      tracks,
+      videos,
+      volume,
+      waitForTimelineMediaSeek,
+    ],
+  );
+
   // --- player ---
-  const startTimelinePlayback = useCallback((startAtTime, target = null) => {
+  const startTimelinePlayback = useCallback(async (startAtTime, target = null) => {
     if (videoRef.current && !videoRef.current.paused) videoRef.current.pause();
+    const startToken = timelinePlaybackStartTokenRef.current + 1;
+    timelinePlaybackStartTokenRef.current = startToken;
     setPlaybackMode("timeline");
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
@@ -1638,14 +1754,21 @@ function App() {
     imagePlaybackRef.current = null;
     pendingSeekRef.current = null;
     pendingPlayRef.current = false;
+    timelinePlaybackRef.current = null;
+    if (target?.videoId) setActiveId(target.videoId);
+    setTimelineTime(timelineStart);
+    await primeTimelinePlayback(timelineStart);
+    if (timelinePlaybackStartTokenRef.current !== startToken) return;
+    timelineSeekGraceUntilRef.current = Math.max(
+      timelineSeekGraceUntilRef.current,
+      performance.now() + TIMELINE_MEDIA_SEEK_GRACE_MS,
+    );
     timelinePlaybackRef.current = {
       startedAtMs: performance.now(),
       timelineStart,
     };
-    if (target?.videoId) setActiveId(target.videoId);
-    setTimelineTime(timelineStart);
     setIsPlaying(true);
-  }, []);
+  }, [primeTimelinePlayback]);
 
   const startClipPlayback = useCallback(
     (target, startAtTime) => {
@@ -1662,6 +1785,7 @@ function App() {
   );
 
   const stopPlayback = useCallback(() => {
+    timelinePlaybackStartTokenRef.current += 1;
     playbackModeRef.current = null;
     const videoEl = videoRef.current;
     if (videoEl && !videoEl.paused) videoEl.pause();
@@ -1840,14 +1964,19 @@ function App() {
       const drift = Math.abs((node.currentTime || 0) - sourceTime);
       node.muted = true;
       node.volume = 0;
-      if (drift > (shouldPlay ? 0.25 : 0.03)) {
-        try {
-          node.currentTime = sourceTime;
-        } catch {
-          /* ignored */
-        }
+      if (drift > (shouldPlay ? 0.05 : 0.02)) {
+        waitForTimelineMediaSeek(node, sourceTime).then(() => {
+          if (playbackModeRef.current === "timeline" && playbackRef.current.isPlaying) {
+            node.play().catch(() => {});
+          }
+        });
+        continue;
       }
-      if (shouldPlay) {
+      if (
+        shouldPlay &&
+        !node.seeking &&
+        performance.now() >= timelineSeekGraceUntilRef.current
+      ) {
         node.play().catch(() => {});
       } else if (!node.paused) {
         node.pause();
@@ -1876,14 +2005,24 @@ function App() {
       );
       node.volume = Math.min(1, effectiveVolume);
       node.muted = muted || effectiveVolume <= 0 || !!clip.clipMuted;
-      if (drift > (shouldPlay ? 0.25 : 0.03)) {
-        try {
-          node.currentTime = sourceTime;
-        } catch {
-          /* ignored */
-        }
+      if (drift > (shouldPlay ? 0.05 : 0.02)) {
+        waitForTimelineMediaSeek(node, sourceTime).then(() => {
+          if (
+            playbackModeRef.current === "timeline" &&
+            playbackRef.current.isPlaying &&
+            !node.muted
+          ) {
+            node.play().catch(() => {});
+          }
+        });
+        continue;
       }
-      if (shouldPlay && !node.muted) {
+      if (
+        shouldPlay &&
+        !node.muted &&
+        !node.seeking &&
+        performance.now() >= timelineSeekGraceUntilRef.current
+      ) {
         node.play().catch(() => {});
       } else if (!node.paused) {
         node.pause();
@@ -1900,6 +2039,7 @@ function App() {
     timelineTime,
     timelineVisualLayers,
     volume,
+    waitForTimelineMediaSeek,
   ]);
 
   // Keep playbackRef synced (used inside rAF loop without re-binding)
@@ -1926,13 +2066,24 @@ function App() {
     let raf = 0;
     const tick = () => {
       const state = playbackRef.current;
+      const nowMs = performance.now();
       if (interactionRef.current?.type === "seek") {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+      if (nowMs < timelineSeekGraceUntilRef.current) {
+        if (timelinePlaybackRef.current) {
+          timelinePlaybackRef.current = {
+            startedAtMs: nowMs,
+            timelineStart: state.timelineTime,
+          };
+        }
         raf = requestAnimationFrame(tick);
         return;
       }
       const timelineState = getVirtualTimelinePlaybackTime({
         timelinePlayback: timelinePlaybackRef.current,
-        nowMs: performance.now(),
+        nowMs,
         fallbackTimelineTime: state.timelineTime,
       });
       const nextTime = timelineState.timelineTime;
@@ -2886,9 +3037,25 @@ function App() {
   };
 
   const handleTracksMouseDown = (e) => {
-    if (e.target.closest(".clip") || e.target.closest(".playhead-handle"))
+    const clipUnderPointer = Array.from(
+      tracksContentRef.current?.querySelectorAll(".clip") || [],
+    ).some((node) => {
+      const rect = node.getBoundingClientRect();
+      return (
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      );
+    });
+    if (
+      e.target.closest(".clip") ||
+      clipUnderPointer ||
+      e.target.closest(".playhead-handle")
+    )
       return;
     if (e.button !== 0) return;
+    e.preventDefault();
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
@@ -2940,6 +3107,7 @@ function App() {
       return;
     if (e.button !== 0) return;
     e.stopPropagation();
+    e.preventDefault();
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
@@ -2991,18 +3159,13 @@ function App() {
 
     let selectedIds;
     let explicitSelectedIds;
-    // Compute linked group so Ctrl+click and single-click both cover V+A partners
-    const clipGroupIds = clip.linkGroupId
-      ? getLinkedClipIds(clips, clip.id)
-      : new Set([clip.id]);
     if (additive) {
-      // Shift/Ctrl+Click toggles the WHOLE linked group together (DaVinci/Premiere style)
       const next = new Set(selectedClipIds);
       const wasSelected = next.has(clip.id);
       if (wasSelected) {
-        for (const id of clipGroupIds) next.delete(id);
+        next.delete(clip.id);
       } else {
-        for (const id of clipGroupIds) next.add(id);
+        next.add(clip.id);
       }
       setSelectedClipIds(next);
       if (!wasSelected) {
@@ -3014,14 +3177,12 @@ function App() {
       return;
     }
     if (selectedClipIds.has(clip.id) && selectedClipIds.size > 1) {
-      // Clip is part of the multi-selection → drag the whole group (plus link partners)
       explicitSelectedIds = new Set(selectedClipIds);
       selectedIds = expandWithLinkedPartners(clips, explicitSelectedIds);
     } else {
-      // Single click: select the full linked group so both V+A are visually highlighted
-      explicitSelectedIds = clipGroupIds;
-      selectedIds = clipGroupIds;
-      setSelectedClipIds(selectedIds);
+      explicitSelectedIds = new Set([clip.id]);
+      selectedIds = expandWithLinkedPartners(clips, explicitSelectedIds);
+      setSelectedClipIds(explicitSelectedIds);
     }
     setActiveClipId(clip.id);
     setActiveId(clip.videoId);
@@ -5171,7 +5332,7 @@ function App() {
           <div className="track-headers">
             <div className="track-header time-header" />
             <div className="track-headers-list" ref={trackHeadersListRef}>
-              {tracks.map((track, trackIdx) => {
+              {tracks.map((track) => {
                 const sameTypeTracks = tracks.filter(t => t.type === track.type);
                 const typeIndex = sameTypeTracks.indexOf(track) + 1;
                 const typeLabel = `${track.type === "video" ? "V" : "A"}${typeIndex}`;
@@ -5462,67 +5623,107 @@ function App() {
                             </>
                           ) : (
                             <>
-                              {(() => {
-                                const peaks = peaksMap[clip.videoId];
-                                const barCount = Math.max(
-                                  8,
-                                  Math.floor(width / 3),
-                                );
-                                if (peaks && peaks.length > 0) {
-                                  const startIdx = Math.floor(
-                                    (clip.inPoint /
-                                      Math.max(0.001, clip.sourceDuration)) *
-                                      peaks.length,
+                              <div className="waveform-shell">
+                                {(() => {
+                                  const peaks = peaksMap[clip.videoId];
+                                  const barCount = Math.max(
+                                    8,
+                                    Math.floor(width / 3),
                                   );
-                                  const endIdx = Math.max(
-                                    startIdx + 1,
-                                    Math.floor(
-                                      (clip.outPoint /
+                                  if (peaks && peaks.length > 0) {
+                                    const startIdx = Math.floor(
+                                      (clip.inPoint /
                                         Math.max(0.001, clip.sourceDuration)) *
                                         peaks.length,
-                                    ),
-                                  );
-                                  const segLen = endIdx - startIdx;
+                                    );
+                                    const endIdx = Math.max(
+                                      startIdx + 1,
+                                      Math.floor(
+                                        (clip.outPoint /
+                                          Math.max(0.001, clip.sourceDuration)) *
+                                          peaks.length,
+                                      ),
+                                    );
+                                    const segLen = endIdx - startIdx;
+                                    return (
+                                      <div className="waveform">
+                                        {Array.from({ length: barCount }).map(
+                                          (_, i) => {
+                                            const idx =
+                                              startIdx +
+                                              Math.floor(
+                                                (i / barCount) * segLen,
+                                              );
+                                            const v = Math.min(
+                                              1,
+                                              (peaks[idx] || 0) *
+                                                (clip.volume ?? 1),
+                                            );
+                                            return (
+                                              <span
+                                                key={i}
+                                                className="wave-bar"
+                                                style={{
+                                                  height: `${Math.max(6, v * 100)}%`,
+                                                }}
+                                              />
+                                            );
+                                          },
+                                        )}
+                                      </div>
+                                    );
+                                  }
                                   return (
-                                    <div className="waveform">
+                                    <div
+                                      className={`waveform ${peaks === null ? "loading" : ""}`}
+                                    >
                                       {Array.from({ length: barCount }).map(
-                                        (_, i) => {
-                                          const idx =
-                                            startIdx +
-                                            Math.floor((i / barCount) * segLen);
-                                          const v = peaks[idx] || 0;
-                                          return (
-                                            <span
-                                              key={i}
-                                              className="wave-bar"
-                                              style={{
-                                                height: `${Math.max(6, v * 100)}%`,
-                                              }}
-                                            />
-                                          );
-                                        },
+                                        (_, i) => (
+                                          <span
+                                            key={i}
+                                            className="wave-bar placeholder"
+                                            style={{
+                                              height: `${20 + Math.abs(Math.sin((i + clip.inPoint * 4) * 0.7 + clip.id.length)) * 50}%`,
+                                            }}
+                                          />
+                                        ),
                                       )}
                                     </div>
                                   );
-                                }
-                                return (
-                                  <div
-                                    className={`waveform ${peaks === null ? "loading" : ""}`}
-                                  >
-                                    {Array.from({ length: barCount }).map(
-                                      (_, i) => (
-                                        <span
-                                          key={i}
-                                          className="wave-bar placeholder"
-                                          style={{
-                                            height: `${20 + Math.abs(Math.sin((i + clip.inPoint * 4) * 0.7 + clip.id.length)) * 50}%`,
-                                          }}
-                                        />
+                                })()}
+                                <div
+                                  className="waveform-volume-overlay"
+                                  style={{
+                                    top: `${Math.max(
+                                      8,
+                                      Math.min(
+                                        92,
+                                        (1 - (clip.volume ?? 1) / 2) * 100,
                                       ),
-                                    )}
-                                  </div>
-                                );
-                              })()}
+                                    )}%`,
+                                  }}
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    const trackEl =
+                                      e.currentTarget.closest(".track-lane");
+                                    const trackHeight = trackEl
+                                      ? trackEl.offsetHeight
+                                      : 60;
+                                    volumeLineDragRef.current = {
+                                      clipId: clip.id,
+                                      startY: e.clientY,
+                                      startVolume: clip.volume ?? 1,
+                                      trackHeight,
+                                    };
+                                  }}
+                                >
+                                  <span className="waveform-volume-line" />
+                                  <span className="waveform-volume-handle" />
+                                  <span className="waveform-volume-label">
+                                    {Math.round((clip.volume ?? 1) * 100)}%
+                                  </span>
+                                </div>
+                              </div>
                               <span className="clip-name">{clip.name}</span>
                             </>
                           )}
@@ -5547,7 +5748,7 @@ function App() {
                           <div
                             className="fade-handle-in"
                             style={{
-                              left: `${Math.max(0, Math.min(width - 12, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width - 6))}px`,
+                              left: `${Math.max(0, Math.min(width - 14, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width - 7))}px`,
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -5565,7 +5766,7 @@ function App() {
                           <div
                             className="fade-handle-out"
                             style={{
-                              right: `${Math.max(0, Math.min(width - 12, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width - 6))}px`,
+                              right: `${Math.max(0, Math.min(width - 14, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width - 7))}px`,
                             }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
@@ -5580,33 +5781,6 @@ function App() {
                             }}
                             title={`Fade-Out: ${(clip.fadeOut ?? 0).toFixed(1)}s – ziehen zum Ändern`}
                           />
-                          {/* Volume line (audio clips only) */}
-                          {!isVideo && (
-                            <div className="volume-line-container">
-                              <div
-                                className="volume-line"
-                                style={{
-                                  top: `${(1 - (clip.volume ?? 1) / 2) * 100}%`,
-                                }}
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  const trackEl =
-                                    e.currentTarget.closest(".track-lane");
-                                  const trackHeight = trackEl
-                                    ? trackEl.offsetHeight
-                                    : 60;
-                                  volumeLineDragRef.current = {
-                                    clipId: clip.id,
-                                    startY: e.clientY,
-                                    startVolume: clip.volume ?? 1,
-                                    trackHeight,
-                                  };
-                                }}
-                              >
-                                <div className="volume-line-handle" />
-                              </div>
-                            </div>
-                          )}
                           <button
                             className="clip-remove"
                             onClick={(e) => handleClipRemove(clip.id, e)}
@@ -6048,6 +6222,7 @@ function App() {
                   <span>Standard-Bildlänge</span>
                   <div className="settings-input-group">
                     <input
+                      id="image-duration"
                       type="number"
                       min="0.1"
                       max="60"

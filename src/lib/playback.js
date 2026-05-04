@@ -3,7 +3,8 @@ import { MIN_CLIP_DURATION, clipEnd } from './timeline.js'
 export const TIMELINE_TRANSITION_EPSILON = 0.02
 
 const clipContainsTime = (time, clip) => {
-  return time >= clip.startTime - 1e-3 && time < clipEnd(clip) - 1e-3
+  return time >= clip.startTime - TIMELINE_TRANSITION_EPSILON &&
+    time < clipEnd(clip)
 }
 
 const preferPlaybackClip = (current, candidate) => {

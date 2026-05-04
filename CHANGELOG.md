@@ -1,5 +1,19 @@
 # StoneCutter Update Log
 
+## 2026-05-04 - Timeline Playback Start & Clip Interaction Polish
+
+### Fixes
+- Timeline-Playback wartet beim Start und bei Sync-Seeks auf `seeked`, bevor Video- und Audio-Layer abgespielt werden. Eine kurze rAF-Grace-Phase verhindert schwarze Startframes und Audio-Drops direkt am Clip-Anfang.
+- Linked V+A-Clips bleiben horizontal und beim Trimmen synchron, koennen aber vertikal getrennt auf passende Spuren bewegt werden.
+- Native blaue Textauswahl in Ruler, Tracks und Clip-Drag-Flows wird unterdrueckt.
+- Audio-Waveforms skalieren ihre Balken jetzt sichtbar mit der Clip-Lautstaerke.
+- Clip-Erkennung am Playhead nutzt die Timeline-Transition-Toleranz am Clip-Start und haelt Clips bis zum exakten Ende aktiv.
+- Vite-Skripte nutzen den nativen Config-Loader, damit `npm run dev`, `build` und `preview` auf dem Windows-Setup nicht durch `spawn EPERM` blockieren.
+
+### UI
+- Fade-Overlays nutzen wieder subtile dunkle Verlaeufe.
+- Fade-Handles wurden als kleine violette Filmora-artige Dreiecke am oberen Cliprand neu gestaltet.
+
 ## 2026-05-03 - Export-Paritaet: Overlays, Audio-Mix & Media-Bin Organisation
 
 ### Features
