@@ -50,7 +50,7 @@ test("builds and hydrates StoneCutter project documents", () => {
   const hydrated = hydrateProjectState(doc, (path) => `asset://${path}`);
 
   assert.equal(doc.app, "StoneCutter");
-  assert.equal(doc.schemaVersion, 2);
+  assert.equal(doc.schemaVersion, 3);
   assert.equal(doc.media[0].path, "C:\\Media\\clip.mp4");
   assert.equal(doc.tracks.length, 2);
   assert.equal(hydrated.videos[0].src, "asset://C:\\Media\\clip.mp4");
@@ -100,6 +100,83 @@ test("project documents serialize and hydrate back to the same document shape", 
   assert.equal(doc.media[0].importedAt, "2026-01-01T10:00:00.000Z");
   assert.equal(hydrated.videos[0].importedAt, "2026-01-01T10:00:00.000Z");
   assert.equal(hydrated.clips[0].linkGroupId, "lg-42");
+});
+
+test("clip keyframes round-trip through buildProjectDocument and hydrate", () => {
+  const state = createEmptyProjectState("Animated");
+  state.videos = [
+    {
+      id: "vid-1",
+      name: "clip.mp4",
+      path: "C:\\Media\\clip.mp4",
+      mediaType: "video",
+    },
+  ];
+  state.clips = [
+    {
+      id: "clip-1",
+      videoId: "vid-1",
+      name: "clip.mp4",
+      sourceDuration: 10,
+      inPoint: 0,
+      outPoint: 5,
+      startTime: 0,
+      trackMode: "video",
+      keyframes: {
+        positionX: [
+          { id: "kf-x0", time: 0, value: 0, interpolation: "linear" },
+          { id: "kf-x1", time: 2, value: 100, interpolation: "linear" },
+        ],
+        opacity: [
+          { id: "kf-o0", time: 1, value: 50, interpolation: "linear" },
+        ],
+      },
+    },
+  ];
+
+  const doc = buildProjectDocument(state);
+  const hydrated = hydrateProjectState(doc);
+  assert.equal(doc.schemaVersion, 3);
+  assert.deepEqual(doc.timeline.clips[0].keyframes.positionX.length, 2);
+  assert.deepEqual(hydrated.clips[0].keyframes.positionX, [
+    { id: "kf-x0", time: 0, value: 0, interpolation: "linear" },
+    { id: "kf-x1", time: 2, value: 100, interpolation: "linear" },
+  ]);
+  assert.equal(hydrated.clips[0].keyframes.opacity[0].value, 50);
+});
+
+test("legacy v2 saves without keyframes hydrate without a keyframes field", () => {
+  const legacyDoc = {
+    app: "StoneCutter",
+    schemaVersion: 2,
+    project: { name: "Old" },
+    media: [
+      {
+        id: "vid-1",
+        name: "clip.mp4",
+        path: "C:\\Media\\clip.mp4",
+        mediaType: "video",
+      },
+    ],
+    timeline: {
+      clips: [
+        {
+          id: "clip-1",
+          videoId: "vid-1",
+          name: "clip.mp4",
+          sourceDuration: 5,
+          inPoint: 0,
+          outPoint: 3,
+          startTime: 0,
+          trackMode: "video",
+        },
+      ],
+      playhead: 0,
+    },
+  };
+
+  const hydrated = hydrateProjectState(legacyDoc);
+  assert.equal(hydrated.clips[0].keyframes, undefined);
 });
 
 test("resolves project-managed relative media paths from the project folder", () => {

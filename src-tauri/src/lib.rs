@@ -1,5 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -7,13 +9,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[derive(serde::Serialize)]
 struct ProjectFileInfo {
     path: String,
     directory: String,
     name: String,
+}
+
+#[derive(serde::Serialize)]
+struct ProxyInfo {
+    path: String,
+    resolution: u32,
 }
 
 #[derive(Default)]
@@ -632,12 +640,105 @@ fn stderr_tail(stderr: &str) -> String {
     chars[start..].iter().collect()
 }
 
+fn proxy_hash(input_path: &Path, height: u32) -> String {
+    let mut hasher = DefaultHasher::new();
+    input_path.to_string_lossy().hash(&mut hasher);
+    height.hash(&mut hasher);
+    if let Ok(meta) = fs::metadata(input_path) {
+        meta.len().hash(&mut hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                duration.as_nanos().hash(&mut hasher);
+            }
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+#[tauri::command]
+fn generate_proxy(
+    app: tauri::AppHandle,
+    input_path: String,
+    height: u32,
+) -> Result<ProxyInfo, String> {
+    if height != 360 && height != 480 {
+        return Err("Preview-Aufloesung muss 360 oder 480 sein.".to_string());
+    }
+    let source = PathBuf::from(&input_path);
+    if !source.is_file() {
+        return Err(format!("Mediendatei nicht gefunden: {}", source.display()));
+    }
+    let proxy_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("App-Datenordner konnte nicht gelesen werden: {e}"))?
+        .join("proxies");
+    fs::create_dir_all(&proxy_dir)
+        .map_err(|e| format!("Proxy-Ordner konnte nicht erstellt werden: {e}"))?;
+
+    let output = proxy_dir.join(format!("{}_{}p.mp4", proxy_hash(&source, height), height));
+    if output.is_file() {
+        return Ok(ProxyInfo {
+            path: output.to_string_lossy().to_string(),
+            resolution: height,
+        });
+    }
+
+    let scale_filter = format!("scale=-2:{height}");
+    let output_path = output.to_string_lossy().to_string();
+    let output_result = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            &input_path,
+            "-vf",
+            &scale_filter,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "28",
+            "-an",
+            "-movflags",
+            "+faststart",
+            "-y",
+            &output_path,
+        ])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "FFmpeg nicht gefunden. Bitte FFmpeg installieren und zum PATH hinzufuegen.\nDownload: https://ffmpeg.org/download.html".to_string()
+            } else {
+                format!("FFmpeg-Startfehler: {e}")
+            }
+        })?;
+
+    if !output_result.status.success() {
+        let _ = fs::remove_file(&output);
+        let stderr = String::from_utf8_lossy(&output_result.stderr);
+        return Err(format!(
+            "Proxy-Erzeugung fehlgeschlagen:\n{}",
+            stderr_tail(&stderr)
+        ));
+    }
+
+    Ok(ProxyInfo {
+        path: output.to_string_lossy().to_string(),
+        resolution: height,
+    })
+}
+
 fn parse_ffmpeg_progress_seconds(line: &str) -> Option<f64> {
     let value = line
         .strip_prefix("out_time_ms=")
         .or_else(|| line.strip_prefix("out_time_us="))?;
     let micros = value.trim().parse::<f64>().ok()?;
-    micros.is_finite().then_some((micros / 1_000_000.0).max(0.0))
+    micros
+        .is_finite()
+        .then_some((micros / 1_000_000.0).max(0.0))
 }
 
 fn parse_ffmpeg_out_time(line: &str) -> Option<f64> {
@@ -710,8 +811,8 @@ fn run_ffmpeg_with_progress(
         thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
-                let seconds = parse_ffmpeg_progress_seconds(&line)
-                    .or_else(|| parse_ffmpeg_out_time(&line));
+                let seconds =
+                    parse_ffmpeg_progress_seconds(&line).or_else(|| parse_ffmpeg_out_time(&line));
                 if let Some(seconds) = seconds {
                     emit_export_progress(&progress_app, seconds, total_duration, &progress_phase);
                 }
@@ -793,13 +894,7 @@ fn export_video(
 
     // Try with audio first
     let args = build_ffmpeg_args(&segments, &output_path, width, height, true, crf, &preset);
-    let run = run_ffmpeg_with_progress(
-        &app,
-        &state,
-        args,
-        total_duration,
-        "render_audio_video",
-    );
+    let run = run_ffmpeg_with_progress(&app, &state, args, total_duration, "render_audio_video");
 
     match run {
         Err(e) => return Err(e),
@@ -853,13 +948,7 @@ fn export_video_progress(
         .max(0.001);
 
     let args = build_ffmpeg_args(&segments, &output_path, width, height, true, crf, &preset);
-    let run = run_ffmpeg_with_progress(
-        &app,
-        &state,
-        args,
-        total_duration,
-        "render_audio_video",
-    );
+    let run = run_ffmpeg_with_progress(&app, &state, args, total_duration, "render_audio_video");
 
     match run {
         Err(e) => Err(e),
@@ -1188,6 +1277,7 @@ pub fn run() {
         .manage(ExportState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            generate_proxy,
             export_video,
             export_video_progress,
             cancel_export,

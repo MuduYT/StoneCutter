@@ -1,12 +1,15 @@
-import { useRef, useMemo } from "react";
+import { useMemo } from "react";
 import {
   buildThumbnailItems,
   buildWaveformBars,
 } from "../lib/timelineRender.js";
+import { ClipKeyframes } from "./timeline/ClipKeyframes.jsx";
+import { VolumeCurve } from "./timeline/VolumeCurve.jsx";
 
 export const Timeline = ({
   tracks,
   clips,
+  clipsByTrack: visibleClipsByTrack,
   pxPerSec,
   totalWidth,
   totalEnd,
@@ -26,12 +29,18 @@ export const Timeline = ({
   formatTime,
   formatTC,
   scrubTooltip,
+  selectedKeyframe,
+  onSelectKeyframe,
+  onBeginKeyframeDrag,
+  onBeginVolumeKeyframeDrag,
+  onAddVolumeKeyframe,
   setTimelinePlayheadRef,
+  setTracksContentRef,
+  setTrackHeadersListRef,
   handleTracksMouseDown,
   handleTracksScroll,
   handlePlayheadMouseDown,
   handleClipMouseDown,
-  handleClipDoubleClick,
   handleClipContextMenu,
   handleClipRemove,
   handleTrimMouseDown,
@@ -46,10 +55,7 @@ export const Timeline = ({
   getAutoTrackZoneTop,
   Icon,
 }) => {
-  const trackHeadersListRef = useRef(null);
-  const tracksContentRef = useRef(null);
-
-  const clipsByTrack = useMemo(() => {
+  const allClipsByTrack = useMemo(() => {
     const map = new Map();
     for (const clip of clips) {
       if (!map.has(clip.trackId)) map.set(clip.trackId, []);
@@ -60,6 +66,7 @@ export const Timeline = ({
     }
     return map;
   }, [clips]);
+  const clipsByTrack = visibleClipsByTrack || allClipsByTrack;
 
   const tracksHeight = useMemo(() => {
     return tracks.reduce((sum, t) => sum + (t.height || DEFAULT_TRACK_HEIGHT), 0);
@@ -70,7 +77,7 @@ export const Timeline = ({
       {/* Fixed track headers column */}
       <div className="track-headers">
         <div className="track-header time-header" />
-        <div className="track-headers-list" ref={trackHeadersListRef}>
+        <div className="track-headers-list" ref={setTrackHeadersListRef}>
           {tracks.map((track) => {
             const sameTypeTracks = tracks.filter(t => t.type === track.type);
             const typeIndex = sameTypeTracks.indexOf(track) + 1;
@@ -206,7 +213,7 @@ export const Timeline = ({
 
       <div
         className="tracks-content"
-        ref={tracksContentRef}
+        ref={setTracksContentRef}
         onMouseDown={handleTracksMouseDown}
         onScroll={handleTracksScroll}
       >
@@ -251,6 +258,16 @@ export const Timeline = ({
             )}
           </div>
 
+          {/* Playhead line */}
+          <div
+            className="playhead"
+            ref={setTimelinePlayheadRef(1)}
+            style={{ "--playhead-x": `${playheadX}px` }}
+            aria-hidden="true"
+          >
+            <div className="playhead-line" />
+          </div>
+
           {/* Track lanes */}
           {tracks.map((track) => (
             <div
@@ -277,7 +294,6 @@ export const Timeline = ({
                     onMouseDown={(e) =>
                       !track.locked && handleClipMouseDown(e, clip)
                     }
-                    onDoubleClick={(e) => handleClipDoubleClick(clip, e)}
                     onContextMenu={(e) => handleClipContextMenu(e, clip)}
                     title={`${clip.name}\nIn: ${formatTime(clip.inPoint)} · Out: ${formatTime(clip.outPoint)} · Dauer: ${formatTime(dur)}${clip.linkGroupId ? "\nVerknüpft mit Video/Audio-Partner" : ""}`}
                   >
@@ -388,36 +404,38 @@ export const Timeline = ({
                             );
                           })()}
                         </div>
-                        {/* Volume line */}
-                        <div
-                          className="vol-line-overlay"
-                          style={{
-                            top: `${Math.max(8, Math.min(88, (1 - Math.min(2, clip.volume ?? 1) / 2) * 100))}%`,
-                          }}
-                          onMouseDown={(e) => {
-                            e.stopPropagation();
-                            const shellEl = e.currentTarget
+                        <VolumeCurve
+                          clip={clip}
+                          pxPerSec={pxPerSec}
+                          selectedKeyframe={selectedKeyframe}
+                          onBeginVolumeKeyframeDrag={onBeginVolumeKeyframeDrag}
+                          onAddVolumeKeyframe={onAddVolumeKeyframe}
+                          onBeginVolumeLineDrag={(event, targetClip, segment) => {
+                            event.stopPropagation();
+                            const shellEl = event.currentTarget
                               .closest(".clip")
                               ?.querySelector(".waveform-shell");
                             const shellHeight = shellEl
                               ? shellEl.offsetHeight
                               : 48;
+                            const hasVolumeKeyframes =
+                              Array.isArray(targetClip?.keyframes?.volume) &&
+                              targetClip.keyframes.volume.length > 0;
                             volumeLineDragRef.current = {
-                              clipId: clip.id,
-                              startY: e.clientY,
-                              startVolume: clip.volume ?? 1,
+                              clipId: targetClip.id,
+                              startY: event.clientY,
+                              startVolume: targetClip.volume ?? 1,
+                              mode:
+                                hasVolumeKeyframes && segment
+                                  ? "volume-segment"
+                                  : "clip-volume",
+                              segment,
                               trackHeight: shellHeight,
                               historyBefore: createHistorySnapshot(),
                               historyPushed: false,
                             };
                           }}
-                        >
-                          <span className="vol-line-bar" />
-                          <span className="vol-line-handle" />
-                          <span className="vol-line-label">
-                            {Math.round((clip.volume ?? 1) * 100)}%
-                          </span>
-                        </div>
+                        />
                         <span className="clip-name">{clip.name}</span>
                       </>
                     )}
@@ -515,6 +533,15 @@ export const Timeline = ({
                       }
                       title="Rechts trimmen"
                     />
+                    {isVideo && (
+                      <ClipKeyframes
+                        clip={clip}
+                        pxPerSec={pxPerSec}
+                        selectedKeyframe={selectedKeyframe}
+                        onSelectKeyframe={onSelectKeyframe}
+                        onBeginKeyframeDrag={onBeginKeyframeDrag}
+                      />
+                    )}
                   </div>
                 );
               })}

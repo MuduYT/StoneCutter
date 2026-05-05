@@ -49,7 +49,7 @@ export const MediaPanel = ({
           onDragEnd={handleDragEnd}
           onClick={() => handleSelectMedia(v.id)}
           onDoubleClick={() => handleDoubleClickMedia(v.id)}
-          title={`${v.path}\nDoppelklick = Vorschau · Ziehen = auf Timeline`}
+          title={`${v.path}\nDoppelklick = Auswaehlen - Ziehen = auf Timeline`}
         >
           {(() => {
             const firstThumb = thumbsMap[v.id]?.find?.((t) => !!t);

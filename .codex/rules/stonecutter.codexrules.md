@@ -1,9 +1,21 @@
 ---
-description: Codex project rules for StoneCutter development
+description: Codex project rules for StoneCutter development - TOKEN EFFICIENT MODE
 source: .windsurf/workflows/rules.md
 ---
 
 # StoneCutter Codex Rules
+
+## Token Efficiency (HIGHEST PRIORITY)
+
+- **NEVER** read test files (*.test.js) unless explicitly asked to fix a test.
+- **NEVER** read CHANGELOG.md, README.md, or AGENTS.md unless the task is documentation.
+- **NEVER** explain what you're doing - just do it.
+- **NEVER** ask clarifying questions unless the request is genuinely ambiguous.
+- **ALWAYS** prefer direct file edits over search/grep when the user provides paths.
+- **ALWAYS** use batch edits (multi_edit) instead of sequential single edits.
+- **NO** acknowledgement phrases ("Sure!", "Great idea!", "I'll help you...").
+- **NO** markdown code blocks in explanations - only in actual file edits.
+- Start responses immediately with the action/substantive content.
 
 ## Architecture
 

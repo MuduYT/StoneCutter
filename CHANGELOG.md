@@ -1,5 +1,77 @@
 # StoneCutter Update Log
 
+## 2026-05-05 - Frontend Performance & Playback Stabilization
+
+### Fixes
+- Timeline-Playback bleibt Timeline-only und stoppt am echten Content-Ende; Pause setzt Playback-Refs und alle Timeline-Media-Nodes synchron zurueck.
+- Transform-/Group-Keyframe-Stopwatches im Inspector blockieren den Collapsible-Header nicht mehr und bleiben klickbar.
+
+### Performance
+- Timeline-Clips werden nur noch im sichtbaren Zeitbereich plus Overscan gerendert; aktive, selektierte und gezogene Clips bleiben erzwungen sichtbar.
+- Waehrend Timeline-Playback erhalten Clips und Preview-Layer gezielt `will-change: transform`.
+- Neuer `useThrottledCallback` Hook fuer rAF-gebuendelte UI-Updates.
+
+### Features
+- Settings enthalten jetzt `Preview Quality` mit Full/Half/Quarter. Timeline-Preview nutzt vorhandene Proxy-Quellen mit automatischem Fallback auf Originaldateien; Export bleibt originalbasiert.
+- Medienassets speichern optionale `originalPath`, `proxyPath`, `proxySrc` und `proxyResolution` Felder im Projektmodell.
+- Audio-Clips zeigen jetzt nur noch die Volume-Keyframe-Kurve (ohne separate allgemeine Volume-Linie); Punkte lassen sich horizontal und vertikal ziehen.
+- Volume-Keyframes werden per Doppelklick auf die Kurve angelegt, und die Kurve bleibt auch ohne vorhandene Keyframes als editierbare Ziellinie sichtbar.
+- Die blaue Volume-Kurve kann jetzt auch ohne vorhandene Keyframes direkt vertikal gezogen werden; dabei wird der Basis-Clip-Volume-Wert live angepasst.
+- Clip-Drag bleibt normal verfuegbar: Lautstaerke-Drag startet nur noch in der Naehe der blauen Kurve, inklusive `ns-resize` Mauszeiger bei treffender Hover-Position.
+- Wenn bereits Volume-Keyframes vorhanden sind, verschiebt Drag auf der Kurvenlinie die betroffene Gerade (Segment-Endpunkte) vertikal statt den globalen Clip-Volume-Wert zu veraendern.
+- Inspector-Keyframes sind nicht mehr durch Multi-Auswahl blockiert; Gruppen-Stopwatches bleiben klickbar.
+- Jede Inspector-Einstellung und jede Gruppe hat jetzt einen kleinen Reset-Button (`↺`) direkt daneben.
+- Transform-Werte fuer `Pos X`, `Pos Y`, `Scale` und `Rotation` sind nicht mehr auf feste Min/Max-Grenzen beschraenkt.
+- Timeline-Keyframe-Marker wurden robuster gegen Duplikate gemacht (pro Frame/ID dedupliziert), inklusive Bereinigung doppelter Frame-Eintraege beim Laden alter Daten.
+- Im Inspector gibt es jetzt Keyframe-Navigation mit `<` und `>` zum Springen auf den vorherigen/naechsten Keyframe des aktiven Clips.
+- Play/Pause ist robuster: Wenn irgendein Playback aktiv ist (inklusive Source-Video), stoppt `Space`/Play jetzt zuerst zuverlaessig die laufende Wiedergabe statt unbeabsichtigt Timeline-Playback neu zu starten.
+- `Space` ignoriert jetzt Keyboard-Auto-Repeat (`e.repeat`), damit schnelles/gedruecktes Ausloesen nicht sofort wieder Playback startet.
+- Zusaetzlicher Transport-Debounce verhindert doppelte Start/Stop-Toggles bei sehr schneller Leertaste-/UI-Ausloesung (Race zwischen mehreren Events).
+- Source-Preview-Pause wurde weiter gehaertet: `Space` wird auch auf `keyup` neutralisiert und `stopPlayback()` setzt ein zusaetzliches Pause-Assertion-Frame, damit das fokussierte Preview-Video nicht sporadisch weiterlaeuft.
+- Mediathek-Selektion ist jetzt vom Playback/Edit-Fokus entkoppelt: Timeline-/Clip-Aktionen aendern den markierten Media-Bin-Eintrag nicht mehr automatisch.
+- Hard Pause Lock fuer Source-Preview: Nach `stopPlayback()` blockiert ein kurzes Lock (`SOURCE_PLAY_LOCK_MS`) spaete `onPlay`-Rebounds und pausiert das Video sofort wieder.
+
+## 2026-05-05 - Timeline-Only Playback Fix
+
+### Fixes
+- Globale Wiedergabe startet jetzt immer die Timeline und nicht mehr den Source-Monitor.
+- Pause gewinnt synchron auch waehrend Timeline-Media-Seeks oder Playback-Prime; laufende Video-/Audio-Nodes werden sofort angehalten.
+- Timeline-Playback stoppt am echten Content-Ende statt ueber das letzte Timeline-Element hinaus weiterzulaufen.
+- Clip-Doppelklick in der Timeline startet keine Wiedergabe mehr; Clips werden nur noch per normalem Klick/Drag bearbeitet.
+- Media-Bin-Doppelklick waehlt Medien nur noch aus und startet keine Source-Preview-Autoplay-Wiedergabe.
+
+## 2026-05-05 - Keyframe System (Phase 1)
+
+### Features
+- Animatable inspector properties auf Video-Clips: Position X/Y, Scale, Rotation, Opacity, Brightness, Contrast, Saturation, Temperature, Speed.
+- Stopwatch-Buttons rechts neben jedem animierbaren Wert sowie pro Inspector-Sektion (Transform, Color). Klicken erzeugt oder entfernt einen Keyframe an der aktuellen Playhead-Position; gefuellte Stopwatch zeigt einen Keyframe an genau dieser Zeit an.
+- Gruppen-Keyframe legt nur fuer geaenderte Kind-Werte einen Keyframe an, nie fuer Werte auf Default ("kein Phantom-Keyframe").
+- Timeline-Clips zeigen Keyframes als weisse Punkte mittig im Clip; cyanfarbene Pfeile zwischen den Keyframes erscheinen erst beim Hover.
+- Keyframes lassen sich auf der Timeline anklicken (Playhead springt hin), per Drag bewegen (snappt auf 30 fps Frame-Boundaries) und mit Delete oder erneutem Stopwatch-Klick entfernen.
+- Inspector-Werte aktualisieren sich live, waehrend der Playhead die Keyframe-Strecke entlang scrubbt; Preview interpoliert visuell zwischen Keyframes.
+- Mehrfachauswahl deaktiviert Keyframe-Buttons und zeigt einen "Multi"-Badge im Inspector-Header.
+
+### Persistence
+- Projekt-Schema-Version auf v3 erhoeht; Keyframes werden im StoneCutter-Projektdokument unter `timeline.clips[].keyframes` gespeichert. Aeltere v1- und v2-Saves bleiben lesbar und laden ohne Keyframes.
+
+### Architecture
+- Neue pure Engine in `src/lib/keyframes.js` (`sampleProperty`, `resolveAnimatedClip`, `addOrUpdateKeyframe`, `moveKeyframe`, `createGroupKeyframes`, `snapTimeToFrame`) mit Tests in `src/lib/keyframes.test.js`. Es gibt keine pro-Frame-IPC-Aufrufe; Rust bleibt save/load/export-only.
+- Neue UI-Komponenten: `src/components/inspector/KeyframeStopwatch.jsx`, `src/components/timeline/ClipKeyframes.jsx`. `InspectorDragger` und `InspectorCollapsible` haben optionale Slots fuer Stopwatch und Header-Action.
+- Undo/Redo fliesst durch den vorhandenen History-Stack: Inspector-Toggles laufen ueber `updateInspectorClip` (debounced commit), Timeline-Drags ueber `pushHistory(createHistorySnapshot())`.
+
+### Limitations / Follow-ups
+- Export verwendet weiterhin den Wert am `clip.startTime`; Keyframe-Animation im Export-Output kommt in einem separaten Schritt.
+- Audio-Properties (Volume, Pan), Booleans (Flip H/V), Color-Werte und Bezier/Ease-Interpolation sind in dieser Phase noch nicht enthalten; nur lineare Interpolation fuer numerische Video-Werte.
+- Frame-Rate fuer Snapping ist global auf 30 fps fixiert (`PROJECT_FPS` in `src/lib/keyframes.js`).
+
+## 2026-05-05 - App Module Split
+
+### Technical Changes
+- `src/App.jsx` wurde weiter zerlegt: Topbar, Sidebar, Player, Timeline-Sektion und Overlay-Flows liegen jetzt in `src/components/app/`.
+- Medienimport, Duration-Probing, Thumbnail- und Waveform-Erzeugung wurden in die objektorientierte Service-Klasse `src/lib/services/MediaAssetService.js` verschoben.
+- Eine ungenutzte, unfertige Playback-Hook-Datei wurde entfernt, damit der Build wieder sauber bleibt.
+- Die Refaktorierung ist funktional neutral gehalten; bestehende Timeline-, Playback- und Export-Logik blieb in den vorhandenen Lib-Modulen.
+
 ## 2026-05-04 - App.jsx Refactor Start
 
 ### Technical Changes

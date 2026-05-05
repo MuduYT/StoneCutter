@@ -5,11 +5,14 @@ import {
   createDefaultTracks,
 } from "./trackStore.js";
 import { nextLinkGroupId } from "./timeline.js";
+import { sanitizeKeyframeMap } from "./keyframes.js";
 
 export const PROJECT_FILE_EXTENSION = "stonecutter";
-export const PROJECT_SCHEMA_VERSION = 2;
+// v3 introduces optional clip.keyframes for animated inspector properties.
+// v1 and v2 saves remain readable; missing keyframes hydrate as undefined.
+export const PROJECT_SCHEMA_VERSION = 3;
 // Schema versions we accept without error (for forward-compat on older saves)
-const ACCEPTED_SCHEMA_VERSIONS = new Set([1, 2]);
+const ACCEPTED_SCHEMA_VERSIONS = new Set([1, 2, 3]);
 
 const safeObject = (value) =>
   value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -236,26 +239,33 @@ export function buildProjectDocument(state) {
       };
       if (item.importedAt) mediaItem.importedAt = item.importedAt;
       if (item.originalPath) mediaItem.originalPath = item.originalPath;
+      if (item.proxyPath) mediaItem.proxyPath = item.proxyPath;
+      if (item.proxyResolution) mediaItem.proxyResolution = item.proxyResolution;
       return mediaItem;
     }),
     timeline: {
-      clips: (state.clips || []).map((clip) => ({
-        id: clip.id,
-        videoId: clip.videoId,
-        name: clip.name,
-        sourceDuration: clip.sourceDuration,
-        inPoint: clip.inPoint,
-        outPoint: clip.outPoint,
-        startTime: clip.startTime,
-        trackMode: clip.trackMode || "video",
-        trackId:
-          clip.trackId ||
-          (clip.trackMode === "audio"
-            ? defaultAudioTrackId
-            : defaultVideoTrackId),
-        linkGroupId: clip.linkGroupId || null,
-        ...normalizeClipInspectorProperties(clip),
-      })),
+      clips: (state.clips || []).map((clip) => {
+        const out = {
+          id: clip.id,
+          videoId: clip.videoId,
+          name: clip.name,
+          sourceDuration: clip.sourceDuration,
+          inPoint: clip.inPoint,
+          outPoint: clip.outPoint,
+          startTime: clip.startTime,
+          trackMode: clip.trackMode || "video",
+          trackId:
+            clip.trackId ||
+            (clip.trackMode === "audio"
+              ? defaultAudioTrackId
+              : defaultVideoTrackId),
+          linkGroupId: clip.linkGroupId || null,
+          ...normalizeClipInspectorProperties(clip),
+        };
+        const keyframes = sanitizeKeyframeMap(clip.keyframes);
+        if (keyframes) out.keyframes = keyframes;
+        return out;
+      }),
       playhead: Number.isFinite(state.timelineTime) ? state.timelineTime : 0,
     },
     tracks,
@@ -263,6 +273,7 @@ export function buildProjectDocument(state) {
     videoDurations: state.videoDurations || {},
     settings: {
       imageDuration: state.settings?.imageDuration ?? 3,
+      previewQuality: state.settings?.previewQuality || "full",
     },
     ui: {
       aspectRatio: state.aspectRatio || state.ui?.aspectRatio || "16:9",
@@ -342,6 +353,8 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
       linkGroupId: safeString(safeClip.linkGroupId, "") || null,
       ...normalizeClipInspectorProperties(safeClip),
     };
+    const keyframes = sanitizeKeyframeMap(safeClip.keyframes);
+    if (keyframes) baseClip.keyframes = keyframes;
 
     // Legacy v1 migration: split 'av' clips into two linked clips (video + audio) on separate tracks.
     // Only when the referenced media is a video (images never had audio).
@@ -380,6 +393,8 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
       const safeItem = safeObject(item);
       const path = safeString(safeItem.path);
       const resolvedPath = path ? resolveMediaPath(path) : "";
+      const proxyPath = safeString(safeItem.proxyPath);
+      const resolvedProxyPath = proxyPath ? resolveMediaPath(proxyPath) : "";
       return {
         id: safeString(safeItem.id, `media-${index + 1}`),
         name: safeString(
@@ -388,8 +403,11 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
         ),
         path: resolvedPath,
         originalPath: safeString(safeItem.originalPath),
+        proxyPath: resolvedProxyPath,
+        proxyResolution: positiveNumber(safeItem.proxyResolution, 0) || null,
         importedAt: safeString(safeItem.importedAt),
         src: resolvedPath ? convertFileSrc(resolvedPath) : "",
+        proxySrc: resolvedProxyPath ? convertFileSrc(resolvedProxyPath) : null,
         mediaType: safeString(safeItem.mediaType, "video") || "video",
       };
     }),
@@ -400,6 +418,7 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
     timelineTime: Math.max(0, finiteNumber(parsed.timeline?.playhead, 0)),
     settings: {
       imageDuration: positiveNumber(settings.imageDuration, 3),
+      previewQuality: safeString(settings.previewQuality, "full") || "full",
     },
     ui: {
       aspectRatio: safeString(ui.aspectRatio, "16:9") || "16:9",

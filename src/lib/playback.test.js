@@ -35,12 +35,12 @@ const clip = (id, startTime, inPoint, outPoint) => ({
   outPoint,
 })
 
-test('finds clips at the playhead and ignores exact clip end', () => {
+test('finds clips at the playhead and stops slightly before clip end', () => {
   const clips = [clip('a', 1, 3, 6)]
 
   assert.equal(findClipAtTime(1, clips)?.id, 'a')
-  assert.equal(findClipAtTime(3.99, clips)?.id, 'a')
-  assert.equal(findClipAtTime(3.999, clips)?.id, 'a')
+  assert.equal(findClipAtTime(3.97, clips)?.id, 'a')
+  assert.equal(findClipAtTime(3.98, clips), null)
   assert.equal(findClipAtTime(4, clips), null)
   assert.deepEqual(findClipsAtTime(1, clips).map((item) => item.id), ['a'])
 })

@@ -1,8 +1,19 @@
 ---
-description: Core project rules for StoneCutter development
+description: Core project rules for StoneCutter development - TOKEN EFFICIENT MODE
 ---
 
 # StoneCutter Rules
+
+## Token Efficiency (HIGHEST PRIORITY)
+
+- **NEVER** read test files (*.test.js) unless explicitly asked.
+- **NEVER** read markdown docs (CHANGELOG, README, AGENTS) unless task is documentation.
+- **NEVER** explain actions - execute immediately.
+- **NEVER** use acknowledgement phrases ("Sure!", "Great idea!").
+- **ALWAYS** prefer direct edits over search when paths are provided.
+- **ALWAYS** batch edits instead of sequential changes.
+- **NO** code blocks in explanations - only in actual edits.
+- Start with substantive content immediately.
 
 ## Architecture
 

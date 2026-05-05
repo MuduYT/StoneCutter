@@ -1,18 +1,16 @@
-/* eslint-disable react-hooks/refs */
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import logoUrl from "../media/Logo/StoneCutter-Logo.png";
 import "./App.css";
-import { InspectorPanel } from "./components/inspector/InspectorPanel.jsx";
-import { Timeline } from "./components/Timeline.jsx";
-import { MediaPanel } from "./components/MediaPanel.jsx";
+import { ProjectStartScreen } from "./components/app/ProjectStartScreen.jsx";
+import { TopBar } from "./components/app/TopBar.jsx";
+import { Sidebar } from "./components/app/Sidebar.jsx";
+import { PlayerStage } from "./components/app/PlayerStage.jsx";
+import { TimelineSection } from "./components/app/TimelineSection.jsx";
+import { AppOverlays } from "./components/app/AppOverlays.jsx";
 import {
   SNAP_THRESHOLD_PX,
   MOVE_THRESHOLD_PX,
   MIN_CLIP_DURATION,
-  AUDIO_EXTS,
-  IMAGE_EXTS,
-  VIDEO_EXTS,
-  getMediaType,
   normalizeSourceSelection,
   constrainMoveStart,
   minStartForTrimLeft,
@@ -20,7 +18,6 @@ import {
   detectInsertPoint,
   applyRippleInsert,
   findGapAtTime,
-  findTimelineSpaceAtTime,
   closeGap,
   rippleDeleteClips,
   resolveOverlaps,
@@ -75,11 +72,25 @@ import {
   timeFromClientX,
 } from "./lib/sourceMonitor.js";
 import {
-  buildThumbnailItems,
-  buildWaveformBars,
   getVisibleTimelineRange,
   groupVisibleClipsByTrack,
 } from "./lib/timelineRender.js";
+import {
+  PROJECT_FPS,
+  addOrUpdateKeyframe,
+  createGroupKeyframes,
+  getClipPropertyTrack,
+  isAnimatableProperty,
+  moveKeyframe,
+  removeKeyframe,
+  resolveAnimatedClip,
+  setClipPropertyTrack,
+  shiftKeyframeMap,
+  snapTimeToFrame,
+  toggleClipKeyframeAt,
+} from "./lib/keyframes.js";
+import { MediaAssetService } from "./lib/services/MediaAssetService.js";
+import { normalizePreviewQuality } from "./lib/proxyGenerator.js";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const isDevMode = import.meta.env.DEV;
@@ -87,11 +98,12 @@ const RECENT_PROJECTS_KEY = "stonecutter.recentProjects";
 const PROJECT_FILTER = [
   { name: "StoneCutter Project", extensions: ["stonecutter"] },
 ];
-const MEDIA_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
-const MEDIA_ACCEPT = "video/*,audio/*,image/*";
+const MEDIA_ACCEPT = MediaAssetService.mediaAccept;
 const TIMELINE_MEDIA_SEEK_GRACE_MS = 50;
 const TIMELINE_MEDIA_SEEK_TIMEOUT_MS = 350;
 const TIMELINE_STATE_FPS = 60;
+const TRANSPORT_TOGGLE_DEBOUNCE_MS = 140;
+const SOURCE_PLAY_LOCK_MS = 260;
 const TIMELINE_LAYER_BOUNDARY_EPSILON = 0.015;
 const TIMELINE_PLAYING_VIDEO_DRIFT_TOLERANCE = 0.22;
 const TIMELINE_PLAYING_AUDIO_DRIFT_TOLERANCE = 0.05;
@@ -99,185 +111,6 @@ const TIMELINE_PAUSED_DRIFT_TOLERANCE = 0.02;
 
 let _idCounter = 0;
 const nextId = (prefix) => `${prefix}-${++_idCounter}`;
-
-const getFileMediaType = (file) => {
-  if (file.type.startsWith("image/")) return "image";
-  if (file.type.startsWith("audio/")) return "audio";
-  if (file.type.startsWith("video/")) return "video";
-  return getMediaType(file.name);
-};
-
-const isImportableMediaFile = (file) => {
-  if (
-    file.type.startsWith("video/") ||
-    file.type.startsWith("audio/") ||
-    file.type.startsWith("image/")
-  )
-    return true;
-  const ext = (file.name.split(".").pop() || "").toLowerCase();
-  return MEDIA_EXTS.includes(ext);
-};
-
-async function openMediaDialog() {
-  if (!isTauri) return null;
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const { convertFileSrc } = await import("@tauri-apps/api/core");
-  const selected = await open({
-    multiple: true,
-    filters: [
-      { name: "Medien", extensions: MEDIA_EXTS },
-      { name: "Videos", extensions: VIDEO_EXTS },
-      { name: "Audio", extensions: AUDIO_EXTS },
-      { name: "Bilder", extensions: IMAGE_EXTS },
-      { name: "Alle Dateien", extensions: ["*"] },
-    ],
-  });
-  if (!selected) return [];
-  const paths = Array.isArray(selected) ? selected : [selected];
-  return paths.map((p) => {
-    const name = p.split(/[\\/]/).pop() || p;
-    return {
-      id: nextId("vid"),
-      name,
-      path: p,
-      src: convertFileSrc(p),
-      mediaType: getMediaType(name),
-      importedAt: new Date().toISOString(),
-    };
-  });
-}
-
-function probeDuration(src, mediaType = "video", defaultImageDuration = 3) {
-  if (mediaType === "image") return Promise.resolve(defaultImageDuration);
-  return new Promise((resolve) => {
-    const v = document.createElement(mediaType === "audio" ? "audio" : "video");
-    v.preload = "metadata";
-    v.muted = true;
-    const cleanup = () => {
-      v.onloadedmetadata = null;
-      v.onerror = null;
-      v.src = "";
-    };
-    v.onloadedmetadata = () => {
-      const d = isFinite(v.duration) && v.duration > 0 ? v.duration : 5;
-      cleanup();
-      resolve(d);
-    };
-    v.onerror = () => {
-      cleanup();
-      resolve(5);
-    };
-    v.src = src;
-  });
-}
-
-async function generateImageThumbnails(src, count = 12) {
-  // For images: return the same src multiple times (rendered as a strip).
-  return Array(count).fill(src);
-}
-
-async function generateThumbnails(src, count = 12) {
-  const v = document.createElement("video");
-  v.muted = true;
-  v.preload = "auto";
-  v.crossOrigin = "anonymous";
-  v.playsInline = true;
-  v.src = src;
-  const ok = await new Promise((resolve) => {
-    const t = setTimeout(() => resolve(false), 5000);
-    v.onloadedmetadata = () => {
-      clearTimeout(t);
-      resolve(true);
-    };
-    v.onerror = () => {
-      clearTimeout(t);
-      resolve(false);
-    };
-  });
-  if (!ok || !v.duration || !isFinite(v.duration)) {
-    v.src = "";
-    return [];
-  }
-  const dur = v.duration;
-  const aspect =
-    v.videoWidth && v.videoHeight ? v.videoHeight / v.videoWidth : 9 / 16;
-  const tw = 120;
-  const th = Math.max(40, Math.round(tw * aspect));
-  const canvas = document.createElement("canvas");
-  canvas.width = tw;
-  canvas.height = th;
-  const ctx = canvas.getContext("2d");
-  const thumbs = [];
-  for (let i = 0; i < count; i++) {
-    const targetT = ((i + 0.5) / count) * dur;
-    await new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        v.onseeked = null;
-        resolve();
-      }, 2000);
-      v.onseeked = () => {
-        clearTimeout(timer);
-        v.onseeked = null;
-        resolve();
-      };
-      try {
-        v.currentTime = Math.min(dur - 0.05, Math.max(0, targetT));
-      } catch {
-        /* ignored */
-      }
-    });
-    try {
-      ctx.drawImage(v, 0, 0, tw, th);
-      thumbs.push(canvas.toDataURL("image/jpeg", 0.55));
-    } catch {
-      thumbs.push(null);
-    }
-  }
-  v.src = "";
-  return thumbs;
-}
-
-async function generateWaveform(src, samples = 200) {
-  try {
-    const response = await fetch(src);
-    const arrayBuffer = await response.arrayBuffer();
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return null;
-    const audioCtx = new AudioCtx();
-    const audioBuffer = await audioCtx
-      .decodeAudioData(arrayBuffer)
-      .catch(() => null);
-    if (!audioBuffer) {
-      audioCtx.close();
-      return null;
-    }
-    const channels = [];
-    for (let ch = 0; ch < Math.min(audioBuffer.numberOfChannels, 2); ch++) {
-      channels.push(audioBuffer.getChannelData(ch));
-    }
-    const length = channels[0].length;
-    const blockSize = Math.max(1, Math.floor(length / samples));
-    const peaks = [];
-    for (let i = 0; i < samples; i++) {
-      let max = 0;
-      const start = i * blockSize;
-      const end = Math.min(start + blockSize, length);
-      for (let j = start; j < end; j++) {
-        let v = 0;
-        for (const c of channels) {
-          const s = Math.abs(c[j] || 0);
-          if (s > v) v = s;
-        }
-        if (v > max) max = v;
-      }
-      peaks.push(max);
-    }
-    audioCtx.close();
-    return peaks;
-  } catch {
-    return null;
-  }
-}
 
 function formatTC(s) {
   if (!isFinite(s) || s < 0) s = 0;
@@ -396,6 +229,18 @@ const Icon = {
       strokeWidth="2"
     >
       <path d="M21 7v6h-6M3 17a9 9 0 0 1 15-6.7L21 13" />
+    </svg>
+  ),
+  ChevronRight: () => (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path d="M9 18l6-6-6-6" />
     </svg>
   ),
   Settings: () => (
@@ -571,6 +416,8 @@ function App() {
   const imagePlaybackRef = useRef(null); // virtual playback clock for still-image clips
   const timelinePlaybackRef = useRef(null); // virtual clock for empty sequence/gap playback
   const timelinePlaybackStartTokenRef = useRef(0);
+  const transportToggleAtRef = useRef(0);
+  const sourcePauseLockUntilRef = useRef(0);
   const timelineSeekGraceUntilRef = useRef(0);
   const timelineMediaSeekPromisesRef = useRef(new WeakMap());
   const timelineTimeRef = useRef(0);
@@ -598,14 +445,15 @@ function App() {
   const [mediaSearch, setMediaSearch] = useState("");
   const [mediaTypeFilter, setMediaTypeFilter] = useState("all");
   const [mediaSort, setMediaSort] = useState("importedAt");
+  const [mediaSelectionId, setMediaSelectionId] = useState(null);
   const [activeId, setActiveId] = useState(null);
   const [clips, setClips] = useState([]);
   const [activeClipId, setActiveClipId] = useState(null);
   const [timelineTime, setTimelineTime] = useState(0);
   const [visibleTimelineRange, setVisibleTimelineRange] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [dropIndicatorTime, setDropIndicatorTime] = useState(null);
-  const [snapIndicatorTime, setSnapIndicatorTime] = useState(null);
+  const [, setDropIndicatorTime] = useState(null);
+  const [, setSnapIndicatorTime] = useState(null);
   const [interaction, setInteraction] = useState(null);
   const [pxPerSec, setPxPerSec] = useState(40);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -622,7 +470,10 @@ function App() {
   const [scrubTooltip, setScrubTooltip] = useState(null); // {x, time} during seek drag
   const [selectedGap, setSelectedGap] = useState(null); // { start, end }
   const [selectedClipIds, setSelectedClipIds] = useState(() => new Set());
-  const [marqueeBox, setMarqueeBox] = useState(null); // { x1, y1, x2, y2 } in tracks-content px
+  // Currently selected keyframe on the timeline ({ clipId, propertyKey, kfId }).
+  const [selectedKeyframe, setSelectedKeyframe] = useState(null);
+  const keyframeDragRef = useRef(null);
+  const [, setMarqueeBox] = useState(null); // { x1, y1, x2, y2 } in tracks-content px
   const [importDragInfo, setImportDragInfo] = useState(null); // { videoId, name, dur, insertPoint, mode, simulatedLayout }
   const [trackMovePreview, setTrackMovePreview] = useState(null); // { targetTrackIds, autoTracks } during timeline clip moves
   const draggedVideoIdRef = useRef(null);
@@ -630,9 +481,15 @@ function App() {
   const draggedUseSourceRangeRef = useRef(false);
   const sourceTrimDragRef = useRef(null);
   const sourceSeekDragRef = useRef(null);
-  const [dragTooltip, setDragTooltip] = useState(null); // { x, y, label }
+  const [, setDragTooltip] = useState(null); // { x, y, label }
   const [tracks, setTracks] = useState(() => createDefaultTracks());
   const trackHeadersListRef = useRef(null);
+  const setTracksContentRef = useCallback((node) => {
+    tracksContentRef.current = node;
+  }, []);
+  const setTrackHeadersListRef = useCallback((node) => {
+    trackHeadersListRef.current = node;
+  }, []);
   const [editingTrackId, setEditingTrackId] = useState(null);
   const [dropTargetTrackId, setDropTargetTrackId] = useState(null);
   const [dropZoneTrackMode, setDropZoneTrackMode] = useState("av");
@@ -643,16 +500,20 @@ function App() {
       const raw = localStorage.getItem("stonecutter.settings");
       if (raw) {
         try {
-          return { imageDuration: 3, ...JSON.parse(raw) };
+          return {
+            imageDuration: 3,
+            previewQuality: "full",
+            ...JSON.parse(raw),
+          };
         } catch (e) {
           console.error("Error parsing settings:", e);
-          return { imageDuration: 3 };
+          return { imageDuration: 3, previewQuality: "full" };
         }
       }
     } catch (e) {
       console.error("Error loading settings:", e);
     }
-    return { imageDuration: 3 };
+      return { imageDuration: 3, previewQuality: "full" };
   }, []);
 
   const [settings, setSettings] = useState(loadSettings());
@@ -674,6 +535,7 @@ function App() {
   const [newProjectName, setNewProjectName] = useState("Untitled Project");
   const [projectStatus, setProjectStatus] = useState(null);
   const [isProjectDirty, setIsProjectDirty] = useState(false);
+  const [showSaveConfirmDialog, setShowSaveConfirmDialog] = useState(false);
   const [perfStats, setPerfStats] = useState(null);
   const [recentProjects, setRecentProjects] = useState(() => {
     try {
@@ -783,13 +645,19 @@ function App() {
       mediaAnalysisRef.current.thumbnailStarted = new Set();
       timelineTimeRef.current = state.timelineTime;
       setTimelineTime(state.timelineTime);
-      setSettings((prev) => ({ ...prev, ...state.settings }));
+      setSettings((prev) => ({
+        ...prev,
+        ...state.settings,
+        previewQuality: normalizePreviewQuality(state.settings?.previewQuality),
+      }));
       setAspectRatio(state.ui.aspectRatio);
       setPxPerSec(state.ui.pxPerSec);
       setSnapEnabled(state.ui.snapEnabled);
       setVolume(state.ui.volume);
       setMuted(state.ui.muted);
-      setActiveId(state.videos[0]?.id || null);
+      const initialMediaId = state.videos[0]?.id || null;
+      setMediaSelectionId(initialMediaId);
+      setActiveId(initialMediaId);
       setSourceMonitorId(null);
       setEditorFocus(FOCUS_SOURCE);
       setActiveClipId(null);
@@ -904,6 +772,65 @@ function App() {
       setProjectStatus({ ok: false, msg: String(err) });
     }
   }, [currentProject, getProjectSnapshot, rememberProject]);
+
+  const handleBackToProjects = useCallback(async () => {
+    if (isProjectDirty) {
+      setShowSaveConfirmDialog(true);
+    } else {
+      // Close project without saving
+      setShowProjectStart(true);
+      setCurrentProject(null);
+      setClips([]);
+      setVideos([]);
+      setTracks(createDefaultTracks());
+      setMediaSelectionId(null);
+      setActiveId(null);
+      setActiveClipId(null);
+      setSelectedClipIds(new Set());
+      setSelectedGap(null);
+      setIsProjectDirty(false);
+      historyRef.current = { past: [], future: [] };
+      setHistorySizes({ past: 0, future: 0 });
+    }
+  }, [isProjectDirty]);
+
+  const handleConfirmBack = useCallback(async () => {
+    if (isTauri && currentProject?.path) {
+      await saveCurrentProject();
+    }
+    setShowSaveConfirmDialog(false);
+    setShowProjectStart(true);
+    setCurrentProject(null);
+    setClips([]);
+    setVideos([]);
+    setTracks(createDefaultTracks());
+    setMediaSelectionId(null);
+    setActiveId(null);
+    setActiveClipId(null);
+    setSelectedClipIds(new Set());
+    setSelectedGap(null);
+    setIsProjectDirty(false);
+    historyRef.current = { past: [], future: [] };
+    setHistorySizes({ past: 0, future: 0 });
+  }, [currentProject, saveCurrentProject]);
+
+  const handleCancelBack = useCallback(() => {
+    setShowSaveConfirmDialog(false);
+    // Still close project without saving
+    setShowProjectStart(true);
+    setCurrentProject(null);
+    setClips([]);
+    setVideos([]);
+    setTracks(createDefaultTracks());
+    setMediaSelectionId(null);
+    setActiveId(null);
+    setActiveClipId(null);
+    setSelectedClipIds(new Set());
+    setSelectedGap(null);
+    setIsProjectDirty(false);
+    historyRef.current = { past: [], future: [] };
+    setHistorySizes({ past: 0, future: 0 });
+  }, []);
 
   useEffect(() => {
     if (!currentProject || projectHydratingRef.current) return;
@@ -1372,8 +1299,9 @@ function App() {
     if (activeClipId) ids.add(activeClipId);
     selectedClipIds.forEach((id) => ids.add(id));
     draggingIds?.forEach((id) => ids.add(id));
+    if (selectedKeyframe?.clipId) ids.add(selectedKeyframe.clipId);
     return ids;
-  }, [activeClipId, draggingIds, selectedClipIds]);
+  }, [activeClipId, draggingIds, selectedClipIds, selectedKeyframe]);
   const clipsByTrack = useMemo(
     () =>
       groupVisibleClipsByTrack({
@@ -1858,6 +1786,12 @@ function App() {
     if (videoRef.current && !videoRef.current.paused) videoRef.current.pause();
     const startToken = timelinePlaybackStartTokenRef.current + 1;
     timelinePlaybackStartTokenRef.current = startToken;
+    playbackModeRef.current = "timeline";
+    playbackRef.current = {
+      ...playbackRef.current,
+      isPlaying: true,
+      timelineTime: Math.max(0, startAtTime),
+    };
     setPlaybackMode("timeline");
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
@@ -1881,6 +1815,11 @@ function App() {
       startedAtMs: performance.now(),
       timelineStart,
     };
+    playbackRef.current = {
+      ...playbackRef.current,
+      isPlaying: true,
+      timelineTime: timelineStart,
+    };
     setIsPlaying(true);
   }, [primeTimelinePlayback, updateTimelinePlayheadPosition]);
 
@@ -1899,64 +1838,52 @@ function App() {
   );
 
   const stopPlayback = useCallback(() => {
+    sourcePauseLockUntilRef.current = performance.now() + SOURCE_PLAY_LOCK_MS;
     timelinePlaybackStartTokenRef.current += 1;
     playbackModeRef.current = null;
     const videoEl = videoRef.current;
-    if (videoEl && !videoEl.paused) videoEl.pause();
+    if (videoEl && !videoEl.paused) {
+      videoEl.pause();
+      // Some browsers can resume focused <video> on keyup/default handling.
+      // Re-assert pause on the next frame to guarantee a hard stop.
+      requestAnimationFrame(() => {
+        if (videoRef.current && !videoRef.current.paused) {
+          videoRef.current.pause();
+        }
+      });
+    }
     pauseTimelinePreviewMedia();
     imagePlaybackRef.current = null;
     timelinePlaybackRef.current = null;
     pendingPlayRef.current = false;
+    playbackRef.current = {
+      ...playbackRef.current,
+      isPlaying: false,
+      timelineTime: timelineTimeRef.current,
+    };
     setTimelineTime(timelineTimeRef.current);
     setPlaybackMode(null);
     setIsPlaying(false);
   }, [pauseTimelinePreviewMedia]);
 
-  const handleSourcePreviewPlay = useCallback(() => {
-    const videoEl = videoRef.current;
-    if (
-      !activeVideo ||
-      activeVideo.mediaType !== "video" ||
-      !activeSourceSelection ||
-      !videoEl
-    )
-      return;
-    if (playbackMode === "source" && isPlaying) {
-      stopPlayback();
-      setSourceMonitorId(activeVideo.id);
-      return;
-    }
-
-    const outsideRange =
-      videoEl.currentTime < activeSourceSelection.inPoint - 0.02 ||
-      videoEl.currentTime >= activeSourceSelection.outPoint - 0.02;
-    if (outsideRange) {
-      try {
-        videoEl.currentTime = activeSourceSelection.inPoint;
-      } catch {
-        /* ignored */
+  const handleSourceVideoPlay = useCallback((event) => {
+    const inLockWindow = performance.now() < sourcePauseLockUntilRef.current;
+    const sourceShouldBeStopped = playbackModeRef.current !== "timeline";
+    if (inLockWindow && sourceShouldBeStopped) {
+      pendingPlayRef.current = false;
+      const media = event?.currentTarget;
+      if (media && !media.paused) {
+        media.pause();
       }
-      setPreviewTime(activeSourceSelection.inPoint);
+      setIsPlaying(false);
+      return;
     }
-    playingClipIdRef.current = null;
-    imagePlaybackRef.current = null;
-    timelinePlaybackRef.current = null;
-    pendingPlayRef.current = false;
-    pauseTimelinePreviewMedia();
-    setPlaybackMode("source");
-    setEditorFocus(FOCUS_SOURCE);
-    videoEl.play().catch((err) => console.error('Source preview play error:', err));
-  }, [
-    activeSourceSelection,
-    activeVideo,
-    isPlaying,
-    pauseTimelinePreviewMedia,
-    playbackMode,
-    stopPlayback,
-  ]);
+    setIsPlaying(true);
+  }, []);
 
   const handleTimelinePlay = useCallback(() => {
     setEditorFocus(FOCUS_TIMELINE);
+    setSourceMonitorId(null);
     if (
       playingClipIdRef.current &&
       !clips.some((clip) => clip.id === playingClipIdRef.current)
@@ -1965,7 +1892,15 @@ function App() {
       imagePlaybackRef.current = null;
       pendingPlayRef.current = false;
     }
-    if (playbackMode === "timeline" && isPlaying) {
+    const timelineIsPlaying =
+      playbackModeRef.current === "timeline" &&
+      (isPlaying || playbackRef.current.isPlaying || timelinePlaybackRef.current);
+    if (timelineIsPlaying) {
+      stopPlayback();
+      return;
+    }
+
+    if (clips.length === 0) {
       stopPlayback();
       return;
     }
@@ -1979,7 +1914,6 @@ function App() {
   }, [
     clips,
     isPlaying,
-    playbackMode,
     startClipPlayback,
     startTimelineGapPlayback,
     stopPlayback,
@@ -1988,12 +1922,27 @@ function App() {
   ]);
 
   const handlePlay = useCallback(() => {
-    if (isSourceMonitorActive) {
-      handleSourcePreviewPlay();
-    } else {
-      handleTimelinePlay();
+    const nowMs = performance.now();
+    if (nowMs - transportToggleAtRef.current < TRANSPORT_TOGGLE_DEBOUNCE_MS) {
+      return;
     }
-  }, [handleSourcePreviewPlay, handleTimelinePlay, isSourceMonitorActive]);
+    transportToggleAtRef.current = nowMs;
+    const sourceVideoPlaying =
+      !!videoRef.current &&
+      !videoRef.current.paused &&
+      !videoRef.current.ended;
+    const anyPlaybackActive =
+      isPlaying ||
+      playbackRef.current.isPlaying ||
+      playbackModeRef.current === "timeline" ||
+      !!timelinePlaybackRef.current ||
+      sourceVideoPlaying;
+    if (anyPlaybackActive) {
+      stopPlayback();
+      return;
+    }
+    handleTimelinePlay();
+  }, [handleTimelinePlay, isPlaying, stopPlayback]);
 
   const handlePreviewTimeUpdate = useCallback(
     (e) => {
@@ -2101,7 +2050,8 @@ function App() {
       }
     }
 
-    for (const { clip } of timelineAudioLayers) {
+    for (const { clip: rawAudioClip } of timelineAudioLayers) {
+      const clip = resolveAnimatedClip(rawAudioClip, timelineTime);
       const node = timelineAudioRefs.current.get(clip.id);
       if (!node) continue;
       const sourceTime = getTimelineClipSourceTime(clip, timelineTime);
@@ -2213,6 +2163,7 @@ function App() {
     }
     let raf = 0;
     const tick = () => {
+      if (playbackModeRef.current !== "timeline") return;
       const state = playbackRef.current;
       const nowMs = performance.now();
       if (interactionRef.current?.type === "seek") {
@@ -2235,6 +2186,28 @@ function App() {
         fallbackTimelineTime: timelineTimeRef.current,
       });
       const nextTime = timelineState.timelineTime;
+      const contentEnd = getTimelineContentEnd(state.clips);
+      if (contentEnd <= 0 || nextTime >= contentEnd) {
+        const finalTime = Math.max(0, contentEnd);
+        timelinePlaybackStartTokenRef.current += 1;
+        playbackModeRef.current = null;
+        playingClipIdRef.current = null;
+        imagePlaybackRef.current = null;
+        timelinePlaybackRef.current = null;
+        pendingPlayRef.current = false;
+        playbackRef.current = {
+          ...playbackRef.current,
+          isPlaying: false,
+          timelineTime: finalTime,
+        };
+        pauseTimelinePreviewMedia();
+        timelineTimeRef.current = finalTime;
+        updateTimelinePlayheadPosition(finalTime);
+        setTimelineTime(finalTime);
+        setPlaybackMode(null);
+        setIsPlaying(false);
+        return;
+      }
       timelineTimeRef.current = nextTime;
       updateTimelinePlayheadPosition(nextTime);
       setTimelineTime(nextTime);
@@ -2292,6 +2265,7 @@ function App() {
   }, [
     getNextTimelineLayerBoundary,
     isPlaying,
+    pauseTimelinePreviewMedia,
     playbackMode,
     timelinePlaybackLookups,
     updateTimelinePlayheadPosition,
@@ -2303,7 +2277,11 @@ function App() {
     (items) => {
       for (const item of items) {
         if (videoDurations[item.id] != null) continue;
-        probeDuration(item.src, item.mediaType, settings.imageDuration).then(
+        MediaAssetService.probeDuration(
+          item.src,
+          item.mediaType,
+          settings.imageDuration,
+        ).then(
           (dur) => {
             setVideoDurations((prev) =>
               prev[item.id] != null ? prev : { ...prev, [item.id]: dur },
@@ -2315,13 +2293,38 @@ function App() {
     [settings.imageDuration, videoDurations],
   );
 
+  const generatePreviewProxies = useCallback(
+    (items) => {
+      if (!isTauri) return;
+      items
+        .filter((item) => item.mediaType === "video")
+        .forEach((item) => {
+          MediaAssetService.generateProxy(item, "quarter")
+            .then((proxy) => {
+              if (!proxy) return;
+              setVideos((prev) =>
+                prev.map((video) =>
+                  video.id === item.id ? { ...video, ...proxy } : video,
+                ),
+              );
+            })
+            .catch((err) => console.warn("Proxy generation failed:", err));
+        });
+    },
+    [],
+  );
+
   const handleImport = async () => {
     if (isTauri) {
       try {
-        const items = await openMediaDialog();
+          const items = await MediaAssetService.openMediaDialog({
+            isTauri,
+            makeId: nextId,
+          });
         if (items && items.length > 0) {
           setVideos((prev) => [...prev, ...items]);
           probeAndCacheDurations(items);
+          generatePreviewProxies(items);
         }
       } catch (err) {
         console.error("Import failed:", err);
@@ -2343,7 +2346,11 @@ function App() {
         name: f.name,
         path: f.name,
         src,
-        mediaType: getFileMediaType(f),
+        originalPath: f.name,
+        proxyPath: null,
+        proxySrc: null,
+        proxyResolution: null,
+        mediaType: MediaAssetService.getFileMediaType(f),
         importedAt: new Date().toISOString(),
       };
     });
@@ -2354,13 +2361,15 @@ function App() {
   };
 
   const handleSelectMedia = (id) => {
-    if (activeId === id) {
+    if (mediaSelectionId === id) {
+      setMediaSelectionId(null);
       setActiveId(null);
       setSourceMonitorId(null);
       return;
     }
     stopPlayback();
     setEditorFocus(FOCUS_SOURCE);
+    setMediaSelectionId(id);
     setActiveId(id);
     setActiveClipId(null);
     playingClipIdRef.current = null;
@@ -2383,6 +2392,7 @@ function App() {
   const handleDoubleClickMedia = (id) => {
     stopPlayback();
     setEditorFocus(FOCUS_SOURCE);
+    setMediaSelectionId(id);
     setActiveId(id);
     setActiveClipId(null);
     playingClipIdRef.current = null;
@@ -2390,17 +2400,15 @@ function App() {
     setSourceMonitorId(media?.mediaType === "video" ? id : null);
     const selection = getSourceSelection(id);
     setPreviewTime(selection.inPoint);
-    setIsPlaying(false);
-    setTimeout(() => {
-      if (videoRef.current) {
-        setPlaybackMode("source");
+    pendingSeekRef.current = selection.inPoint;
+    pendingPlayRef.current = false;
+    if (videoRef.current && activeId === id) {
+      try {
         videoRef.current.currentTime = selection.inPoint;
-        videoRef.current
-          .play()
-          .then(() => setIsPlaying(true))
-          .catch((err) => console.error('Video play error:', err));
+      } catch {
+        /* ignored */
       }
-    }, 50);
+    }
   };
   const handleRemoveMedia = (id, e) => {
     e.stopPropagation();
@@ -2443,6 +2451,9 @@ function App() {
       setActiveId(null);
       setIsPlaying(false);
     }
+    if (mediaSelectionId === id) {
+      setMediaSelectionId(null);
+    }
     if (sourceMonitorId === id) setSourceMonitorId(null);
   };
 
@@ -2461,7 +2472,11 @@ function App() {
     setDropZoneTrackMode(effectiveTrackMode);
     // Probe lazily if not yet cached, so the very first preview is accurate too.
     if (videoDurations[video.id] == null) {
-      probeDuration(video.src, video.mediaType, settings.imageDuration).then(
+      MediaAssetService.probeDuration(
+        video.src,
+        video.mediaType,
+        settings.imageDuration,
+      ).then(
         (dur) => {
           setVideoDurations((prev) =>
             prev[video.id] != null ? prev : { ...prev, [video.id]: dur },
@@ -2646,11 +2661,11 @@ function App() {
 
     // Check for files from Explorer
     const files = Array.from(e.dataTransfer.files).filter(
-      isImportableMediaFile,
+      MediaAssetService.isImportableMediaFile,
     );
     if (files.length > 0) {
       const file = files[0];
-      const mediaType = getFileMediaType(file);
+      const mediaType = MediaAssetService.getFileMediaType(file);
       draggedTrackModeRef.current = mediaType === "audio" ? "audio" : "av";
       setDropZoneTrackMode(mediaType === "audio" ? "audio" : "av");
       const targetTrack =
@@ -2761,7 +2776,7 @@ function App() {
 
     // Check for dropped files from Explorer
     const files = Array.from(e.dataTransfer.files).filter(
-      isImportableMediaFile,
+      MediaAssetService.isImportableMediaFile,
     );
     if (files.length > 0) {
       // Handle file drop from Explorer
@@ -2827,7 +2842,7 @@ function App() {
         const cachedDuration = videoDurations[lastVideo.id];
         const duration =
           cachedDuration ??
-          (await probeDuration(
+          (await MediaAssetService.probeDuration(
             lastVideo.src,
             lastVideo.mediaType,
             settings.imageDuration,
@@ -3136,7 +3151,11 @@ function App() {
     const cachedDuration = videoDurations[video.id];
     const duration =
       cachedDuration ??
-      (await probeDuration(video.src, video.mediaType, settings.imageDuration));
+      (await MediaAssetService.probeDuration(
+        video.src,
+        video.mediaType,
+        settings.imageDuration,
+      ));
     if (cachedDuration == null) {
       setVideoDurations((prev) =>
         prev[video.id] != null ? prev : { ...prev, [video.id]: duration },
@@ -3629,7 +3648,11 @@ function App() {
               movedSnaps.map((snap) => [snap.id, snap]),
             );
             const moved = it.snapshotBefore.map((c) => {
-              if (selectedIdsSet.has(c.id)) return movedSnapMap.get(c.id) || c;
+              if (selectedIdsSet.has(c.id)) {
+                const ms = movedSnapMap.get(c.id) || c;
+                const kfDelta = ms.startTime - c.startTime;
+                return { ...ms, keyframes: shiftKeyframeMap(c.keyframes, kfDelta) };
+              }
               // Non-selected clips at-or-after the insert point get pushed right by the group span
               if (
                 c.trackId === primaryTargetTrackId &&
@@ -3683,7 +3706,9 @@ function App() {
         const movedSnapMap = new Map(movedSnaps.map((snap) => [snap.id, snap]));
         const moved = it.snapshotBefore.map((c) => {
           const s = movedSnapMap.get(c.id);
-          return s || c;
+          if (!s) return c;
+          const kfDelta = s.startTime - c.startTime;
+          return { ...s, keyframes: shiftKeyframeMap(c.keyframes, kfDelta) };
         });
         updateTrackMovePreviewFromClips(movedSnaps, movePlan, it);
         setSnapIndicatorTime(null);
@@ -3715,6 +3740,7 @@ function App() {
               ins.insertPoint,
               dur,
             );
+            const rippleDelta = ins.insertPoint - orig.startTime;
             // Merge rippled track back with other tracks
             setClips(
               it.snapshotBefore
@@ -3724,6 +3750,7 @@ function App() {
                 .concat(rippledTrack, {
                   ...movedOrig,
                   startTime: ins.insertPoint,
+                  keyframes: shiftKeyframeMap(orig.keyframes, rippleDelta),
                 }),
             );
             setSnapIndicatorTime(ins.insertPoint);
@@ -3754,21 +3781,27 @@ function App() {
           const constrained = constrainMoveStart(newStart, dur, others);
           if (Math.abs(constrained - newStart) > 1e-3) snappedAt = null;
           newStart = constrained;
+          const snapMoveDelta = newStart - orig.startTime;
           // Restore other clips to snapshot positions (in case a previous frame rippled them)
           setSnapIndicatorTime(snappedAt);
           setClips(
             it.snapshotBefore.map((c) =>
-              c.id === orig.id ? { ...movedOrig, startTime: newStart } : c,
+              c.id === orig.id
+                ? { ...movedOrig, startTime: newStart, keyframes: shiftKeyframeMap(orig.keyframes, snapMoveDelta) }
+                : c,
             ),
           );
           it.moved = true;
         } else {
           // Snap-off: free move; snap-off snap is no-op anyway
           if (newStart < 0) newStart = 0;
+          const freeMoveDelta = newStart - orig.startTime;
           setSnapIndicatorTime(null);
           setClips((prev) =>
             prev.map((c) =>
-              c.id === orig.id ? { ...movedOrig, startTime: newStart } : c,
+              c.id === orig.id
+                ? { ...movedOrig, startTime: newStart, keyframes: shiftKeyframeMap(orig.keyframes, freeMoveDelta) }
+                : c,
             ),
           );
           it.moved = true;
@@ -4162,18 +4195,6 @@ function App() {
     setProjectStatus({ ok: true, msg: "Link aufgehoben." });
   };
 
-  const handleClipDoubleClick = (clip, e) => {
-    e.stopPropagation();
-    setEditorFocus(FOCUS_TIMELINE);
-    setSourceMonitorId(null);
-    setActiveClipId(clip.id);
-    setActiveId(clip.videoId);
-    timelineTimeRef.current = clip.startTime;
-    updateTimelinePlayheadPosition(clip.startTime);
-    setTimelineTime(clip.startTime);
-    startClipPlayback(clip, clip.startTime);
-  };
-
   // --- keyboard shortcuts ---
   useEffect(() => {
     const onKey = (e) => {
@@ -4187,11 +4208,6 @@ function App() {
       }
 
       if (editorFocus === FOCUS_SOURCE && isSourceMonitorActive) {
-        if (e.code === "Space" || e.code === "KeyK") {
-          e.preventDefault();
-          handleSourcePreviewPlay();
-          return;
-        }
         if (e.code === "ArrowLeft") {
           e.preventDefault();
           seekSourcePreviewTo(
@@ -4278,20 +4294,41 @@ function App() {
           );
           return;
         }
-        if (e.code === "KeyL") {
-          e.preventDefault();
-          if (playbackMode !== "source" || !isPlaying)
-            handleSourcePreviewPlay();
-          return;
-        }
       }
 
       if (e.code === "Space") {
         e.preventDefault();
+        if (e.repeat) return;
         handlePlay();
       } else if (e.code === "Delete" || e.code === "Backspace") {
         // Ctrl/Cmd+Delete = ripple-delete (also closes the gap left behind)
         const ripple = e.ctrlKey || e.metaKey;
+        if (selectedKeyframe) {
+          const ownerClip = clips.find((c) => c.id === selectedKeyframe.clipId);
+          if (ownerClip) {
+            const track = getClipPropertyTrack(
+              ownerClip,
+              selectedKeyframe.propertyKey,
+            );
+            const nextTrack = removeKeyframe(track, selectedKeyframe.kfId);
+            if (nextTrack.length !== track.length) {
+              e.preventDefault();
+              const nextMap = setClipPropertyTrack(
+                ownerClip,
+                selectedKeyframe.propertyKey,
+                nextTrack,
+              );
+              pushHistory(createHistorySnapshot());
+              setClips((prev) =>
+                prev.map((c) =>
+                  c.id === ownerClip.id ? { ...c, keyframes: nextMap } : c,
+                ),
+              );
+              setSelectedKeyframe(null);
+              return;
+            }
+          }
+        }
         if (selectedGap) {
           e.preventDefault();
           commitClips(closeGap(clips, selectedGap));
@@ -4322,6 +4359,7 @@ function App() {
       } else if (e.code === "Escape") {
         setSelectedClipIds(new Set());
         setSelectedGap(null);
+        setSelectedKeyframe(null);
       } else if (
         (e.ctrlKey || e.metaKey) &&
         e.key.toLowerCase() === "z" &&
@@ -4515,8 +4553,17 @@ function App() {
         seekToTime(timelineTime + (e.shiftKey ? 1 : 0.1));
       }
     };
+    const onKeyUp = (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [
     activeClipId,
     activeSourceSelection,
@@ -4525,7 +4572,6 @@ function App() {
     duplicateClip,
     editorFocus,
     handlePlay,
-    handleSourcePreviewPlay,
     isPlaying,
     isSourceMonitorActive,
     playbackMode,
@@ -4536,11 +4582,14 @@ function App() {
     seekToTime,
     selectedClipIds,
     selectedGap,
+    selectedKeyframe,
     snapEnabled,
     splitAtPlayhead,
     timelineTime,
     totalEnd,
     undo,
+    createHistorySnapshot,
+    pushHistory,
   ]);
 
   // Volume line drag (Filmora-style with live tooltip)
@@ -4550,13 +4599,36 @@ function App() {
       if (!d) return;
       const dy = e.clientY - d.startY;
       const trackHeight = d.trackHeight || 60;
-      const newVol = Math.max(
-        0,
-        Math.min(2, d.startVolume - (dy / trackHeight) * 2),
-      );
+      const deltaVol = -(dy / trackHeight) * 2;
+      const newVol = Math.max(0, Math.min(2, d.startVolume + deltaVol));
       if (!d.historyPushed) {
         pushHistory(d.historyBefore);
         d.historyPushed = true;
+      }
+      if (d.mode === "volume-segment" && d.segment) {
+        const leftId = d.segment.leftId;
+        const rightId = d.segment.rightId;
+        const leftValue = Math.max(0, Math.min(2, (d.segment.leftValue ?? 1) + deltaVol));
+        const rightValue = Math.max(0, Math.min(2, (d.segment.rightValue ?? 1) + deltaVol));
+        setClips((prev) =>
+          prev.map((clip) => {
+            if (clip.id !== d.clipId) return clip;
+            const track = getClipPropertyTrack(clip, "volume");
+            if (!track.length) return clip;
+            const nextTrack = track.map((kf) => {
+              if (leftId && kf.id === leftId) return { ...kf, value: leftValue };
+              if (rightId && kf.id === rightId) return { ...kf, value: rightValue };
+              return kf;
+            });
+            return {
+              ...clip,
+              keyframes: setClipPropertyTrack(clip, "volume", nextTrack),
+            };
+          }),
+        );
+        const previewVol = Math.max(0, Math.min(2, (leftValue + rightValue) / 2));
+        setVolTooltip({ x: e.clientX, y: e.clientY, vol: previewVol });
+        return;
       }
       setClips((prev) =>
         prev.map((c) => (c.id === d.clipId ? { ...c, volume: newVol } : c)),
@@ -4630,7 +4702,7 @@ function App() {
       const video = jobs[cursor];
       cursor += 1;
       if (!video) return;
-      const peaks = await generateWaveform(video.src);
+      const peaks = await MediaAssetService.generateWaveform(video.src);
       if (!cancelled) {
         setPeaksMap((prev) =>
           videoById.has(video.id) ? { ...prev, [video.id]: peaks || [] } : prev,
@@ -4667,10 +4739,10 @@ function App() {
       if (!video) return;
       const genFn =
         video.mediaType === "image"
-          ? generateImageThumbnails
+          ? MediaAssetService.generateImageThumbnails
           : video.mediaType === "audio"
             ? async () => []
-            : generateThumbnails;
+            : MediaAssetService.generateThumbnails;
       const thumbs = await genFn(video.src);
       if (!cancelled) {
         setThumbsMap((prev) =>
@@ -4700,43 +4772,9 @@ function App() {
     };
   }, [contextMenu]);
 
-  // Validate the selected gap on every render: only show if it still exists in the live clip layout.
-  // Stale `selectedClipIds` IDs are harmless (`.has()` simply returns false for non-existent ids).
-  const validSelectedGap = useMemo(() => {
-    if (!selectedGap) return null;
-    const sorted = [...clips].sort((a, b) => a.startTime - b.startTime);
-    let prevEnd = 0;
-    for (const c of sorted) {
-      if (
-        c.startTime > prevEnd + 1e-3 &&
-        Math.abs(prevEnd - selectedGap.start) < 0.05 &&
-        Math.abs(c.startTime - selectedGap.end) < 0.05
-      ) {
-        return selectedGap;
-      }
-      prevEnd = Math.max(prevEnd, c.startTime + (c.outPoint - c.inPoint));
-    }
-    return null;
-  }, [selectedGap, clips]);
-
-  const activePlaybackSpace = useMemo(() => {
-    if (playbackMode !== "timeline" || !isPlaying) return null;
-    if (findClipAtTime(timelineTime, displayClips)) return null;
-    return findTimelineSpaceAtTime(timelineTime, displayClips);
-  }, [displayClips, isPlaying, playbackMode, timelineTime]);
-
   const trackMoveTargetIds = useMemo(
     () => new Set(trackMovePreview?.targetTrackIds || []),
     [trackMovePreview],
-  );
-
-  const tracksHeight = useMemo(
-    () =>
-      tracks.reduce(
-        (height, track) => height + (track.height || DEFAULT_TRACK_HEIGHT),
-        0,
-      ),
-    [tracks],
   );
 
   const getAutoTrackZoneTop = useCallback(
@@ -4802,8 +4840,24 @@ function App() {
   const updateInspectorClip = useCallback(
     (clipId, patch) => {
       scheduleInspectorHistoryCommit();
+      const kfTime = snapTimeToFrame(timelineTimeRef.current ?? 0);
       setClips((prev) =>
-        prev.map((clip) => (clip.id === clipId ? { ...clip, ...patch } : clip)),
+        prev.map((clip) => {
+          if (clip.id !== clipId) return clip;
+          const next = { ...clip, ...patch };
+          // Auto-keyframe: if a changed property already has a keyframe track,
+          // insert/update a keyframe at the current playhead position with the new value.
+          let kfMap = next.keyframes ? { ...next.keyframes } : null;
+          for (const key of Object.keys(patch)) {
+            if (!isAnimatableProperty(key)) continue;
+            const track = getClipPropertyTrack(clip, key);
+            if (track.length === 0) continue;
+            const newTrack = addOrUpdateKeyframe(track, { time: kfTime, value: patch[key] });
+            if (!kfMap) kfMap = {};
+            kfMap = { ...kfMap, [key]: newTrack };
+          }
+          return kfMap !== (next.keyframes ?? null) ? { ...next, keyframes: kfMap } : next;
+        }),
       );
     },
     [scheduleInspectorHistoryCommit],
@@ -4817,217 +4871,264 @@ function App() {
   const displayName = inspectorDisplayName;
   const updClip = updateInspectorClip;
 
+  // Keyframe callbacks (engine in src/lib/keyframes.js). Selection state is
+  // declared near the other timeline-selection state above.
+  const toggleKeyframeAtPlayhead = useCallback(
+    (clipId, propertyKey) => {
+      const time = snapTimeToFrame(timelineTimeRef.current ?? 0);
+      const clip = clips.find((c) => c.id === clipId);
+      if (!clip) return;
+      const nextMap = toggleClipKeyframeAt({ clip, propertyKey, time });
+      updateInspectorClip(clipId, { keyframes: nextMap });
+    },
+    [clips, updateInspectorClip],
+  );
+
+  const toggleGroupKeyframeAtPlayhead = useCallback(
+    (clipId, groupId) => {
+      const time = snapTimeToFrame(timelineTimeRef.current ?? 0);
+      const clip = clips.find((c) => c.id === clipId);
+      if (!clip) return;
+      const nextMap = createGroupKeyframes({ clip, groupId, time });
+      updateInspectorClip(clipId, { keyframes: nextMap });
+    },
+    [clips, updateInspectorClip],
+  );
+
+  const selectKeyframeAndSeek = useCallback(
+    (clipId, propertyKey, kfId, time) => {
+      setSelectedKeyframe({ clipId, propertyKey, kfId });
+      setActiveClipId(clipId);
+      seekToTime(snapTimeToFrame(time));
+    },
+    [seekToTime],
+  );
+
+  const beginKeyframeDrag = useCallback(
+    (event, { clipId, propertyKey, kfId, startTime, pxPerSec: dragPxPerSec }) => {
+      event.preventDefault();
+      event.stopPropagation();
+      keyframeDragRef.current = {
+        clipId,
+        propertyKey,
+        kfId,
+        startTime,
+        startClientX: event.clientX,
+        pxPerSec: dragPxPerSec || pxPerSec,
+        historyBefore: createHistorySnapshot(),
+        historyPushed: false,
+        moved: false,
+      };
+      setSelectedKeyframe({ clipId, propertyKey, kfId });
+    },
+    [createHistorySnapshot, pxPerSec],
+  );
+
+  // Keyframe drag listener — mirrors the fade/volume drag pattern.
+  const beginVolumeKeyframeDrag = useCallback(
+    (event, { clipId, kfId, pxPerSec: dragPxPerSec }) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const clipRect = event.currentTarget
+        .closest(".clip")
+        ?.getBoundingClientRect();
+      if (!clipRect) return;
+      keyframeDragRef.current = {
+        type: "volume",
+        clipId,
+        propertyKey: "volume",
+        kfId,
+        clipLeft: clipRect.left,
+        clipTop: clipRect.top,
+        clipHeight: Math.max(1, clipRect.height),
+        pxPerSec: dragPxPerSec || pxPerSec,
+        historyBefore: createHistorySnapshot(),
+        historyPushed: false,
+        moved: false,
+      };
+      setSelectedKeyframe({ clipId, propertyKey: "volume", kfId });
+    },
+    [createHistorySnapshot, pxPerSec],
+  );
+
+  const addVolumeKeyframeFromCurve = useCallback(
+    (event, clip) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const localX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+      const localY = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+      const time = snapTimeToFrame(clip.startTime + localX / pxPerSec, PROJECT_FPS);
+      const value = Math.max(0, Math.min(2, (1 - localY / rect.height) * 2));
+      const track = getClipPropertyTrack(clip, "volume");
+      const nextTrack = addOrUpdateKeyframe(track, { time, value });
+      const nextMap = setClipPropertyTrack(clip, "volume", nextTrack);
+      const nextKf = nextTrack.find(
+        (kf) => Math.abs(kf.time - time) < 1 / PROJECT_FPS,
+      );
+      pushHistory(createHistorySnapshot());
+      setClips((prev) =>
+        prev.map((item) =>
+          item.id === clip.id ? { ...item, keyframes: nextMap } : item,
+        ),
+      );
+      if (nextKf) {
+        setSelectedKeyframe({
+          clipId: clip.id,
+          propertyKey: "volume",
+          kfId: nextKf.id,
+        });
+      }
+    },
+    [createHistorySnapshot, pxPerSec, pushHistory],
+  );
+
+  useEffect(() => {
+    const onMove = (event) => {
+      const drag = keyframeDragRef.current;
+      if (!drag) return;
+      if (drag.type === "volume") {
+        const localX = Math.max(0, event.clientX - drag.clipLeft);
+        const localY = Math.max(
+          0,
+          Math.min(drag.clipHeight, event.clientY - drag.clipTop),
+        );
+        if (!drag.moved && Math.abs(event.movementX) + Math.abs(event.movementY) < 1) {
+          return;
+        }
+        drag.moved = true;
+        const nextValue = Math.max(
+          0,
+          Math.min(2, (1 - localY / drag.clipHeight) * 2),
+        );
+        if (!drag.historyPushed) {
+          pushHistory(drag.historyBefore);
+          drag.historyPushed = true;
+        }
+        setClips((prev) =>
+          prev.map((clip) => {
+            if (clip.id !== drag.clipId) return clip;
+            const nextTime = snapTimeToFrame(
+              clip.startTime + localX / Math.max(1, drag.pxPerSec),
+              PROJECT_FPS,
+            );
+            const track = getClipPropertyTrack(clip, "volume");
+            const movedTrack = moveKeyframe(track, drag.kfId, nextTime);
+            const nextTrack = movedTrack.map((kf) =>
+              kf.id === drag.kfId ? { ...kf, value: nextValue } : kf,
+            );
+            return {
+              ...clip,
+              keyframes: setClipPropertyTrack(clip, "volume", nextTrack),
+            };
+          }),
+        );
+        return;
+      }
+      const dx = event.clientX - drag.startClientX;
+      if (!drag.moved && Math.abs(dx) < 2) return;
+      drag.moved = true;
+      const deltaSec = dx / Math.max(1, drag.pxPerSec);
+      const nextTime = snapTimeToFrame(
+        Math.max(0, drag.startTime + deltaSec),
+        PROJECT_FPS,
+      );
+      if (!drag.historyPushed) {
+        pushHistory(drag.historyBefore);
+        drag.historyPushed = true;
+      }
+      setClips((prev) =>
+        prev.map((clip) => {
+          if (clip.id !== drag.clipId) return clip;
+          const track = getClipPropertyTrack(clip, drag.propertyKey);
+          const nextTrack = moveKeyframe(track, drag.kfId, nextTime);
+          return {
+            ...clip,
+            keyframes: setClipPropertyTrack(clip, drag.propertyKey, nextTrack),
+          };
+        }),
+      );
+    };
+    const onUp = () => {
+      keyframeDragRef.current = null;
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [pushHistory]);
+
+  // Stale `selectedKeyframe` entries (after a clip delete / undo / etc.) are
+  // tolerated: ClipKeyframes only highlights ids it actually finds, and the
+  // Delete keyboard handler is a no-op when the referenced track no longer
+  // contains the id. Nothing to clean up explicitly.
+
   const stepBack = () => seekToTime(Math.max(0, timelineTime - 1));
   const stepFwd = () => seekToTime(timelineTime + 1);
+  const sidebarItems = [
+    { id: "media", label: "Media", icon: NavIcon.Media },
+    { id: "audio", label: "Audio", icon: NavIcon.Audio },
+    { id: "text", label: "Text", icon: NavIcon.Text },
+    { id: "effects", label: "Effects", icon: NavIcon.Effects },
+    { id: "transitions", label: "Trans.", icon: NavIcon.Transitions },
+    { id: "elements", label: "Elements", icon: NavIcon.Elements },
+  ];
+  const mainContentClassName = `main-content ${editorFocus === FOCUS_SOURCE ? "focus-source" : ""} ${activeClipId ? "has-inspector" : ""}`;
 
   if (showProjectStart) {
     return (
-      <div className="app project-start-app">
-        <div className="project-start-shell">
-          <img
-            src={logoUrl}
-            alt="StoneCutter"
-            className="project-start-logo"
-            draggable={false}
-          />
-          <h1>Willkommen zu StoneCutter</h1>
-          <div className="project-start-actions">
-            <button
-              className="project-primary-action"
-              onClick={() => setShowNewProjectDialog(true)}
-            >
-              <Icon.Plus /> Neues Projekt
-            </button>
-            <button
-              className="project-secondary-action"
-              onClick={handleOpenProject}
-              disabled={!isTauri}
-            >
-              <Icon.FolderOpen /> Projekt oeffnen
-            </button>
-          </div>
-
-          <section className="recent-projects-panel">
-            <div className="recent-projects-header">
-              <h2>Zuletzt benutzt</h2>
-              {recentProjects.length > 0 && (
-                <button
-                  className="recent-clear-btn"
-                  onClick={() => persistRecentProjects([])}
-                >
-                  Leeren
-                </button>
-              )}
-            </div>
-            {recentProjects.length === 0 ? (
-              <div className="recent-empty">Noch keine Projekte geoeffnet.</div>
-            ) : (
-              <div className="recent-project-list">
-                {recentProjects.map((project) => (
-                  <button
-                    key={project.path}
-                    className="recent-project-item"
-                    onClick={() => openProjectPath(project.path)}
-                    title={project.path}
-                  >
-                    <span className="recent-project-icon">
-                      <Icon.File />
-                    </span>
-                    <span className="recent-project-info">
-                      <strong>{project.name}</strong>
-                      <span>{project.path}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {projectStatus && (
-            <div
-              className={`project-status ${projectStatus.ok ? "ok" : "err"}`}
-            >
-              {projectStatus.msg}
-            </div>
-          )}
-        </div>
-
-        {showNewProjectDialog && (
-          <div
-            className="settings-overlay"
-            onClick={() => setShowNewProjectDialog(false)}
-          >
-            <div
-              className="settings-panel project-dialog"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="settings-header">
-                <h3>
-                  <Icon.Plus /> Neues Projekt
-                </h3>
-                <button
-                  className="settings-close"
-                  onClick={() => setShowNewProjectDialog(false)}
-                >
-                  x
-                </button>
-              </div>
-              <div className="settings-body">
-                <label className="project-name-field">
-                  <span>Projektname</span>
-                  <input
-                    autoFocus
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleCreateProject();
-                    }}
-                  />
-                </label>
-                <p className="settings-hint">
-                  StoneCutter erstellt einen Projektordner mit einer
-                  `.stonecutter`-Projektdatei.
-                </p>
-                <button
-                  className="export-start-btn"
-                  onClick={handleCreateProject}
-                >
-                  <Icon.FolderOpen /> Speicherort waehlen
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      <ProjectStartScreen
+        logoUrl={logoUrl}
+        Icon={Icon}
+        recentProjects={recentProjects}
+        projectStatus={projectStatus}
+        showNewProjectDialog={showNewProjectDialog}
+        newProjectName={newProjectName}
+        onNewProjectNameChange={setNewProjectName}
+        onCreateProject={handleCreateProject}
+        onOpenProject={handleOpenProject}
+        onOpenProjectPath={openProjectPath}
+        onClearRecentProjects={() => persistRecentProjects([])}
+        onShowNewProjectDialog={() => setShowNewProjectDialog(true)}
+        onCloseNewProjectDialog={() => setShowNewProjectDialog(false)}
+        isTauri={isTauri}
+      />
     );
   }
 
   return (
-    <div className={`app has-topbar has-sidebar-tabs${activeClipId ? " has-inspector" : ""}${editorFocus === FOCUS_TIMELINE && !activeClipId ? " has-inspector" : ""}`}>
-      {/* ===== Top Navigation Bar ===== */}
-      <nav className="topbar">
-        <div className="topbar-brand">
-          <img src={logoUrl} alt="StoneCutter" className="topbar-logo" draggable={false} />
-          <span className="topbar-app-name">StoneCutter</span>
-        </div>
-        <div className="topbar-center">
-          <div className="topbar-project-info">
-            {editingProjectName ? (
-              <input
-                type="text"
-                className="topbar-project-name-input"
-                defaultValue={currentProject?.name || "Untitled Project"}
-                autoFocus
-                onBlur={(e) => {
-                  const newName = e.target.value.trim();
-                  if (newName && currentProject) {
-                    setCurrentProject({ ...currentProject, name: newName });
-                    setIsProjectDirty(true);
-                  }
-                  setEditingProjectName(false);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.target.blur();
-                  } else if (e.key === "Escape") {
-                    setEditingProjectName(false);
-                  }
-                }}
-              />
-            ) : (
-              <button
-                className="topbar-project-name"
-                onClick={() => setEditingProjectName(true)}
-                title="Projekt umbenennen"
-              >
-                {currentProject?.name || "Untitled Project"}
-                {isProjectDirty && <span className="topbar-save-indicator" />}
-              </button>
-            )}
-            {currentProject?.path && (
-              <div className="topbar-project-path" title={currentProject.path}>
-                {currentProject.path}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="topbar-right">
-          <button className="topbar-btn" onClick={undo} title="Rückgängig (Ctrl+Z)" disabled={historySizes.past === 0}>
-            <Icon.Undo />
-          </button>
-          <button className="topbar-btn" onClick={redo} title="Wiederholen (Ctrl+Y)" disabled={historySizes.future === 0}>
-            <Icon.Redo />
-          </button>
-          <div className="topbar-divider" />
-          <button
-            className="topbar-btn"
-            onClick={() => setShowSettings(v => !v)}
-            title="Einstellungen"
-          >
-            <Icon.Settings />
-          </button>
-          <div className="topbar-divider" />
-          {isTauri && (
-            <button
-              className="topbar-btn"
-              onClick={saveCurrentProject}
-              title="Projekt speichern (Ctrl+S)"
-              disabled={!currentProject?.path || !isProjectDirty}
-            >
-              <Icon.Save />
-            </button>
-          )}
-          <button
-            className="topbar-export-btn"
-            onClick={() => { setExportStatus(null); setShowExport(true); }}
-            title="Als MP4 exportieren"
-            disabled={clips.length === 0}
-          >
-            <Icon.Export /> Export
-          </button>
-        </div>
-      </nav>
-
+    <div className={`app has-topbar has-sidebar-tabs${playbackMode === "timeline" && isPlaying ? " timeline-playing" : ""}${activeClipId ? " has-inspector" : ""}${editorFocus === FOCUS_TIMELINE && !activeClipId ? " has-inspector" : ""}`}>
+      <TopBar
+        logoUrl={logoUrl}
+        Icon={Icon}
+        currentProject={currentProject}
+        editingProjectName={editingProjectName}
+        isProjectDirty={isProjectDirty}
+        historySizes={historySizes}
+        isTauri={isTauri}
+        clipsLength={clips.length}
+        onStartRename={() => setEditingProjectName(true)}
+        onCommitRename={(value) => {
+          const newName = value.trim();
+          if (newName && currentProject) {
+            setCurrentProject({ ...currentProject, name: newName });
+            setIsProjectDirty(true);
+          }
+          setEditingProjectName(false);
+        }}
+        onCancelRename={() => setEditingProjectName(false)}
+        onUndo={undo}
+        onRedo={redo}
+        onToggleSettings={() => setShowSettings((v) => !v)}
+        onSaveProject={saveCurrentProject}
+        onExport={() => {
+          setExportStatus(null);
+          setShowExport(true);
+        }}
+        onBackToProjects={handleBackToProjects}
+      />
       {/* Old logo-area preserved (hidden by has-topbar CSS) */}
       <div className="logo-area">
         <img src={logoUrl} alt="StoneCutter" className="app-logo" draggable={false} />
@@ -5059,691 +5160,144 @@ function App() {
           <button onClick={() => setProjectStatus(null)}>x</button>
         </div>
       )}
-
-      {/* ===== Sidebar Icon Tabs ===== */}
-      <div className="sidebar-tabs-strip">
-        {[
-          { id: "media", label: "Media", icon: NavIcon.Media },
-          { id: "audio", label: "Audio", icon: NavIcon.Audio },
-          { id: "text", label: "Text", icon: NavIcon.Text },
-          { id: "effects", label: "Effects", icon: NavIcon.Effects },
-          { id: "transitions", label: "Trans.", icon: NavIcon.Transitions },
-          { id: "elements", label: "Elements", icon: NavIcon.Elements },
-        ].map(({ id, label, icon: TabIcon }) => (
-          <button
-            key={id}
-            className={`sidebar-tab-btn ${sidebarTab === id ? "active" : ""}`}
-            onClick={() => setSidebarTab(id)}
-            title={label}
-          >
-            <TabIcon />
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* ===== Sidebar ===== */}
-      <aside
-        className={`sidebar ${editorFocus === FOCUS_SOURCE ? "focus-source" : ""}`}
-      >
-        {sidebarTab === "media" ? (
-          <>
-          <div className="sidebar-header">
-          <h2 className="sidebar-title">Project Media</h2>
-          <button
-            className={`import-btn ${videos.length === 0 ? "pulse" : ""}`}
-            onClick={handleImport}
-            title="Videos importieren"
-          >
-            <Icon.Plus /> Import
-          </button>
-        </div>
-        <div className="media-bin-controls">
-          <input
-            className="media-search-input"
-            value={mediaSearch}
-            onChange={(e) => setMediaSearch(e.target.value)}
-            placeholder="Medien suchen..."
-            aria-label="Medien suchen"
-          />
-          <div className="media-filter-row">
-            <select
-              value={mediaTypeFilter}
-              onChange={(e) => setMediaTypeFilter(e.target.value)}
-              aria-label="Medientyp filtern"
-            >
-              <option value="all">Alle Typen</option>
-              <option value="video">Video</option>
-              <option value="audio">Audio</option>
-              <option value="image">Bild</option>
-            </select>
-            <select
-              value={mediaSort}
-              onChange={(e) => setMediaSort(e.target.value)}
-              aria-label="Mediathek sortieren"
-            >
-              <option value="importedAt">Neueste</option>
-              <option value="name">Name</option>
-              <option value="duration">Dauer</option>
-              <option value="type">Typ</option>
-            </select>
-          </div>
-        </div>
-        <div
-          className="video-list"
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = "copy";
-          }}
-          onDrop={async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const files = Array.from(e.dataTransfer.files).filter(
-              isImportableMediaFile,
-            );
-            if (files.length === 0) return;
-            await handleFileChange({ target: { files } });
-          }}
-        >
-          <MediaPanel
-            videos={videos}
-            visibleVideos={visibleVideos}
-            activeId={activeId}
-            thumbsMap={thumbsMap}
-            videoDurations={videoDurations}
-            handleDragStart={handleDragStart}
-            handleDragEnd={handleDragEnd}
-            handleSelectMedia={handleSelectMedia}
-            handleDoubleClickMedia={handleDoubleClickMedia}
-            handleRemoveMedia={handleRemoveMedia}
-            handleFileChange={handleFileChange}
-            isImportableMediaFile={isImportableMediaFile}
-            Icon={Icon}
-            formatTime={formatTime}
-          />
-        </div>
-          </>
-        ) : (
-          <div className="sidebar-placeholder">
-            <div className="sidebar-placeholder-icon">
-              {sidebarTab === "effects" && "✨"}
-              {sidebarTab === "transitions" && "↔"}
-              {sidebarTab === "text" && "T"}
-              {sidebarTab === "audio" && "♪"}
-              {sidebarTab === "elements" && "⬡"}
-            </div>
-            <p className="sidebar-placeholder-title">
-              {sidebarTab === "effects" && "Effects"}
-              {sidebarTab === "transitions" && "Transitions"}
-              {sidebarTab === "text" && "Text"}
-              {sidebarTab === "audio" && "Audio"}
-              {sidebarTab === "elements" && "Elements"}
-            </p>
-            <p className="sidebar-placeholder-hint">Hier wird diese Funktion verfügbar sein.</p>
-          </div>
-        )}
-      </aside>
-
-      {/* ===== Player ===== */}
-      <main
-        className={`main-content ${editorFocus === FOCUS_SOURCE ? "focus-source" : ""} ${activeClipId ? "has-inspector" : ""}`}
-      >
-        <div
-          className={`player-wrapper ${aspectRatio === "9:16" ? "ar-portrait" : "ar-landscape"}`}
-        >
-          {/* Aspect Ratio Switcher */}
-          <div className="ar-switcher">
-            {["16:9", "9:16"].map((ar) => (
-              <button
-                key={ar}
-                className={`ar-btn ${aspectRatio === ar ? "active" : ""}`}
-                onClick={() => setAspectRatio(ar)}
-                title={
-                  ar === "16:9" ? "Querformat (16:9)" : "Hochformat (9:16)"
-                }
-              >
-                <span className={`ar-icon ar-icon-${ar.replace(":", "-")}`} />
-                {ar}
-              </button>
-            ))}
-          </div>
-
-          <div className="video-container">
-            {isTimelineMonitorActive ? (
-              <div className="timeline-composite-preview" onClick={handlePlay}>
-                {timelineVisualLayers.length > 0 ? (
-                  timelineVisualLayers.map(({ clip, media }, index) => {
-                    const mediaType = media?.mediaType || "video";
-                    const _clipDurV = clip.outPoint - clip.inPoint;
-                    const _fadeInV = clip.fadeIn ?? 0;
-                    const _fadeOutV = clip.fadeOut ?? 0;
-                    const _timeInClipV = Math.max(
-                      0,
-                      timelineTime - clip.startTime,
-                    );
-                    let _fadeOpacity = 1;
-                    if (_fadeInV > 0 && _timeInClipV < _fadeInV)
-                      _fadeOpacity = _timeInClipV / _fadeInV;
-                    const _timeToEndV = _clipDurV - _timeInClipV;
-                    if (_fadeOutV > 0 && _timeToEndV < _fadeOutV)
-                      _fadeOpacity = Math.min(
-                        _fadeOpacity,
-                        _timeToEndV / _fadeOutV,
-                      );
-                    const _opacityV =
-                      _fadeOpacity * ((clip.opacity ?? 100) / 100);
-                    const _scalePct = (clip.scale ?? 100) / 100;
-                    const _sx = _scalePct * (clip.flipH ? -1 : 1);
-                    const _sy = _scalePct * (clip.flipV ? -1 : 1);
-                    const _bri = clip.brightness ?? 0;
-                    const _con = clip.contrast ?? 0;
-                    const _sat = clip.saturation ?? 0;
-                    const _cssFilters = [
-                      _bri !== 0
-                        ? `brightness(${Math.max(0, 1 + _bri / 100).toFixed(2)})`
-                        : "",
-                      _con !== 0
-                        ? `contrast(${Math.max(0, 1 + _con / 100).toFixed(2)})`
-                        : "",
-                      _sat !== 0
-                        ? `saturate(${Math.max(0, 1 + _sat / 100).toFixed(2)})`
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ");
-                    return (
-                      <div
-                        key={clip.id}
-                        className="timeline-preview-layer"
-                        style={{
-                          zIndex: index + 1,
-                          opacity: _opacityV,
-                          transform: `translate(${clip.positionX ?? 0}px, ${clip.positionY ?? 0}px) rotate(${clip.rotation ?? 0}deg) scale(${_sx}, ${_sy})`,
-                          filter: _cssFilters || undefined,
-                        }}
-                      >
-                        {mediaType === "image" ? (
-                          <img
-                            src={media?.src || clip.src}
-                            className="timeline-preview-media"
-                            alt={clip.name}
-                            draggable={false}
-                          />
-                        ) : (
-                          <video
-                            ref={setTimelineVisualRef(clip.id)}
-                            className="timeline-preview-media"
-                            src={media?.src || clip.src}
-                            muted
-                            playsInline
-                            preload="auto"
-                            draggable={false}
-                          />
-                        )}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="empty-overlay timeline-empty-preview">
-                    <p>Keine Videoebene am Playhead</p>
-                  </div>
-                )}
-                <div className="timeline-audio-bus" aria-hidden="true">
-                  {timelineAudioLayers.map(({ clip, media }) => (
-                    <audio
-                      key={clip.id}
-                      ref={setTimelineAudioRef(clip.id)}
-                      src={media?.src || clip.src}
-                      preload="auto"
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : videoSrc && activeVideo?.mediaType === "image" ? (
-              <img
-                key={videoSrc}
-                src={videoSrc}
-                className="video player-image"
-                alt={activeVideo?.name}
-                onClick={handlePlay}
-                draggable={false}
-              />
-            ) : videoSrc ? (
-              <video
-                ref={videoRef}
-                key={videoSrc}
-                className="video"
-                onClick={handlePlay}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => {
-                  if (
-                    playbackModeRef.current === "timeline" &&
-                    playingClipIdRef.current
-                  )
-                    return;
-                  if (!imagePlaybackRef.current && !timelinePlaybackRef.current)
-                    setIsPlaying(false);
-                }}
-                onLoadedMetadata={handleLoadedMetadata}
-                onTimeUpdate={handlePreviewTimeUpdate}
-                src={videoSrc}
-              />
-            ) : (
-              <div className="empty-overlay">
-                <p>Wähle ein Medium aus der Mediathek</p>
-                <p className="hint">
-                  Doppelklick zur Vorschau · Ziehen auf die Timeline
-                </p>
-              </div>
-            )}
-            {isSourceMonitorActive && (
-              <div className="preview-player-bar">
-                <button
-                  className="preview-player-btn"
-                  onClick={handlePlay}
-                  title="Vorschau abspielen"
-                >
-                  {playbackMode === "source" && isPlaying ? (
-                    <Icon.Pause />
-                  ) : (
-                    <Icon.Play />
-                  )}
-                </button>
-                <span className="preview-player-time">
-                  {formatTC(previewTime)}
-                </span>
-                <div className="preview-player-progress" aria-hidden="true">
-                  <div
-                    className="preview-player-progress-fill"
-                    style={{
-                      width: `${Math.min(100, Math.max(0, (previewTime / activeSourceSelection.duration) * 100))}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {isTimelineMonitorActive ? (
-            <div className="video-title-bar">
-              <span className="title-name">
-                Timeline-Komposition
-                {topTimelineClip ? ` · ${topTimelineClip.name}` : ""}
-              </span>
-              <span className="media-type-badge">
-                {timelineVisualLayers.length} Video ·{" "}
-                {timelineAudioLayers.length} Audio
-              </span>
-            </div>
-          ) : (
-            activeVideo && (
-              <div className="video-title-bar">
-                <span className="title-name">{activeVideo.name}</span>
-                {activeVideo.mediaType === "image" && (
-                  <span className="media-type-badge">
-                    Bild · {settings.imageDuration}s
-                  </span>
-                )}
-                {activeVideo.mediaType === "audio" && (
-                  <span className="media-type-badge">Audio</span>
-                )}
-              </div>
-            )
-          )}
-
-          {isSourceMonitorActive && (
-            <div className="source-trim-panel">
-              <div className="source-trim-header">
-                <span>Source In/Out</span>
-                <strong>
-                  {formatTC(activeSourceSelection.inPoint)} -{" "}
-                  {formatTC(activeSourceSelection.outPoint)} (
-                  {formatTime(activeSourceSelection.clipDuration)})
-                </strong>
-                <div className="source-point-actions">
-                  <button
-                    type="button"
-                    onClick={() => setSourcePointAtPreviewTime("inPoint")}
-                    title="In auf aktuelle Vorschauposition setzen"
-                  >
-                    In
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSourcePointAtPreviewTime("outPoint")}
-                    title="Out auf aktuelle Vorschauposition setzen"
-                  >
-                    Out
-                  </button>
-                </div>
-              </div>
-              <div
-                className="source-preview-timeline"
-                onMouseDown={beginSourcePreviewSeek}
-                title="Vorschauposition setzen; In/Out-Handles ziehen"
-              >
-                <div
-                  className="source-preview-window"
-                  style={{
-                    left: `${(activeSourceSelection.inPoint / activeSourceSelection.duration) * 100}%`,
-                    width: `${(activeSourceSelection.clipDuration / activeSourceSelection.duration) * 100}%`,
-                  }}
-                />
-                <div
-                  className="source-preview-playhead"
-                  style={{
-                    left: `${Math.min(100, Math.max(0, (previewTime / activeSourceSelection.duration) * 100))}%`,
-                  }}
-                />
-                <button
-                  type="button"
-                  className="source-preview-handle in"
-                  style={{
-                    left: `${(activeSourceSelection.inPoint / activeSourceSelection.duration) * 100}%`,
-                  }}
-                  onMouseDown={(e) => beginSourceTimelineDrag(e, "inPoint")}
-                  aria-label="Source In setzen"
-                  title="In ziehen"
-                />
-                <button
-                  type="button"
-                  className="source-preview-handle out"
-                  style={{
-                    left: `${(activeSourceSelection.outPoint / activeSourceSelection.duration) * 100}%`,
-                  }}
-                  onMouseDown={(e) => beginSourceTimelineDrag(e, "outPoint")}
-                  aria-label="Source Out setzen"
-                  title="Out ziehen"
-                />
-              </div>
-              <div className="source-drag-actions">
-                <button
-                  type="button"
-                  className="source-drag-btn video-source"
-                  draggable
-                  onDragStart={(e) => handleSourceDragStart(e, "av")}
-                  onDragEnd={handleDragEnd}
-                  aria-label={
-                    activeVideo.mediaType === "image"
-                      ? "Bildauswahl in die Timeline ziehen"
-                      : "Auswahl als Video mit Audio in die Timeline ziehen"
-                  }
-                  title={
-                    activeVideo.mediaType === "image"
-                      ? "Bildauswahl in die Timeline ziehen"
-                      : "Auswahl als Video mit Audio in die Timeline ziehen"
-                  }
-                >
-                  <Icon.VideoTrack />{" "}
-                  {activeVideo.mediaType === "image" ? "Bild" : "Video + Audio"}
-                </button>
-                {activeVideo.mediaType === "video" && (
-                  <button
-                    type="button"
-                    className="source-drag-btn audio-source"
-                    draggable
-                    onDragStart={(e) => handleSourceDragStart(e, "audio")}
-                    onDragEnd={handleDragEnd}
-                    aria-label="Nur Audio der Auswahl in die Timeline ziehen"
-                    title="Nur Audio der Auswahl in die Timeline ziehen"
-                  >
-                    <Icon.AudioTrack /> Nur Audio
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      </main>
-
-      {/* ===== Timeline ===== */}
-      <section
+      <Sidebar
+        sidebarTab={sidebarTab}
+        sidebarItems={sidebarItems}
+        editorFocus={editorFocus}
+        focusSource={FOCUS_SOURCE}
+        videos={videos}
+        visibleVideos={visibleVideos}
+        activeId={mediaSelectionId}
+        thumbsMap={thumbsMap}
+        videoDurations={videoDurations}
+        mediaSearch={mediaSearch}
+        mediaTypeFilter={mediaTypeFilter}
+        mediaSort={mediaSort}
+        handleImport={handleImport}
+        handleDragStart={handleDragStart}
+        handleDragEnd={handleDragEnd}
+        handleSelectMedia={handleSelectMedia}
+        handleDoubleClickMedia={handleDoubleClickMedia}
+        handleRemoveMedia={handleRemoveMedia}
+        handleFileChange={handleFileChange}
+        isImportableMediaFile={MediaAssetService.isImportableMediaFile}
+        onSidebarTabChange={setSidebarTab}
+        onMediaSearchChange={setMediaSearch}
+        onMediaTypeFilterChange={setMediaTypeFilter}
+        onMediaSortChange={setMediaSort}
+        Icon={Icon}
+        formatTime={formatTime}
+      />
+      <PlayerStage
+        mainContentClassName={mainContentClassName}
+        aspectRatio={aspectRatio}
+        isTimelineMonitorActive={isTimelineMonitorActive}
+        isSourceMonitorActive={isSourceMonitorActive}
+        handlePlay={handlePlay}
+        timelineVisualLayers={timelineVisualLayers}
+        timelineAudioLayers={timelineAudioLayers}
+        topTimelineClip={topTimelineClip}
+        timelineTime={timelineTime}
+        videoSrc={videoSrc}
+        activeVideo={activeVideo}
+        activeSourceSelection={activeSourceSelection}
+        previewTime={previewTime}
+        videoRef={videoRef}
+        playbackModeRef={playbackModeRef}
+        playingClipIdRef={playingClipIdRef}
+        imagePlaybackRef={imagePlaybackRef}
+        timelinePlaybackRef={timelinePlaybackRef}
+        setAspectRatio={setAspectRatio}
+        setIsPlaying={setIsPlaying}
+        handleSourceVideoPlay={handleSourceVideoPlay}
+        setTimelineVisualRef={setTimelineVisualRef}
+        setTimelineAudioRef={setTimelineAudioRef}
+        handleLoadedMetadata={handleLoadedMetadata}
+        handlePreviewTimeUpdate={handlePreviewTimeUpdate}
+        beginSourcePreviewSeek={beginSourcePreviewSeek}
+        beginSourceTimelineDrag={beginSourceTimelineDrag}
+        setSourcePointAtPreviewTime={setSourcePointAtPreviewTime}
+        handleSourceDragStart={handleSourceDragStart}
+        handleDragEnd={handleDragEnd}
+        settings={settings}
+        formatTime={formatTime}
+        formatTC={formatTC}
+        Icon={Icon}
+      />
+      <TimelineSection
         className={`timeline ${dragOver ? "drag-over" : ""} ${editorFocus === FOCUS_TIMELINE ? "focus-timeline" : ""}`}
-        onDragEnter={handleTimelineDragEnter}
-        onDragOver={handleTimelineDragOver}
-        onDragLeave={handleTimelineDragLeave}
-        onDrop={handleTimelineDrop}
-      >
-        {/* Toolbar */}
-        <div className="timeline-toolbar">
-          <div className="tb-group">
-            <button
-              className="tb-btn"
-              onClick={() => seekToTime(0)}
-              title="Zum Anfang (Home)"
-            >
-              <Icon.SkipStart />
-            </button>
-            <button className="tb-btn" onClick={stepBack} title="1s zurück (←)">
-              <Icon.StepBack />
-            </button>
-            <button
-              className="tb-btn play"
-              onClick={handleTimelinePlay}
-              title="Play/Pause (Space)"
-            >
-              {playbackMode === "timeline" && isPlaying ? (
-                <Icon.Pause />
-              ) : (
-                <Icon.Play />
-              )}
-            </button>
-            <button className="tb-btn" onClick={stepFwd} title="1s vor (→)">
-              <Icon.StepFwd />
-            </button>
-            <button
-              className="tb-btn"
-              onClick={() => seekToTime(totalEnd)}
-              title="Zum Ende (End)"
-            >
-              <Icon.SkipEnd />
-            </button>
-          </div>
-
-          <div className="tb-timecode">
-            <span className="tc-current">{formatTC(timelineTime)}</span>
-            <span className="tc-sep">/</span>
-            <span className="tc-total">{formatTC(totalEnd)}</span>
-          </div>
-
-          <div className="tb-group">
-            <button
-              className="tb-btn"
-              onClick={splitAtPlayhead}
-              title="Am Playhead teilen (S)"
-            >
-              <Icon.Cut />
-            </button>
-            <button
-              className="tb-btn"
-              onClick={undo}
-              title="Rückgängig (Ctrl+Z)"
-              disabled={historySizes.past === 0}
-            >
-              <Icon.Undo />
-            </button>
-            <button
-              className="tb-btn"
-              onClick={redo}
-              title="Wiederholen (Ctrl+Y)"
-              disabled={historySizes.future === 0}
-            >
-              <Icon.Redo />
-            </button>
-          </div>
-
-          <div className="tb-spacer" />
-
-          <button
-            className={`tb-btn toggle ${snapEnabled ? "on" : ""}`}
-            onClick={() => setSnapEnabled((v) => !v)}
-            title="Magnet-Snap (N)"
-          >
-            <Icon.Magnet />
-          </button>
-
-          <button
-            className={`tb-btn ${showSettings ? "active" : ""}`}
-            onClick={() => setShowSettings((v) => !v)}
-            title="Einstellungen"
-          >
-            <Icon.Settings />
-          </button>
-
-          <div className="tb-group volume">
-            <button
-              className="tb-btn"
-              onClick={() => setMuted((v) => !v)}
-              title={muted ? "Stumm aufheben" : "Stummschalten"}
-            >
-              {muted || volume === 0 ? <Icon.Mute /> : <Icon.Volume />}
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={muted ? 0 : volume}
-              onChange={(e) => {
-                setVolume(parseFloat(e.target.value));
-                if (parseFloat(e.target.value) > 0) setMuted(false);
-              }}
-              className="vol-slider"
-              title="Lautstärke"
-            />
-          </div>
-
-          <div className="tb-group zoom">
-            <span className="tb-label">Zoom</span>
-            <input
-              type="range"
-              min="10"
-              max="120"
-              step="2"
-              value={pxPerSec}
-              onChange={(e) => setPxPerSec(parseInt(e.target.value, 10))}
-              className="zoom-slider"
-              title="Zoom (px/s)"
-            />
-          </div>
-        </div>
-
-        <Timeline
-          tracks={tracks}
-          clips={clips}
-          pxPerSec={pxPerSec}
-          totalWidth={totalWidth}
-          totalEnd={totalEnd}
-          playheadX={playheadX}
-          interaction={interaction}
-          activeClipId={activeClipId}
-          selectedClipIds={selectedClipIds}
-          draggingIds={draggingIds}
-          dropTargetTrackId={dropTargetTrackId}
-          trackMoveTargetIds={trackMoveTargetIds}
-          trackMovePreview={trackMovePreview}
-          thumbsMap={thumbsMap}
-          peaksMap={peaksMap}
-          editingTrackId={editingTrackId}
-          dragOver={dragOver}
-          dropZoneTrackMode={dropZoneTrackMode}
-          formatTime={formatTime}
-          formatTC={formatTC}
-          scrubTooltip={scrubTooltip}
-          setTimelinePlayheadRef={setTimelinePlayheadRef}
-          handleTracksMouseDown={handleTracksMouseDown}
-          handleTracksScroll={handleTracksScroll}
-          handlePlayheadMouseDown={handlePlayheadMouseDown}
-          handleClipMouseDown={handleClipMouseDown}
-          handleClipDoubleClick={handleClipDoubleClick}
-          handleClipContextMenu={handleClipContextMenu}
-          handleClipRemove={handleClipRemove}
-          handleTrimMouseDown={handleTrimMouseDown}
-          handleUpdateTrack={handleUpdateTrack}
-          handleRemoveTrack={handleRemoveTrack}
-          handleAddTrack={handleAddTrack}
-          setEditingTrackId={setEditingTrackId}
-          fadeDragRef={fadeDragRef}
-          volumeLineDragRef={volumeLineDragRef}
-          createHistorySnapshot={createHistorySnapshot}
-          DEFAULT_TRACK_HEIGHT={DEFAULT_TRACK_HEIGHT}
-          getAutoTrackZoneTop={getAutoTrackZoneTop}
-          Icon={Icon}
-        />
-
-        {/* Status bar */}
-        <div className="status-bar">
-          <div className="status-left">
-            <span className="status-item">
-              <span className="status-label">Clips:</span> {clips.length}
-            </span>
-            <span className="status-item">
-              <span className="status-label">Länge:</span> {formatTC(totalEnd)}
-            </span>
-            {activeClip && (
-              <span className="status-item">
-                <span className="status-label">Auswahl:</span> {activeClip.name}{" "}
-                ({formatTime(activeClip.outPoint - activeClip.inPoint)})
-              </span>
-            )}
-          </div>
-          <div className="status-right">
-            <span className="status-item">
-              <span className="status-label">Snap:</span>{" "}
-              {snapEnabled ? "Ein (N)" : "Aus (N)"}
-            </span>
-            <span className="status-item">
-              <span className="status-label">Zoom:</span> {pxPerSec}px/s
-            </span>
-            <span className="status-item kbd-hints">
-              <span className="kbd-group">
-                <kbd>Space</kbd> Play
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>S</kbd> Split
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>N</kbd> Snap
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+C/X/V</kbd> Copy/Cut/Paste
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+D</kbd> Duplicate
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Del</kbd> Löschen
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+Del</kbd> Ripple
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>←/→</kbd> Frame
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Shift</kbd> Snap aus
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Alt+Drag</kbd> Klon
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+Shift+L</kbd> Unlink V+A
-              </span>
-            </span>
-          </div>
-        </div>
-      </section>
+        totalEnd={totalEnd}
+        timelineTime={timelineTime}
+        isTimelinePlaying={playbackMode === "timeline" && isPlaying}
+        showSettings={showSettings}
+        historySizes={historySizes}
+        snapEnabled={snapEnabled}
+        muted={muted}
+        volume={volume}
+        pxPerSec={pxPerSec}
+        clips={clips}
+        clipsByTrack={clipsByTrack}
+        activeClip={activeClip}
+        tracks={tracks}
+        totalWidth={totalWidth}
+        playheadX={playheadX}
+        interaction={interaction}
+        activeClipId={activeClipId}
+        selectedClipIds={selectedClipIds}
+        draggingIds={draggingIds}
+        dropTargetTrackId={dropTargetTrackId}
+        trackMoveTargetIds={trackMoveTargetIds}
+        trackMovePreview={trackMovePreview}
+        thumbsMap={thumbsMap}
+        peaksMap={peaksMap}
+        editingTrackId={editingTrackId}
+        dragOver={dragOver}
+        dropZoneTrackMode={dropZoneTrackMode}
+        scrubTooltip={scrubTooltip}
+        selectedKeyframe={selectedKeyframe}
+        onSelectKeyframe={selectKeyframeAndSeek}
+        onBeginKeyframeDrag={beginKeyframeDrag}
+        onBeginVolumeKeyframeDrag={beginVolumeKeyframeDrag}
+        onAddVolumeKeyframe={addVolumeKeyframeFromCurve}
+        fadeDragRef={fadeDragRef}
+        volumeLineDragRef={volumeLineDragRef}
+        createHistorySnapshot={createHistorySnapshot}
+        getAutoTrackZoneTop={getAutoTrackZoneTop}
+        DEFAULT_TRACK_HEIGHT={DEFAULT_TRACK_HEIGHT}
+        setSnapEnabled={setSnapEnabled}
+        setShowSettings={setShowSettings}
+        setMuted={setMuted}
+        setVolume={setVolume}
+        setPxPerSec={setPxPerSec}
+        setEditingTrackId={setEditingTrackId}
+        seekToTime={seekToTime}
+        handlePlay={handleTimelinePlay}
+        stepBack={stepBack}
+        stepFwd={stepFwd}
+        splitAtPlayhead={splitAtPlayhead}
+        undo={undo}
+        redo={redo}
+        handleTimelineDragEnter={handleTimelineDragEnter}
+        handleTimelineDragOver={handleTimelineDragOver}
+        handleTimelineDragLeave={handleTimelineDragLeave}
+        handleTimelineDrop={handleTimelineDrop}
+        setTimelinePlayheadRef={setTimelinePlayheadRef}
+        setTracksContentRef={setTracksContentRef}
+        setTrackHeadersListRef={setTrackHeadersListRef}
+        handleTracksMouseDown={handleTracksMouseDown}
+        handleTracksScroll={handleTracksScroll}
+        handlePlayheadMouseDown={handlePlayheadMouseDown}
+        handleClipMouseDown={handleClipMouseDown}
+        handleClipContextMenu={handleClipContextMenu}
+        handleClipRemove={handleClipRemove}
+        handleTrimMouseDown={handleTrimMouseDown}
+        handleUpdateTrack={handleUpdateTrack}
+        handleRemoveTrack={handleRemoveTrack}
+        handleAddTrack={handleAddTrack}
+        formatTime={formatTime}
+        formatTC={formatTC}
+        Icon={Icon}
+      />
 
       {isDevMode && perfStats && (
         <div className="perf-overlay" aria-label="Performance monitor">
@@ -5754,310 +5308,83 @@ function App() {
         </div>
       )}
 
-      {/* Export modal */}
-      {showExport && (
-        <div
-          className="settings-overlay"
-          onClick={() => {
-            if (exportStatus !== "running") setShowExport(false);
-          }}
-        >
-          <div
-            className="settings-panel export-panel"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="settings-header">
-              <h3>
-                <Icon.Export /> Video exportieren
-              </h3>
-              {exportStatus !== "running" && (
-                <button
-                  className="settings-close"
-                  onClick={() => setShowExport(false)}
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-            <div className="settings-body">
-              {exportStatus === "running" ? (
-                <div className="export-running">
-                  <div className="export-spinner" />
-                  <p>
-                    FFmpeg läuft… Das kann bei langen Videos einige Minuten
-                    dauern.
-                  </p>
-                  <div className="export-progress-shell" aria-label="Export-Fortschritt">
-                    <div
-                      className="export-progress-bar"
-                      style={{ width: `${Math.round(exportProgress.progress * 100)}%` }}
-                    />
-                  </div>
-                  <div className="export-progress-meta">
-                    <span>{Math.round(exportProgress.progress * 100)}%</span>
-                    <span>{formatTC(exportProgress.seconds)} / {formatTC(totalEnd)}</span>
-                  </div>
-                  <button
-                    className="export-action-btn danger"
-                    onClick={handleCancelExport}
-                  >
-                    Export abbrechen
-                  </button>
-                </div>
-              ) : exportStatus?.ok != null ? (
-                <div
-                  className={`export-result ${exportStatus.ok ? "ok" : "err"}`}
-                >
-                  <p>{exportStatus.msg}</p>
-                  <button
-                    className="export-action-btn"
-                    onClick={() => {
-                      setExportStatus(null);
-                      if (exportStatus.ok) setShowExport(false);
-                    }}
-                  >
-                    {exportStatus.ok ? "Schließen" : "Erneut versuchen"}
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="settings-section">
-                    <h4>Format</h4>
-                    <div className="export-info-row">
-                      <span>Auflösung</span>
-                      <strong>
-                        {aspectRatio === "9:16"
-                          ? "1080 × 1920 (9:16)"
-                          : "1920 × 1080 (16:9)"}
-                      </strong>
-                    </div>
-                    <div className="export-info-row">
-                      <span>Container</span>
-                      <strong>MP4 (H.264 + AAC)</strong>
-                    </div>
-                    <div className="export-info-row">
-                      <span>Timeline-Dauer</span>
-                      <strong>{formatTC(totalEnd)}</strong>
-                    </div>
-                  </div>
-
-                  <div className="settings-section">
-                    <h4>Qualität</h4>
-                    <div className="export-quality-group">
-                      {[
-                        {
-                          val: "low",
-                          label: "Niedrig",
-                          crf: 28,
-                          preset: "veryfast",
-                          hint: "~2–4 Mbit/s",
-                          desc: "Kleinste Datei, sichtbare Artefakte",
-                        },
-                        {
-                          val: "medium",
-                          label: "Mittel",
-                          crf: 23,
-                          preset: "fast",
-                          hint: "~6–10 Mbit/s",
-                          desc: "Empfohlen – gute Qualität & Größe",
-                        },
-                        {
-                          val: "high",
-                          label: "Hoch",
-                          crf: 18,
-                          preset: "slow",
-                          hint: "~15–30 Mbit/s",
-                          desc: "Maximale Qualität, große Datei",
-                        },
-                      ].map(({ val, label, crf, preset, hint, desc }) => (
-                        <label
-                          key={val}
-                          className={`export-quality-btn ${exportQuality === val ? "active" : ""}`}
-                        >
-                          <input
-                            type="radio"
-                            name="quality"
-                            value={val}
-                            checked={exportQuality === val}
-                            onChange={() => setExportQuality(val)}
-                          />
-                          <span className="eq-label">{label}</span>
-                          <span className="eq-hint">{hint}</span>
-                          <span className="eq-desc">{desc}</span>
-                          <span className="eq-tech">
-                            CRF {crf} · {preset}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  <button className="export-start-btn" onClick={handleExport}>
-                    <Icon.Export /> Speicherort wählen & Exportieren
-                  </button>
-                  <p className="settings-hint">
-                    Benötigt FFmpeg im System-PATH. Export rendert jetzt
-                    Mehrspur-Video/Bild-Overlays, Audio-Mix, Clip-Volume,
-                    Audio-/Video-Fades sowie Position, Scale, Rotation und
-                    Opacity. Browser-Importe ohne echten Dateipfad bleiben nicht
-                    exportierbar.
-                  </p>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Settings panel */}
-      {showSettings && (
-        <div
-          className="settings-overlay"
-          onClick={() => setShowSettings(false)}
-        >
+      {showSaveConfirmDialog && (
+        <div className="settings-overlay" onClick={() => setShowSaveConfirmDialog(false)}>
           <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
             <div className="settings-header">
-              <h3>
-                <Icon.Settings /> Einstellungen
-              </h3>
-              <button
-                className="settings-close"
-                onClick={() => setShowSettings(false)}
-              >
-                ✕
+              <h3>Projekt schliessen</h3>
+              <button className="settings-close" onClick={() => setShowSaveConfirmDialog(false)}>
+                x
               </button>
             </div>
             <div className="settings-body">
-              <div className="settings-section">
-                <h4>Bilder</h4>
-                <label className="settings-row">
-                  <span>Standard-Bildlänge</span>
-                  <div className="settings-input-group">
-                    <input
-                      id="image-duration"
-                      type="number"
-                      min="0.1"
-                      max="60"
-                      step="0.1"
-                      value={settings.imageDuration}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value);
-                        if (v > 0)
-                          setSettings((s) => ({ ...s, imageDuration: v }));
-                      }}
-                      className="settings-number"
-                    />
-                    <span className="settings-unit">s</span>
-                  </div>
-                </label>
-                <p className="settings-hint">
-                  Wird für neu importierte Bilder verwendet.
-                </p>
+              <p>Moechten Sie das Projekt vor dem Schliessen speichern?</p>
+              <div className="settings-actions">
+                <button className="export-action-btn" onClick={handleConfirmBack}>
+                  Speichern und schliessen
+                </button>
+                <button className="export-action-btn" onClick={handleCancelBack}>
+                  Nicht speichern und schliessen
+                </button>
+                <button className="export-action-btn" onClick={() => setShowSaveConfirmDialog(false)}>
+                  Abbrechen
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Filmora-style volume drag tooltip (fixed in viewport) */}
-      {volTooltip && (
-        <div
-          className="vol-drag-tooltip"
-          style={{ left: volTooltip.x + 14, top: volTooltip.y - 28 }}
-        >
-          Volume: {Math.round(volTooltip.vol * 100)}%
-        </div>
-      )}
-
-      {/* Inspector Panel – linked-clip-aware */}
-      {/* Show "no selection" placeholder when timeline is focused but nothing is selected */}
-      {/* Inspector Panel */}
-      {editorFocus === FOCUS_TIMELINE && (
-        <InspectorPanel
-          activeClip={activeClip}
-          activeClipId={activeClipId}
-          activeTrack={activeTrack}
-          audClip={audClip}
-          displayName={displayName}
-          formatTC={formatTC}
-          inspectorTab={inspectorTab}
-          isLinked={isLinked}
-          onTabChange={setInspectorTab}
-          onUpdateClip={updClip}
-          tracksById={tracksById}
-          vidClip={vidClip}
-        />
-      )}
-
-      {/* Context menu */}
-      {contextMenu &&
-        (() => {
-          const clip = clips.find((c) => c.id === contextMenu.clipId);
-          if (!clip) return null;
-          const isTrimmed =
-            clip.inPoint > 0.01 ||
-            Math.abs(clip.outPoint - clip.sourceDuration) > 0.01;
-          return (
-            <div
-              className="context-menu"
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              <button
-                className="cm-item"
-                onClick={() => {
-                  splitAtPlayhead();
-                  setContextMenu(null);
-                }}
-                disabled={
-                  !(
-                    timelineTime > clip.startTime &&
-                    timelineTime <
-                      clip.startTime + (clip.outPoint - clip.inPoint)
-                  )
-                }
-              >
-                <Icon.Cut /> Am Playhead teilen{" "}
-                <span className="cm-shortcut">S</span>
-              </button>
-              <button
-                className="cm-item"
-                onClick={() => handleContextMenuDuplicate(clip.id)}
-              >
-                <Icon.Plus /> Duplizieren{" "}
-                <span className="cm-shortcut">Ctrl+D</span>
-              </button>
-              <button
-                className="cm-item"
-                onClick={() => {
-                  restoreTrim(clip.id);
-                  setContextMenu(null);
-                }}
-                disabled={!isTrimmed}
-              >
-                <Icon.Undo /> Trim zurücksetzen
-              </button>
-              {clip.linkGroupId && (
-                <button
-                  className="cm-item"
-                  onClick={() => handleContextMenuUnlink(clip.id)}
-                >
-                  Link aufheben{" "}
-                  <span className="cm-shortcut">Ctrl+Shift+L</span>
-                </button>
-              )}
-              <div className="cm-divider" />
-              <button
-                className="cm-item danger"
-                onClick={() => handleContextMenuDelete(clip.id)}
-              >
-                <Icon.Trash /> Löschen <span className="cm-shortcut">Del</span>
-              </button>
-            </div>
-          );
-        })()}
+      <AppOverlays
+        showExport={showExport}
+        exportStatus={exportStatus}
+        exportProgress={exportProgress}
+        totalEnd={totalEnd}
+        aspectRatio={aspectRatio}
+        exportQuality={exportQuality}
+        showSettings={showSettings}
+        settings={settings}
+        volTooltip={volTooltip}
+        editorFocus={editorFocus}
+        focusTimeline={FOCUS_TIMELINE}
+        activeClip={activeClip}
+        activeClipId={activeClipId}
+        activeTrack={activeTrack}
+        audClip={audClip}
+        displayName={displayName}
+        formatTC={formatTC}
+        inspectorTab={inspectorTab}
+        isLinked={isLinked}
+        tracksById={tracksById}
+        vidClip={vidClip}
+        contextMenu={contextMenu}
+        clips={clips}
+        timelineTime={timelineTime}
+        selectedClipCount={selectedClipIds.size}
+        setShowExport={setShowExport}
+        setExportStatus={setExportStatus}
+        setExportQuality={setExportQuality}
+        handleCancelExport={handleCancelExport}
+        handleExport={handleExport}
+        setShowSettings={setShowSettings}
+        setSettings={setSettings}
+        onTabChange={setInspectorTab}
+        onUpdateClip={updClip}
+        onToggleKeyframe={toggleKeyframeAtPlayhead}
+        onToggleGroupKeyframe={toggleGroupKeyframeAtPlayhead}
+        onJumpToKeyframeTime={seekToTime}
+        splitAtPlayhead={splitAtPlayhead}
+        handleContextMenuDuplicate={handleContextMenuDuplicate}
+        restoreTrim={restoreTrim}
+        handleContextMenuUnlink={handleContextMenuUnlink}
+        handleContextMenuDelete={handleContextMenuDelete}
+        setContextMenu={setContextMenu}
+        Icon={Icon}
+      />
     </div>
   );
 }
 
 export default App;
+
+
