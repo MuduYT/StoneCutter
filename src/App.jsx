@@ -3,6 +3,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import logoUrl from "../media/Logo/StoneCutter-Logo.png";
 import "./App.css";
 import { InspectorPanel } from "./components/inspector/InspectorPanel.jsx";
+import { Timeline } from "./components/Timeline.jsx";
+import { MediaPanel } from "./components/MediaPanel.jsx";
 import {
   SNAP_THRESHOLD_PX,
   MOVE_THRESHOLD_PX,
@@ -87,12 +89,12 @@ const PROJECT_FILTER = [
 ];
 const MEDIA_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
 const MEDIA_ACCEPT = "video/*,audio/*,image/*";
-const TIMELINE_MEDIA_SEEK_GRACE_MS = 90;
+const TIMELINE_MEDIA_SEEK_GRACE_MS = 50;
 const TIMELINE_MEDIA_SEEK_TIMEOUT_MS = 350;
-const TIMELINE_STATE_FPS = 12;
+const TIMELINE_STATE_FPS = 60;
 const TIMELINE_LAYER_BOUNDARY_EPSILON = 0.015;
 const TIMELINE_PLAYING_VIDEO_DRIFT_TOLERANCE = 0.22;
-const TIMELINE_PLAYING_AUDIO_DRIFT_TOLERANCE = 0.16;
+const TIMELINE_PLAYING_AUDIO_DRIFT_TOLERANCE = 0.05;
 const TIMELINE_PAUSED_DRIFT_TOLERANCE = 0.02;
 
 let _idCounter = 0;
@@ -685,7 +687,6 @@ function App() {
   // --- UI Redesign state ---
   const [inspectorTab, setInspectorTab] = useState("inspector"); // "inspector" | "effects" | "history"
   const [sidebarTab, setSidebarTab] = useState("media"); // "media" | "audio" | "text" | "effects" | "transitions" | "elements"
-  const [activeNavTab, setActiveNavTab] = useState("media"); // top nav active tab
   const [editingProjectName, setEditingProjectName] = useState(false);
 
   const revokeBrowserObjectUrls = useCallback((items) => {
@@ -1762,12 +1763,7 @@ function App() {
     let promise;
     promise = new Promise((resolve) => {
       let done = false;
-      let timeoutId = window.setTimeout(() => {
-        if (done) return;
-        done = true;
-        node.removeEventListener("seeked", finish);
-        resolve();
-      }, TIMELINE_MEDIA_SEEK_TIMEOUT_MS);
+      let timeoutId = 0;
       const finish = () => {
         if (done) return;
         done = true;
@@ -1776,6 +1772,18 @@ function App() {
         resolve();
       };
       node.addEventListener("seeked", finish, { once: true });
+      timeoutId = window.setTimeout(finish, TIMELINE_MEDIA_SEEK_TIMEOUT_MS);
+      try {
+        node.currentTime = sourceTime;
+      } catch {
+        finish();
+      }
+      if (
+        !node.seeking &&
+        Math.abs((node.currentTime || 0) - sourceTime) <= 0.01
+      ) {
+        window.setTimeout(finish, 0);
+      }
     }).finally(() => {
       if (timelineMediaSeekPromisesRef.current.get(node) === promise) {
         timelineMediaSeekPromisesRef.current.delete(node);
@@ -2156,9 +2164,10 @@ function App() {
   ]);
 
   useEffect(() => {
+    if (playbackModeRef.current === "timeline" && isPlaying) return;
     timelineTimeRef.current = timelineTime;
     updateTimelinePlayheadPosition(timelineTime);
-  }, [timelineTime, updateTimelinePlayheadPosition]);
+  }, [isPlaying, timelineTime, updateTimelinePlayheadPosition]);
 
   useEffect(() => {
     activeTimelineLayersRef.current = {
@@ -2228,6 +2237,7 @@ function App() {
       const nextTime = timelineState.timelineTime;
       timelineTimeRef.current = nextTime;
       updateTimelinePlayheadPosition(nextTime);
+      setTimelineTime(nextTime);
       const shouldSyncState =
         nowMs - timelineLastStateUpdateRef.current >= 1000 / TIMELINE_STATE_FPS;
       const shouldCheckLayers =
@@ -5136,77 +5146,22 @@ function App() {
             await handleFileChange({ target: { files } });
           }}
         >
-          {videos.length === 0 ? (
-            <div className="empty-list">
-              <p>Keine Medien importiert.</p>
-              <p className="hint">
-                Klicke "+ Import" oder ziehe Dateien hierher.
-              </p>
-            </div>
-          ) : visibleVideos.length === 0 ? (
-            <div className="empty-list">
-              <p>Keine Treffer.</p>
-              <p className="hint">Passe Suche oder Filter an.</p>
-            </div>
-          ) : null}
-          {visibleVideos.map((v) => (
-            <div
-              key={v.id}
-              className={`video-item ${v.id === activeId ? "active" : ""}`}
-              draggable
-              onDragStart={(e) => handleDragStart(e, v)}
-              onDragEnd={handleDragEnd}
-              onClick={() => handleSelectMedia(v.id)}
-              onDoubleClick={() => handleDoubleClickMedia(v.id)}
-              title={`${v.path}\nDoppelklick = Vorschau · Ziehen = auf Timeline`}
-            >
-              {(() => {
-                const firstThumb = thumbsMap[v.id]?.find?.((t) => !!t);
-                if (firstThumb) {
-                  return (
-                    <div
-                      className="video-thumb-preview"
-                      style={{ backgroundImage: `url(${firstThumb})` }}
-                      aria-hidden="true"
-                    />
-                  );
-                }
-                return (
-                  <div className="video-icon">
-                    {v.mediaType === "image" ? (
-                      <Icon.Image />
-                    ) : v.mediaType === "audio" ? (
-                      <Icon.AudioTrack />
-                    ) : (
-                      <Icon.Play />
-                    )}
-                  </div>
-                );
-              })()}
-              <div className="video-info">
-                <div className="video-name">{v.name}</div>
-                <div className="media-meta-row">
-                  <span>
-                    {v.mediaType === "image"
-                      ? "Bild"
-                      : v.mediaType === "audio"
-                        ? "Audio"
-                        : "Video"}
-                  </span>
-                  {videoDurations[v.id] ? (
-                    <span>{formatTime(videoDurations[v.id])}</span>
-                  ) : null}
-                </div>
-              </div>
-              <button
-                className="remove-btn"
-                onClick={(e) => handleRemoveMedia(v.id, e)}
-                title="Aus Mediathek entfernen"
-              >
-                <Icon.Trash />
-              </button>
-            </div>
-          ))}
+          <MediaPanel
+            videos={videos}
+            visibleVideos={visibleVideos}
+            activeId={activeId}
+            thumbsMap={thumbsMap}
+            videoDurations={videoDurations}
+            handleDragStart={handleDragStart}
+            handleDragEnd={handleDragEnd}
+            handleSelectMedia={handleSelectMedia}
+            handleDoubleClickMedia={handleDoubleClickMedia}
+            handleRemoveMedia={handleRemoveMedia}
+            handleFileChange={handleFileChange}
+            isImportableMediaFile={isImportableMediaFile}
+            Icon={Icon}
+            formatTime={formatTime}
+          />
         </div>
           </>
         ) : (
@@ -5276,14 +5231,11 @@ function App() {
                         _fadeOpacity,
                         _timeToEndV / _fadeOutV,
                       );
-                    // Combine clip opacity (0-100) with fade envelope
                     const _opacityV =
                       _fadeOpacity * ((clip.opacity ?? 100) / 100);
-                    // Scale + flip transform
                     const _scalePct = (clip.scale ?? 100) / 100;
                     const _sx = _scalePct * (clip.flipH ? -1 : 1);
                     const _sy = _scalePct * (clip.flipV ? -1 : 1);
-                    // CSS color correction filters
                     const _bri = clip.brightness ?? 0;
                     const _con = clip.contrast ?? 0;
                     const _sat = clip.saturation ?? 0;
@@ -5677,641 +5629,48 @@ function App() {
           </div>
         </div>
 
-        {/* Tracks */}
-        <div className="timeline-tracks">
-          {/* Fixed track headers column */}
-          <div className="track-headers">
-            <div className="track-header time-header" />
-            <div className="track-headers-list" ref={trackHeadersListRef}>
-              {tracks.map((track) => {
-                const sameTypeTracks = tracks.filter(t => t.type === track.type);
-                const typeIndex = sameTypeTracks.indexOf(track) + 1;
-                const typeLabel = `${track.type === "video" ? "V" : "A"}${typeIndex}`;
-                return (
-                <div
-                  key={track.id}
-                  className={`track-header-row ${track.type === "video" ? "video" : "audio"} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""}`}
-                  style={{
-                    height: `${track.height || DEFAULT_TRACK_HEIGHT}px`,
-                  }}
-                >
-                  <div className="track-header-left">
-                    <span className="track-type-label">
-                      {typeLabel}
-                    </span>
-                    {editingTrackId === track.id ? (
-                      <input
-                        className="track-name-input"
-                        defaultValue={track.name}
-                        autoFocus
-                        onBlur={(e) => {
-                          handleUpdateTrack(track.id, { name: e.target.value });
-                          setEditingTrackId(null);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            handleUpdateTrack(track.id, {
-                              name: e.currentTarget.value,
-                            });
-                            setEditingTrackId(null);
-                          }
-                          if (e.key === "Escape") setEditingTrackId(null);
-                        }}
-                      />
-                    ) : (
-                      <span
-                        className="track-name"
-                        onDoubleClick={() => setEditingTrackId(track.id)}
-                        title="Doppelklick zum Bearbeiten"
-                      >
-                        {track.name}
-                      </span>
-                    )}
-                  </div>
-                  <div className="track-header-controls">
-                    <button
-                      className={`track-btn visibility ${track.hidden ? "hidden" : ""}`}
-                      onClick={() =>
-                        handleUpdateTrack(track.id, { hidden: !track.hidden })
-                      }
-                      title={track.hidden ? "Spur einblenden" : "Spur ausblenden"}
-                    >
-                      {track.hidden ? "◌" : "👁"}
-                    </button>
-                    {track.type === "audio" && (
-                      <>
-                        <button
-                          className={`track-btn mute ${track.muted ? "active" : ""}`}
-                          onClick={() =>
-                            handleUpdateTrack(track.id, { muted: !track.muted })
-                          }
-                          title={track.muted ? "Stumm aus" : "Stumm"}
-                        >
-                          M
-                        </button>
-                        <button
-                          className={`track-btn solo ${track.solo ? "active" : ""}`}
-                          onClick={() =>
-                            handleUpdateTrack(track.id, { solo: !track.solo })
-                          }
-                          title={track.solo ? "Solo aus" : "Solo"}
-                        >
-                          S
-                        </button>
-                      </>
-                    )}
-                    <button
-                      className={`track-btn lock ${track.locked ? "active" : ""}`}
-                      onClick={() =>
-                        handleUpdateTrack(track.id, { locked: !track.locked })
-                      }
-                      title={track.locked ? "Entsperren" : "Sperren"}
-                    >
-                      🔒
-                    </button>
-                    {tracks.length > 1 && (
-                      <button
-                        className="track-btn delete"
-                        onClick={() => handleRemoveTrack(track.id)}
-                        title="Spur löschen"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ); })}
-              {/* Drop target below tracks */}
-              {dragOver && (
-                <div
-                  className={`track-header-row drop-target-below ${dropTargetTrackId === "__below__" ? "active" : ""}`}
-                >
-                  <span>
-                    {dragOver
-                      ? dropZoneTrackMode === "audio"
-                        ? "+ Audio-Spur"
-                        : "+ Video-Spur"
-                      : "+ Neue Spur"}
-                  </span>
-                </div>
-              )}
-            </div>
-            {/* Add track buttons */}
-            <div className="track-header-actions">
-              <button
-                className="add-track-btn"
-                onClick={() => handleAddTrack("video")}
-                title="Video-Spur hinzufügen"
-              >
-                + Video
-              </button>
-              <button
-                className="add-track-btn"
-                onClick={() => handleAddTrack("audio")}
-                title="Audio-Spur hinzufügen"
-              >
-                + Audio
-              </button>
-            </div>
-          </div>
-
-          <div
-            className="tracks-content"
-            ref={tracksContentRef}
-            onMouseDown={handleTracksMouseDown}
-            onScroll={handleTracksScroll}
-          >
-            <div
-              className="tracks-inner"
-              style={{
-                width: `${totalWidth}px`,
-                minHeight: `${30 + tracksHeight + 60}px`,
-              }}
-            >
-              {/* Time ruler */}
-              <div className="time-ruler" style={{ width: `${totalWidth}px` }}>
-                {Array.from({
-                  length: Math.max(20, Math.ceil(totalEnd) + 5),
-                }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={`tick ${i % 5 === 0 ? "major" : ""}`}
-                    style={{ left: `${i * pxPerSec}px` }}
-                  >
-                    {i % 5 === 0 && (
-                      <span className="tick-label">{formatTime(i)}</span>
-                    )}
-                  </div>
-                ))}
-                {/* Playhead handle lives inside the sticky ruler so it stays visible while scrolling. */}
-                <div
-                  className={`playhead-handle ruler-handle ${interaction?.type === "seek" ? "dragging" : ""}`}
-                  ref={setTimelinePlayheadRef(0)}
-                  style={{ "--playhead-x": `${playheadX}px` }}
-                  onMouseDown={handlePlayheadMouseDown}
-                  title="Ziehen zum Spulen"
-                />
-                {/* Scrub tooltip inside the ruler so it remains visible while scrolling */}
-                {scrubTooltip && (
-                  <div
-                    className="scrub-tooltip"
-                    style={{ left: `${scrubTooltip.x}px` }}
-                  >
-                    {formatTC(scrubTooltip.time)}
-                  </div>
-                )}
-              </div>
-
-              {/* Track lanes */}
-              {tracks.map((track) => (
-                <div
-                  key={track.id}
-                  className={`track-lane ${track.type} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""} ${track.locked ? "locked" : ""}`}
-                  style={{
-                    height: `${track.height || DEFAULT_TRACK_HEIGHT}px`,
-                  }}
-                  data-track-id={track.id}
-                >
-                  {(clipsByTrack.get(track.id) || []).map((clip) => {
-                      const dur = clip.outPoint - clip.inPoint;
-                      const left = clip.startTime * pxPerSec;
-                      const width = Math.max(20, dur * pxPerSec);
-                      const isVideo = track.type === "video";
-                      const trimmedLeft = clip.inPoint > 0.01;
-                      const trimmedRight =
-                        clip.outPoint < clip.sourceDuration - 0.01;
-                      return (
-                        <div
-                          key={clip.id}
-                          className={`clip ${isVideo ? "video-clip" : "audio-clip"} ${activeClipId === clip.id ? "active" : ""} ${selectedClipIds.has(clip.id) ? "selected" : ""} ${draggingIds?.has(clip.id) ? "dragging" : ""} ${track.locked ? "track-locked" : ""} ${clip.linkGroupId ? "linked" : ""}`}
-                          style={{ left: `${left}px`, width: `${width}px` }}
-                          onMouseDown={(e) =>
-                            !track.locked && handleClipMouseDown(e, clip)
-                          }
-                          onDoubleClick={(e) => handleClipDoubleClick(clip, e)}
-                          onContextMenu={(e) => handleClipContextMenu(e, clip)}
-                          title={`${clip.name}\nIn: ${formatTime(clip.inPoint)} · Out: ${formatTime(clip.outPoint)} · Dauer: ${formatTime(dur)}${clip.linkGroupId ? "\nVerknüpft mit Video/Audio-Partner" : ""}`}
-                        >
-                          {clip.linkGroupId && (
-                            <span
-                              className="clip-link-badge"
-                              aria-hidden="true"
-                              title="Verknüpft mit V+A-Partner"
-                            >
-                              ⛓
-                            </span>
-                          )}
-                          <div
-                            className={`trim-handle left ${trimmedLeft ? "trimmed" : ""}`}
-                            onMouseDown={(e) =>
-                              !track.locked &&
-                              handleTrimMouseDown(e, clip, "left")
-                            }
-                            title="Links trimmen"
-                          />
-                          {isVideo ? (
-                            <>
-                              {(() => {
-                                const thumbs = thumbsMap[clip.videoId];
-                                if (thumbs && thumbs.length > 0) {
-                                  const visible = buildThumbnailItems({
-                                    width,
-                                    thumbs,
-                                    inPoint: clip.inPoint,
-                                    outPoint: clip.outPoint,
-                                    sourceDuration: clip.sourceDuration,
-                                  });
-                                  return (
-                                    <div className="video-thumb-strip">
-                                      {visible.map((item) =>
-                                        item.url ? (
-                                          <div
-                                            key={item.sourceIndex}
-                                            className="video-thumb"
-                                            style={{
-                                              backgroundImage: `url(${item.url})`,
-                                            }}
-                                          />
-                                        ) : (
-                                          <div
-                                            key={item.sourceIndex}
-                                            className="video-thumb empty"
-                                          />
-                                        ),
-                                      )}
-                                    </div>
-                                  );
-                                }
-                                return (
-                                  <div
-                                    className={`video-thumb-strip ${thumbs === null ? "loading" : ""}`}
-                                  />
-                                );
-                              })()}
-                              <div className="clip-content">
-                                <span className="clip-name">{clip.name}</span>
-                                <span className="clip-duration">
-                                  {formatTime(dur)}
-                                </span>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="waveform-shell">
-                                {(() => {
-                                  const peaks = peaksMap[clip.videoId];
-                                  const bars = buildWaveformBars({
-                                    width,
-                                    peaks,
-                                    inPoint: clip.inPoint,
-                                    outPoint: clip.outPoint,
-                                    sourceDuration: clip.sourceDuration,
-                                    volume: clip.volume ?? 1,
-                                    fadeIn: clip.fadeIn ?? 0,
-                                    fadeOut: clip.fadeOut ?? 0,
-                                    seed: clip.id.length,
-                                  });
-                                  if (peaks && peaks.length > 0) {
-                                    return (
-                                      <div className="waveform">
-                                        {bars.map((bar, i) => (
-                                          <span
-                                            key={i}
-                                            className="wave-bar"
-                                            style={{ height: `${bar.height}%` }}
-                                          />
-                                        ))}
-                                      </div>
-                                    );
-                                  }
-                                  return (
-                                    <div
-                                      className={`waveform ${peaks === null ? "loading" : ""}`}
-                                    >
-                                      {bars.map((bar, i) => (
-                                        <span
-                                          key={i}
-                                          className="wave-bar placeholder"
-                                          style={{ height: `${bar.height}%` }}
-                                        />
-                                      ))}
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-                              {/* Volume line — outside waveform-shell so pointer-events work */}
-                              <div
-                                className="vol-line-overlay"
-                                style={{
-                                  top: `${Math.max(8, Math.min(88, (1 - Math.min(2, clip.volume ?? 1) / 2) * 100))}%`,
-                                }}
-                                onMouseDown={(e) => {
-                                  e.stopPropagation();
-                                  const shellEl = e.currentTarget
-                                    .closest(".clip")
-                                    ?.querySelector(".waveform-shell");
-                                  const shellHeight = shellEl
-                                    ? shellEl.offsetHeight
-                                    : 48;
-                                  volumeLineDragRef.current = {
-                                    clipId: clip.id,
-                                    startY: e.clientY,
-                                    startVolume: clip.volume ?? 1,
-                                    trackHeight: shellHeight,
-                                    historyBefore: createHistorySnapshot(),
-                                    historyPushed: false,
-                                  };
-                                }}
-                              >
-                                <span className="vol-line-bar" />
-                                <span className="vol-line-handle" />
-                                <span className="vol-line-label">
-                                  {Math.round((clip.volume ?? 1) * 100)}%
-                                </span>
-                              </div>
-                              <span className="clip-name">{clip.name}</span>
-                            </>
-                          )}
-                          {/* DaVinci Resolve-style fade overlays */}
-                          {(clip.fadeIn ?? 0) > 0 && (
-                            <div
-                              className="fade-in-overlay"
-                              style={{
-                                width: `${Math.min(width, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width)}px`,
-                              }}
-                            >
-                              <svg
-                                className="fade-svg"
-                                preserveAspectRatio="none"
-                                viewBox="0 0 100 100"
-                              >
-                                <polygon points="0,100 100,0 100,100" className="fade-poly" />
-                                <polyline points="0,100 100,0" className="fade-envelope-line" />
-                                <circle cx="100" cy="0" r="4" className="fade-envelope-point" />
-                              </svg>
-                            </div>
-                          )}
-                          {(clip.fadeOut ?? 0) > 0 && (
-                            <div
-                              className="fade-out-overlay"
-                              style={{
-                                width: `${Math.min(width, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width)}px`,
-                              }}
-                            >
-                              <svg
-                                className="fade-svg"
-                                preserveAspectRatio="none"
-                                viewBox="0 0 100 100"
-                              >
-                                <polygon points="0,0 0,100 100,100" className="fade-poly" />
-                                <polyline points="0,0 100,100" className="fade-envelope-line" />
-                                <circle cx="0" cy="0" r="4" className="fade-envelope-point" />
-                              </svg>
-                            </div>
-                          )}
-                          {/* Draggable fade handles (always rendered so user can set a fade) */}
-                          <div
-                            className="fade-handle-in"
-                            style={{
-                              left: `${Math.max(0, Math.min(width - 12, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width))}px`,
-                            }}
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              fadeDragRef.current = {
-                                clipId: clip.id,
-                                side: "in",
-                                startX: e.clientX,
-                                startFade: clip.fadeIn ?? 0,
-                                dur,
-                                pxPerSec,
-                                historyBefore: createHistorySnapshot(),
-                                historyPushed: false,
-                              };
-                            }}
-                            title={`Fade-In: ${(clip.fadeIn ?? 0).toFixed(1)}s`}
-                          />
-                          <div
-                            className="fade-handle-out"
-                            style={{
-                              right: `${Math.max(0, Math.min(width - 12, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width))}px`,
-                            }}
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              fadeDragRef.current = {
-                                clipId: clip.id,
-                                side: "out",
-                                startX: e.clientX,
-                                startFade: clip.fadeOut ?? 0,
-                                dur,
-                                pxPerSec,
-                                historyBefore: createHistorySnapshot(),
-                                historyPushed: false,
-                              };
-                            }}
-                            title={`Fade-Out: ${(clip.fadeOut ?? 0).toFixed(1)}s`}
-                          />
-                          <button
-                            className="clip-remove"
-                            onClick={(e) => handleClipRemove(clip.id, e)}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            title="Aus Timeline entfernen"
-                          >
-                            <Icon.Trash />
-                          </button>
-                          <div
-                            className={`trim-handle right ${trimmedRight ? "trimmed" : ""}`}
-                            onMouseDown={(e) =>
-                              !track.locked &&
-                              handleTrimMouseDown(e, clip, "right")
-                            }
-                            title="Rechts trimmen"
-                          />
-                        </div>
-                      );
-                    })}
-                </div>
-              ))}
-
-              {trackMovePreview?.autoTracks?.map((track) => {
-                const zoneTop = getAutoTrackZoneTop(
-                  track.type,
-                  track.edge || "end",
-                );
-                const isVideo = track.type === "video";
-                const zoneClips = clipsByTrack.get(track.id) || [];
-                return (
-                  <div
-                    key={track.id}
-                    className={`track-auto-zone-lane ${track.type} active`}
-                    style={{ top: `${zoneTop}px` }}
-                  >
-                    <span className="track-auto-zone-label">
-                      + {track.type === "audio" ? "Audio-Spur" : "Video-Spur"}
-                    </span>
-                    {zoneClips.map((clip) => {
-                      const dur = clip.outPoint - clip.inPoint;
-                      const left = clip.startTime * pxPerSec;
-                      const width = Math.max(20, dur * pxPerSec);
-                      return (
-                        <div
-                          key={clip.id}
-                          className={`clip ghost-clip track-move-ghost ${isVideo ? "video-clip" : "audio-clip"} dragging`}
-                          style={{ left: `${left}px`, width: `${width}px` }}
-                        >
-                          <span className="clip-name">{clip.name}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-
-              {/* Drop zone lane below all tracks (visible during drag) */}
-              {dragOver && (
-                <div
-                  className={`track-drop-zone-lane ${dropTargetTrackId === "__below__" ? "active" : ""}`}
-                  style={{ top: `${30 + tracksHeight}px` }}
-                />
-              )}
-
-              {/* Drop indicator (during drag) */}
-              {dragOver && dropIndicatorTime != null && (
-                <div
-                  className="drop-indicator"
-                  style={{ left: `${dropIndicatorTime * pxPerSec}px` }}
-                />
-              )}
-
-              {/* Snap indicator (during move/trim) */}
-              {snapIndicatorTime != null && (
-                <div
-                  className="snap-indicator"
-                  style={{ left: `${snapIndicatorTime * pxPerSec}px` }}
-                />
-              )}
-
-              {activePlaybackSpace && (
-                <div
-                  className={`playback-space playback-space-${activePlaybackSpace.type}`}
-                  style={{
-                    left: `${activePlaybackSpace.start * pxPerSec}px`,
-                    width: `${Math.max(2, (activePlaybackSpace.end - activePlaybackSpace.start) * pxPerSec)}px`,
-                  }}
-                  aria-hidden="true"
-                />
-              )}
-
-              {/* Import-drag preview: ghost clip showing exact position + duration */}
-              {importDragInfo &&
-                dropTargetTrackId &&
-                dropTargetTrackId !== "__below__" &&
-                (() => {
-                  const targetTrack = tracks.find(
-                    (t) => t.id === dropTargetTrackId,
-                  );
-                  if (!targetTrack) return null;
-                  const isVideo = targetTrack.type === "video";
-                  return (
-                    <>
-                      <div
-                        className={`clip ghost-clip ${isVideo ? "video-clip" : "audio-clip"} mode-${importDragInfo.mode}`}
-                        style={{
-                          left: `${importDragInfo.insertPoint * pxPerSec}px`,
-                          width: `${Math.max(20, importDragInfo.dur * pxPerSec)}px`,
-                          top: `${
-                            30 +
-                            tracks
-                              .slice(
-                                0,
-                                tracks.findIndex(
-                                  (t) => t.id === dropTargetTrackId,
-                                ),
-                              )
-                              .reduce(
-                                (h, t) =>
-                                  h + (t.height || DEFAULT_TRACK_HEIGHT),
-                                0,
-                              )
-                          }px`,
-                          position: "absolute",
-                        }}
-                      >
-                        <div className="clip-name">{importDragInfo.name}</div>
-                        <div className="ghost-badge">
-                          {importDragInfo.mode === "insert" && "⇆ Einfügen"}
-                          {importDragInfo.mode === "overwrite" &&
-                            "✂ Überschreiben"}
-                          {importDragInfo.mode === "constrain" && "↔ Anpassen"}
-                        </div>
-                      </div>
-                      {importDragInfo.mode === "insert" && (
-                        <div
-                          className="insert-indicator"
-                          style={{
-                            left: `${importDragInfo.insertPoint * pxPerSec}px`,
-                          }}
-                        />
-                      )}
-                    </>
-                  );
-                })()}
-
-              {/* Drag tooltip near cursor */}
-              {dragTooltip && (
-                <div
-                  className="drag-tooltip"
-                  style={{
-                    left: `${dragTooltip.x + 14}px`,
-                    top: `${dragTooltip.y + 14}px`,
-                  }}
-                >
-                  {dragTooltip.label}
-                </div>
-              )}
-
-              {/* Selected gap highlight (click to select, Delete/Ctrl+Delete to remove) */}
-              {validSelectedGap && (
-                <div
-                  className="gap-selected"
-                  style={{
-                    left: `${validSelectedGap.start * pxPerSec}px`,
-                    width: `${Math.max(2, (validSelectedGap.end - validSelectedGap.start) * pxPerSec)}px`,
-                  }}
-                  title={`Lücke ${formatTime(validSelectedGap.end - validSelectedGap.start)} – Entf zum Schließen`}
-                />
-              )}
-
-              {/* Marquee selection box */}
-              {marqueeBox && (
-                <div
-                  className="marquee-box"
-                  style={{
-                    left: `${marqueeBox.x1}px`,
-                    top: `${marqueeBox.y1}px`,
-                    width: `${marqueeBox.x2 - marqueeBox.x1}px`,
-                    height: `${marqueeBox.y2 - marqueeBox.y1}px`,
-                  }}
-                />
-              )}
-
-              {/* Playhead line spans below the sticky ruler over all tracks */}
-              <div
-                className={`playhead ${interaction?.type === "seek" ? "dragging" : ""}`}
-                ref={setTimelinePlayheadRef(1)}
-                style={{ "--playhead-x": `${playheadX}px` }}
-              >
-                <div className="playhead-line" />
-              </div>
-
-              {/* Empty state */}
-              {clips.length === 0 && (
-                <div className="timeline-empty-state">
-                  Ziehe Videos aus der Mediathek auf die Timeline
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <Timeline
+          tracks={tracks}
+          clips={clips}
+          pxPerSec={pxPerSec}
+          totalWidth={totalWidth}
+          totalEnd={totalEnd}
+          playheadX={playheadX}
+          interaction={interaction}
+          activeClipId={activeClipId}
+          selectedClipIds={selectedClipIds}
+          draggingIds={draggingIds}
+          dropTargetTrackId={dropTargetTrackId}
+          trackMoveTargetIds={trackMoveTargetIds}
+          trackMovePreview={trackMovePreview}
+          thumbsMap={thumbsMap}
+          peaksMap={peaksMap}
+          editingTrackId={editingTrackId}
+          dragOver={dragOver}
+          dropZoneTrackMode={dropZoneTrackMode}
+          formatTime={formatTime}
+          formatTC={formatTC}
+          scrubTooltip={scrubTooltip}
+          setTimelinePlayheadRef={setTimelinePlayheadRef}
+          handleTracksMouseDown={handleTracksMouseDown}
+          handleTracksScroll={handleTracksScroll}
+          handlePlayheadMouseDown={handlePlayheadMouseDown}
+          handleClipMouseDown={handleClipMouseDown}
+          handleClipDoubleClick={handleClipDoubleClick}
+          handleClipContextMenu={handleClipContextMenu}
+          handleClipRemove={handleClipRemove}
+          handleTrimMouseDown={handleTrimMouseDown}
+          handleUpdateTrack={handleUpdateTrack}
+          handleRemoveTrack={handleRemoveTrack}
+          handleAddTrack={handleAddTrack}
+          setEditingTrackId={setEditingTrackId}
+          fadeDragRef={fadeDragRef}
+          volumeLineDragRef={volumeLineDragRef}
+          createHistorySnapshot={createHistorySnapshot}
+          DEFAULT_TRACK_HEIGHT={DEFAULT_TRACK_HEIGHT}
+          getAutoTrackZoneTop={getAutoTrackZoneTop}
+          Icon={Icon}
+        />
 
         {/* Status bar */}
         <div className="status-bar">

@@ -4,7 +4,7 @@ export const TIMELINE_TRANSITION_EPSILON = 0.02
 
 const clipContainsTime = (time, clip) => {
   return time >= clip.startTime - TIMELINE_TRANSITION_EPSILON &&
-    time < clipEnd(clip)
+    time < clipEnd(clip) - TIMELINE_TRANSITION_EPSILON
 }
 
 const preferPlaybackClip = (current, candidate) => {
