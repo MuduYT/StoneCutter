@@ -94,6 +94,8 @@ const buildSegmentForClip = ({ clip, media, track, trackIndex, hasAudio }) => {
     fade_out: clampNumber(clip.fadeOut, 0, 0, duration),
     position_x: clampNumber(clip.positionX, 0, -10000, 10000),
     position_y: clampNumber(clip.positionY, 0, -10000, 10000),
+    scale_x: clampNumber(clip.scaleX ?? clip.scale, 100, 0, 400),
+    scale_y: clampNumber(clip.scaleY ?? clip.scale, 100, 0, 400),
     scale: clampNumber(clip.scale, 100, 0, 400),
     rotation: clampNumber(clip.rotation, 0, -360, 360),
     opacity: clampNumber(clip.opacity, 100, 0, 100),

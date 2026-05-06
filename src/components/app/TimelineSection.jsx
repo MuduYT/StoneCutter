@@ -65,11 +65,10 @@ export function TimelineSection({
   handlePlayheadMouseDown,
   handleClipMouseDown,
   handleClipContextMenu,
-  handleClipRemove,
   handleTrimMouseDown,
   handleUpdateTrack,
-  handleRemoveTrack,
-  handleAddTrack,
+  marqueeBox,
+  snapIndicatorTime,
   formatTime,
   formatTC,
   Icon,
@@ -234,11 +233,10 @@ export function TimelineSection({
         handlePlayheadMouseDown={handlePlayheadMouseDown}
         handleClipMouseDown={handleClipMouseDown}
         handleClipContextMenu={handleClipContextMenu}
-        handleClipRemove={handleClipRemove}
         handleTrimMouseDown={handleTrimMouseDown}
         handleUpdateTrack={handleUpdateTrack}
-        handleRemoveTrack={handleRemoveTrack}
-        handleAddTrack={handleAddTrack}
+        marqueeBox={marqueeBox}
+        snapIndicatorTime={snapIndicatorTime}
         setEditingTrackId={setEditingTrackId}
         fadeDragRef={fadeDragRef}
         volumeLineDragRef={volumeLineDragRef}
@@ -271,54 +269,21 @@ export function TimelineSection({
           <span className="status-item">
             <span className="status-label">Zoom:</span> {pxPerSec}px/s
           </span>
-          <div className="kbd-hints-multi">
-            <div className="kbd-row">
-              <span className="kbd-group">
-                <kbd>Space</kbd> Play
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Left/Right</kbd> Frame
-              </span>
-            </div>
-            <div className="kbd-row">
-              <span className="kbd-group">
-                <kbd>S</kbd> Split
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Del</kbd> Loeschen
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+Del</kbd> Ripple
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+C/X/V</kbd> Copy/Cut/Paste
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+D</kbd> Duplicate
-              </span>
-            </div>
-            <div className="kbd-row">
-              <span className="kbd-group">
-                <kbd>N</kbd> Snap
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Shift</kbd> Snap aus
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Alt+Drag</kbd> Klon
-              </span>
-              <span className="kbd-sep">|</span>
-              <span className="kbd-group">
-                <kbd>Ctrl+Shift+L</kbd> Unlink V+A
-              </span>
-            </div>
+          <div className="kbd-hints">
+            <span className="kbd-group"><kbd>Space</kbd> Play</span>
+            <span className="kbd-group"><kbd>←→</kbd> Frame</span>
+            <span className="kbd-sep">·</span>
+            <span className="kbd-group"><kbd>S</kbd> Split</span>
+            <span className="kbd-group"><kbd>Del</kbd></span>
+            <span className="kbd-group"><kbd>Ctrl+Del</kbd> Ripple</span>
+            <span className="kbd-sep">·</span>
+            <span className="kbd-group"><kbd>Ctrl+C/X/V</kbd></span>
+            <span className="kbd-group"><kbd>Ctrl+D</kbd> Dup</span>
+            <span className="kbd-sep">·</span>
+            <span className="kbd-group"><kbd>N</kbd> Snap</span>
+            <span className="kbd-group"><kbd>Shift</kbd></span>
+            <span className="kbd-group"><kbd>Alt+Drag</kbd> Klon</span>
+            <span className="kbd-group"><kbd>Ctrl+Shift+L</kbd> Unlink</span>
           </div>
         </div>
       </div>

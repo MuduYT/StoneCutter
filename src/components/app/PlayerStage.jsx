@@ -1,12 +1,12 @@
 import { resolveAnimatedClip } from "../../lib/keyframes.js";
 import { getPreviewMediaSrc } from "../../lib/proxyGenerator.js";
+import { useRef, useEffect } from "react";
 
 export function PlayerStage({
   mainContentClassName,
   aspectRatio,
   isTimelineMonitorActive,
   isSourceMonitorActive,
-  handlePlay,
   timelineVisualLayers,
   timelineAudioLayers,
   topTimelineClip,
@@ -33,15 +33,83 @@ export function PlayerStage({
   handleSourceDragStart,
   handleDragEnd,
   settings,
+  setSettings,
+  perfStats,
+  previewTargetClipId,
+  onPreviewClipMouseDown,
+  previewSnapGuides,
+  timelinePreviewRef,
   formatTime,
   formatTC,
   Icon,
+  timelineVisualRefs,
 }) {
+  const prevQualityRef = useRef(settings.previewQuality);
+  const getPreviewTransform = (clip) => {
+    const scaleBase = clip.scale ?? 100;
+    const scaleXValue = clip.scaleX ?? scaleBase;
+    const scaleYValue = clip.scaleY ?? scaleBase;
+    const scaleX = (scaleXValue / 100) * (clip.flipH ? -1 : 1);
+    const scaleY = (scaleYValue / 100) * (clip.flipV ? -1 : 1);
+    return `translate(${clip.positionX ?? 0}px, ${clip.positionY ?? 0}px) rotate(${clip.rotation ?? 0}deg) scale(${scaleX}, ${scaleY})`;
+  };
+  const previewTransformClip =
+    isTimelineMonitorActive && previewTargetClipId
+      ? timelineVisualLayers
+          .map(({ clip }) => resolveAnimatedClip(clip, timelineTime))
+          .find((clip) => clip.id === previewTargetClipId) || null
+      : null;
+  const renderPreviewHandle = (mode, className, title) => (
+    <button
+      type="button"
+      className={`timeline-preview-handle ${className}`}
+      onMouseDown={(event) =>
+        onPreviewClipMouseDown?.(event, previewTransformClip, mode)
+      }
+      title={title}
+      aria-label={title}
+    />
+  );
+
+  useEffect(() => {
+    if (prevQualityRef.current !== settings.previewQuality) {
+      prevQualityRef.current = settings.previewQuality;
+      timelineVisualRefs.current.forEach((node) => {
+        if (node) {
+          const currentTime = node.currentTime;
+          node.load();
+          node.currentTime = currentTime;
+        }
+      });
+    }
+  }, [settings.previewQuality, timelineVisualRefs]);
   return (
     <main className={mainContentClassName}>
       <div
         className={`player-wrapper ${aspectRatio === "9:16" ? "ar-portrait" : "ar-landscape"}`}
       >
+        <div className="preview-meta-row">
+          <select
+            className="preview-quality-select"
+            value={settings.previewQuality || "half"}
+            onChange={(e) =>
+              setSettings((prev) => ({
+                ...prev,
+                previewQuality: e.target.value,
+              }))
+            }
+            aria-label="Preview Quality"
+          >
+            <option value="full">Full</option>
+            <option value="half">1/2</option>
+            <option value="quarter">1/4</option>
+            <option value="eighth">1/8</option>
+          </select>
+          {perfStats && <span>FPS {perfStats.fps}</span>}
+          {perfStats && <span>V {perfStats.visualNodes}</span>}
+          {perfStats && <span>A {perfStats.audioNodes}</span>}
+          {perfStats?.memory != null && <span>{perfStats.memory} MB</span>}
+        </div>
         <div className="ar-switcher">
           {["16:9", "9:16"].map((ar) => (
             <button
@@ -58,10 +126,12 @@ export function PlayerStage({
 
         <div className="video-container">
           {isTimelineMonitorActive ? (
-            <div className="timeline-composite-preview" onClick={handlePlay}>
+            <div className="timeline-composite-preview" ref={timelinePreviewRef}>
+              <div className="preview-grid-overlay" aria-hidden="true" />
               {timelineVisualLayers.length > 0 ? (
                 timelineVisualLayers.map(({ clip: rawClip, media }, index) => {
                   const clip = resolveAnimatedClip(rawClip, timelineTime);
+                  const isPreviewTarget = clip.id === previewTargetClipId;
                   const mediaType = media?.mediaType || "video";
                   const previewSrc = getPreviewMediaSrc(
                     media,
@@ -80,9 +150,6 @@ export function PlayerStage({
                     fadeOpacity = Math.min(fadeOpacity, timeToEnd / fadeOut);
                   }
                   const opacity = fadeOpacity * ((clip.opacity ?? 100) / 100);
-                  const scalePct = (clip.scale ?? 100) / 100;
-                  const scaleX = scalePct * (clip.flipH ? -1 : 1);
-                  const scaleY = scalePct * (clip.flipV ? -1 : 1);
                   const brightness = clip.brightness ?? 0;
                   const contrast = clip.contrast ?? 0;
                   const saturation = clip.saturation ?? 0;
@@ -101,12 +168,17 @@ export function PlayerStage({
                     .join(" ");
                   return (
                     <div
-                      key={clip.id}
-                      className="timeline-preview-layer"
+                      key={`${clip.id}-${settings.previewQuality}`}
+                      className={`timeline-preview-layer ${isPreviewTarget ? "selected" : ""}`}
+                      onMouseDown={
+                        onPreviewClipMouseDown
+                          ? (event) => onPreviewClipMouseDown(event, clip, "move")
+                          : undefined
+                      }
                       style={{
                         zIndex: index + 1,
                         opacity,
-                        transform: `translate(${clip.positionX ?? 0}px, ${clip.positionY ?? 0}px) rotate(${clip.rotation ?? 0}deg) scale(${scaleX}, ${scaleY})`,
+                        transform: getPreviewTransform(clip),
                         filter: cssFilters || undefined,
                       }}
                     >
@@ -116,12 +188,14 @@ export function PlayerStage({
                           className="timeline-preview-media"
                           alt={clip.name}
                           draggable={false}
+                          key={previewSrc}
                         />
                       ) : (
                           <video
                             ref={setTimelineVisualRef(clip.id)}
                             className="timeline-preview-media"
                             src={previewSrc}
+                            key={previewSrc}
                           muted
                           playsInline
                           preload="auto"
@@ -134,6 +208,45 @@ export function PlayerStage({
               ) : (
                 <div className="empty-overlay timeline-empty-preview">
                   <p>Keine Videoebene am Playhead</p>
+                </div>
+              )}
+              {previewTransformClip && onPreviewClipMouseDown && (
+                <div
+                  className="timeline-preview-transform-overlay"
+                  onMouseDown={(event) =>
+                    onPreviewClipMouseDown(event, previewTransformClip, "move")
+                  }
+                  style={{
+                    transform: getPreviewTransform(previewTransformClip),
+                  }}
+                >
+                  <div className="timeline-preview-frame" />
+                  <div className="timeline-preview-center" aria-hidden="true" />
+                  {renderPreviewHandle("resize-nw", "resize-nw", "Oben links skalieren")}
+                  {renderPreviewHandle("resize-ne", "resize-ne", "Oben rechts skalieren")}
+                  {renderPreviewHandle("resize-se", "resize-se", "Unten rechts skalieren")}
+                  {renderPreviewHandle("resize-sw", "resize-sw", "Unten links skalieren")}
+                  {renderPreviewHandle("resize-top", "resize-top", "Hoehe oben skalieren")}
+                  {renderPreviewHandle("resize-right", "resize-right", "Breite rechts skalieren")}
+                  {renderPreviewHandle("resize-bottom", "resize-bottom", "Hoehe unten skalieren")}
+                  {renderPreviewHandle("resize-left", "resize-left", "Breite links skalieren")}
+                  {renderPreviewHandle("rotate", "rotate", "Rotieren")}
+                </div>
+              )}
+              {previewSnapGuides && (
+                <div className="preview-snap-guides" aria-hidden="true">
+                  {Number.isFinite(previewSnapGuides.x) && (
+                    <span
+                      className="preview-snap-guide vertical"
+                      style={{ left: `${previewSnapGuides.x}px` }}
+                    />
+                  )}
+                  {Number.isFinite(previewSnapGuides.y) && (
+                    <span
+                      className="preview-snap-guide horizontal"
+                      style={{ top: `${previewSnapGuides.y}px` }}
+                    />
+                  )}
                 </div>
               )}
               <div className="timeline-audio-bus" aria-hidden="true">

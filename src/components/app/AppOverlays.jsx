@@ -244,7 +244,7 @@ export function AppOverlays({
                 <label className="settings-row">
                   <span>Preview Quality</span>
                   <select
-                    value={settings.previewQuality || "full"}
+                    value={settings.previewQuality || "half"}
                     onChange={(e) =>
                       setSettings((prev) => ({
                         ...prev,
@@ -254,8 +254,9 @@ export function AppOverlays({
                     aria-label="Preview Quality"
                   >
                     <option value="full">Full</option>
-                    <option value="half">Half</option>
-                    <option value="quarter">Quarter</option>
+                    <option value="half">1/2</option>
+                    <option value="quarter">1/4</option>
+                    <option value="eighth">1/8</option>
                   </select>
                 </label>
                 <p className="settings-hint">
@@ -295,6 +296,7 @@ export function AppOverlays({
           timelineTime={timelineTime}
           tracksById={tracksById}
           vidClip={vidClip}
+          Icon={Icon}
         />
       )}
 

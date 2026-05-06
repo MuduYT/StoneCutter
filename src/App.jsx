@@ -27,14 +27,13 @@ import {
   applyGroupTrimLeft,
   applyGroupTrimRight,
   applyGroupSplit,
+  applySingleClipSplit,
   unlinkClipGroup,
   nextLinkGroupId,
 } from "./lib/timeline.js";
 import {
   nextTrackId,
   createDefaultTracks,
-  addTrack as addTrackToList,
-  removeTrack as removeTrackFromList,
   updateTrack as updateTrackInList,
   insertTrackOrdered,
   getTrackIdAtTimelineY,
@@ -90,7 +89,9 @@ import {
   toggleClipKeyframeAt,
 } from "./lib/keyframes.js";
 import { MediaAssetService } from "./lib/services/MediaAssetService.js";
-import { normalizePreviewQuality } from "./lib/proxyGenerator.js";
+import {
+  normalizePreviewQuality,
+} from "./lib/proxyGenerator.js";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const isDevMode = import.meta.env.DEV;
@@ -179,6 +180,33 @@ const Icon = {
   Mute: () => (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
       <path d="M16.5 12A4.5 4.5 0 0 0 14 8v2.18l2.45 2.45c.03-.2.05-.41.05-.63zM3 9v6h4l5 5v-6.18L7.83 9H3zm15.6 9.27L19.73 19.4 12 11.67V20l-5-5H3V9h2.27L1.73 5.46l1.27-1.27L18.6 18.27z" />
+    </svg>
+  ),
+  Eye: () => (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
+  EyeOff: () => (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M3 3l18 18" />
+      <path d="M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-4.8" />
+      <path d="M6.8 6.8C4 8.6 2 12 2 12s3.5 6 10 6c1.2 0 2.3-.2 3.3-.6" />
+      <path d="M14.2 4.3C13.5 4.1 12.8 4 12 4c-6.5 0-10 8-10 8s1.2 2.8 3.9 4.9" />
+    </svg>
+  ),
+  Lock: () => (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </svg>
+  ),
+  Unlock: () => (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M9 11V8a3 3 0 0 1 5.2-2.1" />
+      <path d="M14 8.9V11" />
     </svg>
   ),
   Plus: () => (
@@ -398,6 +426,7 @@ function App() {
   const timelineAudioRefs = useRef(new Map());
   const fileRef = useRef(null);
   const tracksContentRef = useRef(null);
+  const timelinePreviewRef = useRef(null);
   const pendingSeekRef = useRef(null);
   const pendingPlayRef = useRef(false); // play after src change + metadata
   const historyRef = useRef({ past: [], future: [] });
@@ -432,6 +461,7 @@ function App() {
   const mediaAnalysisRef = useRef({
     waveformStarted: new Set(),
     thumbnailStarted: new Set(),
+    previewProxyStarted: new Set(),
     cancelled: false,
   });
   const browserObjectUrlsRef = useRef(new Set());
@@ -453,7 +483,8 @@ function App() {
   const [visibleTimelineRange, setVisibleTimelineRange] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [, setDropIndicatorTime] = useState(null);
-  const [, setSnapIndicatorTime] = useState(null);
+  const [snapIndicatorTime, setSnapIndicatorTime] = useState(null);
+  const [previewSnapGuides, setPreviewSnapGuides] = useState(null);
   const [interaction, setInteraction] = useState(null);
   const [pxPerSec, setPxPerSec] = useState(40);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -473,7 +504,7 @@ function App() {
   // Currently selected keyframe on the timeline ({ clipId, propertyKey, kfId }).
   const [selectedKeyframe, setSelectedKeyframe] = useState(null);
   const keyframeDragRef = useRef(null);
-  const [, setMarqueeBox] = useState(null); // { x1, y1, x2, y2 } in tracks-content px
+  const [marqueeBox, setMarqueeBox] = useState(null); // { x1, y1, x2, y2 } in tracks-content px
   const [importDragInfo, setImportDragInfo] = useState(null); // { videoId, name, dur, insertPoint, mode, simulatedLayout }
   const [trackMovePreview, setTrackMovePreview] = useState(null); // { targetTrackIds, autoTracks } during timeline clip moves
   const draggedVideoIdRef = useRef(null);
@@ -500,20 +531,21 @@ function App() {
       const raw = localStorage.getItem("stonecutter.settings");
       if (raw) {
         try {
+          const parsed = JSON.parse(raw);
           return {
             imageDuration: 3,
-            previewQuality: "full",
-            ...JSON.parse(raw),
+            ...parsed,
+            previewQuality: normalizePreviewQuality(parsed?.previewQuality),
           };
         } catch (e) {
           console.error("Error parsing settings:", e);
-          return { imageDuration: 3, previewQuality: "full" };
+          return { imageDuration: 3, previewQuality: "half" };
         }
       }
     } catch (e) {
       console.error("Error loading settings:", e);
     }
-      return { imageDuration: 3, previewQuality: "full" };
+      return { imageDuration: 3, previewQuality: "half" };
   }, []);
 
   const [settings, setSettings] = useState(loadSettings());
@@ -1401,30 +1433,6 @@ function App() {
     );
   }, [createHistorySnapshot, normalizeHistorySnapshot, syncHistorySizes]);
 
-  // --- track management ---
-  const handleAddTrack = useCallback((type) => {
-    setTracks((prev) => addTrackToList(prev, type));
-  }, []);
-
-  const handleRemoveTrack = useCallback((trackId) => {
-    setTracks((prev) => removeTrackFromList(prev, trackId));
-    setClips((prev) => {
-      const clipsToRemove = prev.filter((c) => c.trackId === trackId);
-      // Clean up linkGroupId for clips being removed to prevent orphaned groups
-      const removedLinkGroupIds = new Set(clipsToRemove.map(c => c.linkGroupId).filter(Boolean));
-      if (removedLinkGroupIds.size > 0) {
-        // If any clips remain with these linkGroupIds, they should be unlinked
-        return prev.map(c => {
-          if (c.trackId !== trackId && c.linkGroupId && removedLinkGroupIds.has(c.linkGroupId)) {
-            return { ...c, linkGroupId: null };
-          }
-          return c.trackId === trackId ? null : c;
-        }).filter(Boolean);
-      }
-      return prev.filter((c) => c.trackId !== trackId);
-    });
-  }, []);
-
   const handleUpdateTrack = useCallback((trackId, changes) => {
     setTracks((prev) => updateTrackInList(prev, trackId, changes));
   }, []);
@@ -2294,25 +2302,57 @@ function App() {
   );
 
   const generatePreviewProxies = useCallback(
-    (items) => {
+    (items, previewQuality = settings.previewQuality) => {
       if (!isTauri) return;
+      const quality = normalizePreviewQuality(previewQuality);
+      if (quality === "full") return;
       items
         .filter((item) => item.mediaType === "video")
         .forEach((item) => {
-          MediaAssetService.generateProxy(item, "quarter")
+          const proxyKey = `${item.id}:${quality}`;
+          if (mediaAnalysisRef.current.previewProxyStarted.has(proxyKey)) return;
+          mediaAnalysisRef.current.previewProxyStarted.add(proxyKey);
+          MediaAssetService.generateProxy(item, quality)
             .then((proxy) => {
               if (!proxy) return;
               setVideos((prev) =>
                 prev.map((video) =>
-                  video.id === item.id ? { ...video, ...proxy } : video,
+                  video.id === item.id
+                    ? {
+                        ...video,
+                        ...proxy,
+                        previewProxies: {
+                          ...(video.previewProxies || {}),
+                          ...(proxy.previewProxies || {}),
+                        },
+                      }
+                    : video,
                 ),
               );
             })
-            .catch((err) => console.warn("Proxy generation failed:", err));
+            .catch((err) => {
+              mediaAnalysisRef.current.previewProxyStarted.delete(proxyKey);
+              console.warn("Proxy generation failed:", err);
+            });
         });
     },
-    [],
+    [settings.previewQuality],
   );
+
+  useEffect(() => {
+    if (!isTauri) return;
+    const quality = normalizePreviewQuality(settings.previewQuality);
+    if (quality === "full") return;
+    const items = videos.filter(
+      (item) =>
+        item.mediaType === "video" &&
+        item.path &&
+        !item.previewProxies?.[quality] &&
+        !(item.proxyQuality === quality && item.proxySrc) &&
+        !mediaAnalysisRef.current.previewProxyStarted.has(`${item.id}:${quality}`),
+    );
+    if (items.length > 0) generatePreviewProxies(items, quality);
+  }, [generatePreviewProxies, settings.previewQuality, videos]);
 
   const handleImport = async () => {
     if (isTauri) {
@@ -2324,7 +2364,7 @@ function App() {
         if (items && items.length > 0) {
           setVideos((prev) => [...prev, ...items]);
           probeAndCacheDurations(items);
-          generatePreviewProxies(items);
+          generatePreviewProxies(items, settings.previewQuality);
         }
       } catch (err) {
         console.error("Import failed:", err);
@@ -3359,13 +3399,13 @@ function App() {
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
     const wasPlaying = beginScrub();
-    const i = { type: "seek", wasPlaying };
+    const i = { type: "seek", wasPlaying, startX: e.clientX };
     interactionRef.current = i;
     setInteraction(i);
   };
 
   const handleClipMouseDown = (e, clip) => {
-    if (e.target.closest(".trim-handle") || e.target.closest(".clip-remove"))
+    if (e.target.closest(".trim-handle"))
       return;
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -3491,6 +3531,52 @@ function App() {
     setInteraction(i);
   };
 
+  const handlePreviewClipMouseDown = useCallback(
+    (e, clip, mode = "move") => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      setEditorFocus(FOCUS_TIMELINE);
+      setSourceMonitorId(null);
+      stopPlayback();
+      const rect = timelinePreviewRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const selected = expandWithLinkedPartners(clips, [clip.id]);
+      setSelectedClipIds(selected);
+      setActiveClipId(clip.id);
+      setActiveId(clip.videoId);
+      const previewCenterX = rect.left + rect.width / 2;
+      const previewCenterY = rect.top + rect.height / 2;
+      const centerX = previewCenterX + (clip.positionX ?? 0);
+      const centerY = previewCenterY + (clip.positionY ?? 0);
+      const startAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+      const snapshotBefore = clips.map((c) => ({ ...c }));
+      const originalClip = {
+        ...clip,
+        scaleX: clip.scaleX ?? clip.scale ?? 100,
+        scaleY: clip.scaleY ?? clip.scale ?? 100,
+      };
+      const i = {
+        type: "preview-transform",
+        clipId: clip.id,
+        mode,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        previewRect: { width: rect.width, height: rect.height },
+        previewCenterX,
+        previewCenterY,
+        startAngle,
+        originalClip,
+        snapshotBefore,
+        moved: false,
+      };
+      interactionRef.current = i;
+      setInteraction(i);
+      setPreviewSnapGuides(null);
+    },
+    [clips, stopPlayback],
+  );
+
   // snap helper (now returns {value, snapped}). Pass `sourceList` to use snapshot
   // edges instead of live (important during ripple-insert so snap targets stay stable).
   const snapValue = (value, excludeClipId, sourceList = clips) => {
@@ -3522,7 +3608,7 @@ function App() {
       const x = getXInTracks(ev.clientX);
       const it = interactionRef.current;
       if (!it) return;
-      // Shift held → temporarily disable snap during this move (Premiere-style)
+      // Shift temporarily disables snapping during this move.
       const effSnap = snapEnabled && !ev.shiftKey;
       // Auto-scroll near viewport edges while dragging
       const tcEl = tracksContentRef.current;
@@ -3573,6 +3659,134 @@ function App() {
           if (cE > tStart + 1e-3 && cS < tEnd - 1e-3) hits.add(c.id);
         }
         setSelectedClipIds(hits);
+        return;
+      }
+
+      if (it.type === "preview-transform") {
+        const orig = it.originalClip;
+        if (!orig) return;
+        const rect = it.previewRect || { width: 1, height: 1 };
+        const dx = ev.clientX - it.startClientX;
+        const dy = ev.clientY - it.startClientY;
+        const clampScale = (value) => Math.max(0, Math.min(400, value));
+        let guides = null;
+        let next = {};
+        if (it.mode === "move") {
+          let nextX = (orig.positionX ?? 0) + dx;
+          let nextY = (orig.positionY ?? 0) + dy;
+          if (effSnap) {
+            nextX = Math.round(nextX / 10) * 10;
+            nextY = Math.round(nextY / 10) * 10;
+            guides = {
+              x: rect.width / 2 + nextX,
+              y: rect.height / 2 + nextY,
+            };
+          }
+          next = { positionX: nextX, positionY: nextY };
+        } else if (it.mode === "resize") {
+          const baseScaleX = Number(orig.scaleX ?? orig.scale ?? 100);
+          const baseScaleY = Number(orig.scaleY ?? orig.scale ?? 100);
+          const locked = orig.scaleLocked !== false;
+          let nextScaleX;
+          let nextScaleY;
+          if (locked) {
+            const delta =
+              ((dx / Math.max(1, rect.width)) +
+                (dy / Math.max(1, rect.height))) *
+              50;
+            const uniform = baseScaleX + delta;
+            nextScaleX = uniform;
+            nextScaleY = uniform;
+          } else {
+            nextScaleX = baseScaleX + (dx / Math.max(1, rect.width)) * 100;
+            nextScaleY = baseScaleY + (dy / Math.max(1, rect.height)) * 100;
+          }
+          if (effSnap) {
+            nextScaleX = Math.round(nextScaleX);
+            nextScaleY = Math.round(nextScaleY);
+          }
+          next = {
+            scaleX: clampScale(nextScaleX),
+            scaleY: clampScale(nextScaleY),
+            scale: clampScale(
+              orig.scaleLocked !== false
+                ? nextScaleX
+                : (nextScaleX + nextScaleY) / 2,
+            ),
+            scaleLocked: orig.scaleLocked !== false,
+          };
+        } else if (it.mode.startsWith("resize-")) {
+          const baseScaleX = Number(orig.scaleX ?? orig.scale ?? 100);
+          const baseScaleY = Number(orig.scaleY ?? orig.scale ?? 100);
+          const locked = orig.scaleLocked !== false;
+          const horizontal =
+            it.mode.includes("right") || it.mode.includes("e")
+              ? 1
+              : it.mode.includes("left") || it.mode.includes("w")
+                ? -1
+                : 0;
+          const vertical =
+            it.mode.includes("bottom") || it.mode.includes("s")
+              ? 1
+              : it.mode.includes("top") || it.mode.includes("n")
+                ? -1
+                : 0;
+          const scaleDeltaX =
+            horizontal === 0
+              ? 0
+              : (horizontal * dx / Math.max(1, rect.width)) * 100;
+          const scaleDeltaY =
+            vertical === 0
+              ? 0
+              : (vertical * dy / Math.max(1, rect.height)) * 100;
+          let nextScaleX = baseScaleX;
+          let nextScaleY = baseScaleY;
+
+          if (horizontal !== 0) nextScaleX = baseScaleX + scaleDeltaX;
+          if (vertical !== 0) nextScaleY = baseScaleY + scaleDeltaY;
+
+          if (locked) {
+            const uniformDelta =
+              Math.abs(scaleDeltaX) >= Math.abs(scaleDeltaY)
+                ? scaleDeltaX
+                : scaleDeltaY;
+            nextScaleX = baseScaleX + uniformDelta;
+            nextScaleY = baseScaleY + uniformDelta;
+          }
+
+          if (effSnap) {
+            nextScaleX = Math.round(nextScaleX);
+            nextScaleY = Math.round(nextScaleY);
+          }
+
+          next = {
+            scaleX: clampScale(nextScaleX),
+            scaleY: clampScale(nextScaleY),
+            scale: clampScale(
+              orig.scaleLocked !== false
+                ? nextScaleX
+                : (nextScaleX + nextScaleY) / 2,
+            ),
+            scaleLocked: orig.scaleLocked !== false,
+          };
+        } else if (it.mode === "rotate") {
+          const currentAngle = Math.atan2(
+            ev.clientY - it.previewCenterY,
+            ev.clientX - it.previewCenterX,
+          );
+          const baseRotation = Number(orig.rotation ?? 0);
+          let nextRotation =
+            baseRotation + ((currentAngle - it.startAngle) * 180) / Math.PI;
+          if (effSnap) nextRotation = Math.round(nextRotation);
+          next = { rotation: nextRotation };
+        }
+        setPreviewSnapGuides(guides);
+        setClips((prev) =>
+          prev.map((clip) =>
+            clip.id === it.clipId ? { ...clip, ...next } : clip,
+          ),
+        );
+        it.moved = true;
         return;
       }
 
@@ -3915,6 +4129,8 @@ function App() {
       } else if (it && it.type === "marquee") {
         // Selection already updated during drag; just clear the box
         setMarqueeBox(null);
+      } else if (it && it.type === "preview-transform" && it.moved && it.snapshotBefore) {
+        pushHistory(createHistorySnapshot(it.snapshotBefore, tracks));
       } else if (it && it.type === "move" && !it.moved) {
         // Click without drag: collapse multi-selection to just the clicked clip
         setSelectedClipIds(new Set([it.clipId]));
@@ -4002,6 +4218,7 @@ function App() {
       setInteraction(null);
       setSnapIndicatorTime(null);
       setScrubTooltip(null);
+      setPreviewSnapGuides(null);
       setDropTargetTrackId(null);
       setTrackMovePreview(null);
     };
@@ -4098,8 +4315,8 @@ function App() {
   };
 
   // --- split at playhead ---
-  // Splits ALL selected clips at the playhead (respects linked groups).
-  // If nothing is selected, falls back to the active/topmost clip.
+  // Split one clip only: the active clip when present, otherwise the selected
+  // clip under the playhead. Linked partners still split together.
   const splitAtPlayhead = useCallback(() => {
     const candidates = clips.filter((c) => {
       const dur = c.outPoint - c.inPoint;
@@ -4110,40 +4327,51 @@ function App() {
     });
     if (candidates.length === 0) return;
 
-    // Determine which candidates to split
+    const selectedCandidates = candidates.filter((c) => selectedClipIds.has(c.id));
     let splitTargets;
     if (selectedClipIds.size > 0) {
-      splitTargets = candidates.filter((c) => selectedClipIds.has(c.id));
-      // If none of the selected clips are under the playhead, fall back
-      if (splitTargets.length === 0) {
-        splitTargets = [
-          candidates.find((c) => c.id === activeClipId) || candidates[0],
-        ];
-      }
+      splitTargets =
+        selectedCandidates.length > 0
+          ? selectedCandidates
+          : [candidates.find((c) => c.id === activeClipId) || candidates[0]].filter(
+              Boolean,
+            );
     } else {
       splitTargets = [
-        candidates.find((c) => c.id === activeClipId) ||
-          candidates.find((c) => c.linkGroupId && selectedClipIds.has(c.id)) ||
-          candidates[0],
-      ];
+        candidates.find((c) => c.id === activeClipId) || candidates[0],
+      ].filter(Boolean);
     }
 
-    // Apply splits iteratively; skip if the linked group was already split
+    // Apply splits iteratively; split linked partners together only when both are selected.
     let newClips = clips;
     const doneGroups = new Set();
     const allNewRightIds = [];
 
     for (const target of splitTargets) {
-      if (target.linkGroupId && doneGroups.has(target.linkGroupId)) continue;
-      if (target.linkGroupId) doneGroups.add(target.linkGroupId);
-      const before = newClips;
-      newClips = applyGroupSplit(
-        newClips,
-        target.id,
-        timelineTime,
-        () => nextId("clip"),
-        nextLinkGroupId,
+      const linkedGroup = target.linkGroupId
+        ? clips.filter((clip) => clip.linkGroupId === target.linkGroupId)
+        : [];
+      const selectedLinkedGroup = linkedGroup.filter((clip) =>
+        selectedClipIds.has(clip.id),
       );
+      const splitTogether =
+        target.linkGroupId &&
+        linkedGroup.length > 1 &&
+        selectedLinkedGroup.length === linkedGroup.length;
+      if (splitTogether && doneGroups.has(target.linkGroupId)) continue;
+      if (splitTogether) doneGroups.add(target.linkGroupId);
+      const before = newClips;
+      newClips = splitTogether
+        ? applyGroupSplit(
+            newClips,
+            target.id,
+            timelineTime,
+            () => nextId("clip"),
+            nextLinkGroupId,
+          )
+        : applySingleClipSplit(newClips, target.id, timelineTime, () =>
+            nextId("clip"),
+          );
       if (newClips !== before) {
         const freshIds = newClips
           .filter((c) => !before.some((p) => p.id === c.id))
@@ -4162,19 +4390,6 @@ function App() {
       setSelectedClipIds(expandWithLinkedPartners(newClips, nextSel));
     }
   }, [clips, timelineTime, commitClips, selectedClipIds, activeClipId]);
-
-  const handleClipRemove = (clipId, e) => {
-    e.stopPropagation();
-    // Delete the clip AND its linked partner(s) so linked V+A stays consistent.
-    const toRemove = expandWithLinkedPartners(clips, [clipId]);
-    commitClips(clips.filter((c) => !toRemove.has(c.id)));
-    if (toRemove.has(activeClipId)) setActiveClipId(null);
-    if ([...toRemove].some((id) => selectedClipIds.has(id))) {
-      const next = new Set(selectedClipIds);
-      toRemove.forEach((id) => next.delete(id));
-      setSelectedClipIds(next);
-    }
-  };
 
   // Context menu handlers (to avoid ESLint ref access warnings)
   const handleContextMenuDuplicate = (clipId) => {
@@ -4772,6 +4987,24 @@ function App() {
     };
   }, [contextMenu]);
 
+  // Fallback: clear interaction state on window mouseup (catches missed events)
+  useEffect(() => {
+    const onWindowMouseUp = () => {
+      if (interactionRef.current) {
+        interactionRef.current = null;
+        setInteraction(null);
+        setSnapIndicatorTime(null);
+        setScrubTooltip(null);
+        setDropTargetTrackId(null);
+        setTrackMovePreview(null);
+      }
+    };
+    window.addEventListener("mouseup", onWindowMouseUp);
+    return () => {
+      window.removeEventListener("mouseup", onWindowMouseUp);
+    };
+  }, []);
+
   const trackMoveTargetIds = useMemo(
     () => new Set(trackMovePreview?.targetTrackIds || []),
     [trackMovePreview],
@@ -4905,13 +5138,23 @@ function App() {
   );
 
   const beginKeyframeDrag = useCallback(
-    (event, { clipId, propertyKey, kfId, startTime, pxPerSec: dragPxPerSec }) => {
+    (
+      event,
+      { clipId, propertyKey, kfId, entries, startTime, pxPerSec: dragPxPerSec },
+    ) => {
       event.preventDefault();
       event.stopPropagation();
       keyframeDragRef.current = {
         clipId,
         propertyKey,
         kfId,
+        entries:
+          Array.isArray(entries) && entries.length > 0
+            ? entries.map((entry) => ({
+                propertyKey: entry.propertyKey,
+                kfId: entry.id,
+              }))
+            : [{ propertyKey, kfId }],
         startTime,
         startClientX: event.clientX,
         pxPerSec: dragPxPerSec || pxPerSec,
@@ -5040,12 +5283,21 @@ function App() {
       setClips((prev) =>
         prev.map((clip) => {
           if (clip.id !== drag.clipId) return clip;
-          const track = getClipPropertyTrack(clip, drag.propertyKey);
-          const nextTrack = moveKeyframe(track, drag.kfId, nextTime);
-          return {
-            ...clip,
-            keyframes: setClipPropertyTrack(clip, drag.propertyKey, nextTrack),
-          };
+          let nextClip = clip;
+          for (const entry of drag.entries || []) {
+            if (!entry.propertyKey || !entry.kfId) continue;
+            const track = getClipPropertyTrack(nextClip, entry.propertyKey);
+            const nextTrack = moveKeyframe(track, entry.kfId, nextTime);
+            nextClip = {
+              ...nextClip,
+              keyframes: setClipPropertyTrack(
+                nextClip,
+                entry.propertyKey,
+                nextTrack,
+              ),
+            };
+          }
+          return nextClip;
         }),
       );
     };
@@ -5193,7 +5445,6 @@ function App() {
         aspectRatio={aspectRatio}
         isTimelineMonitorActive={isTimelineMonitorActive}
         isSourceMonitorActive={isSourceMonitorActive}
-        handlePlay={handlePlay}
         timelineVisualLayers={timelineVisualLayers}
         timelineAudioLayers={timelineAudioLayers}
         topTimelineClip={topTimelineClip}
@@ -5220,6 +5471,14 @@ function App() {
         handleSourceDragStart={handleSourceDragStart}
         handleDragEnd={handleDragEnd}
         settings={settings}
+        setSettings={setSettings}
+        perfStats={perfStats}
+        timelineVisualRefs={timelineVisualRefs}
+        activeClipId={activeClipId}
+        previewTargetClipId={vidClip?.id || activeClipId}
+        onPreviewClipMouseDown={handlePreviewClipMouseDown}
+        previewSnapGuides={previewSnapGuides}
+        timelinePreviewRef={timelinePreviewRef}
         formatTime={formatTime}
         formatTC={formatTC}
         Icon={Icon}
@@ -5289,24 +5548,14 @@ function App() {
         handlePlayheadMouseDown={handlePlayheadMouseDown}
         handleClipMouseDown={handleClipMouseDown}
         handleClipContextMenu={handleClipContextMenu}
-        handleClipRemove={handleClipRemove}
         handleTrimMouseDown={handleTrimMouseDown}
         handleUpdateTrack={handleUpdateTrack}
-        handleRemoveTrack={handleRemoveTrack}
-        handleAddTrack={handleAddTrack}
+        marqueeBox={marqueeBox}
+        snapIndicatorTime={snapIndicatorTime}
         formatTime={formatTime}
         formatTC={formatTC}
         Icon={Icon}
       />
-
-      {isDevMode && perfStats && (
-        <div className="perf-overlay" aria-label="Performance monitor">
-          <span>{perfStats.fps} FPS</span>
-          <span>V {perfStats.visualNodes}</span>
-          <span>A {perfStats.audioNodes}</span>
-          {perfStats.memory != null && <span>{perfStats.memory} MB</span>}
-        </div>
-      )}
 
       {showSaveConfirmDialog && (
         <div className="settings-overlay" onClick={() => setShowSaveConfirmDialog(false)}>

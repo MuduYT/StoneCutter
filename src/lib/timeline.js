@@ -474,3 +474,34 @@ export const applyGroupSplit = (clips, primaryId, timelineTime, makeId, linkGrou
   }
   return out
 }
+
+/** Split only the selected clip, leaving linked partners untouched. */
+export const applySingleClipSplit = (clips, clipId, timelineTime, makeId) => {
+  const clip = clips.find((c) => c.id === clipId)
+  if (!clip) return clips
+  if (
+    !(timelineTime > clip.startTime + MIN_CLIP_DURATION &&
+      timelineTime < clipEnd(clip) - MIN_CLIP_DURATION)
+  ) {
+    return clips
+  }
+  const sourceSplit = clip.inPoint + (timelineTime - clip.startTime)
+  const left = { ...clip, outPoint: sourceSplit, linkGroupId: clip.linkGroupId || null }
+  const right = {
+    ...clip,
+    id: makeId(),
+    inPoint: sourceSplit,
+    startTime: timelineTime,
+    linkGroupId: clip.linkGroupId || null,
+  }
+  const out = []
+  for (const c of clips) {
+    if (c.id !== clipId) {
+      out.push(c)
+      continue
+    }
+    if (clipDuration(left) > MIN_CLIP_DURATION) out.push(left)
+    if (clipDuration(right) > MIN_CLIP_DURATION) out.push(right)
+  }
+  return out
+}

@@ -93,6 +93,8 @@ const normalizeClipInspectorProperties = (clip) => {
     ["fadeOut", 0, 0, Infinity],
     ["positionX", 0, -10000, 10000],
     ["positionY", 0, -10000, 10000],
+    ["scaleX", 100, 0, 400],
+    ["scaleY", 100, 0, 400],
     ["scale", 100, 0, 400],
     ["rotation", 0, -360, 360],
     ["opacity", 100, 0, 100],
@@ -107,9 +109,23 @@ const normalizeClipInspectorProperties = (clip) => {
     const value = optionalNumber(safeClip, key, fallback, min, max);
     if (value !== undefined) out[key] = value;
   }
-  for (const key of ["flipH", "flipV", "clipMuted"]) {
+  for (const key of ["flipH", "flipV", "clipMuted", "scaleLocked"]) {
     const value = optionalBoolean(safeClip, key);
     if (value !== undefined) out[key] = value;
+  }
+  const scaleX = out.scaleX ?? out.scale ?? undefined;
+  const scaleY = out.scaleY ?? out.scale ?? undefined;
+  if (scaleX === undefined && scaleY === undefined && out.scale !== undefined) {
+    out.scaleX = out.scale;
+    out.scaleY = out.scale;
+  } else {
+    if (scaleX !== undefined && out.scaleX === undefined) out.scaleX = scaleX;
+    if (scaleY !== undefined && out.scaleY === undefined) out.scaleY = scaleY;
+  }
+  if (out.scaleLocked === undefined) {
+    const x = Number(out.scaleX ?? out.scale ?? 100);
+    const y = Number(out.scaleY ?? out.scale ?? 100);
+    out.scaleLocked = Number.isFinite(x) && Number.isFinite(y) ? Math.abs(x - y) < 0.001 : true;
   }
   return out;
 };
@@ -273,7 +289,7 @@ export function buildProjectDocument(state) {
     videoDurations: state.videoDurations || {},
     settings: {
       imageDuration: state.settings?.imageDuration ?? 3,
-      previewQuality: state.settings?.previewQuality || "full",
+      previewQuality: state.settings?.previewQuality || "half",
     },
     ui: {
       aspectRatio: state.aspectRatio || state.ui?.aspectRatio || "16:9",
@@ -418,7 +434,7 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
     timelineTime: Math.max(0, finiteNumber(parsed.timeline?.playhead, 0)),
     settings: {
       imageDuration: positiveNumber(settings.imageDuration, 3),
-      previewQuality: safeString(settings.previewQuality, "full") || "full",
+      previewQuality: safeString(settings.previewQuality, "half") || "half",
     },
     ui: {
       aspectRatio: safeString(ui.aspectRatio, "16:9") || "16:9",

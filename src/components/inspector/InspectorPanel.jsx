@@ -41,6 +41,8 @@ function InspectorTabs({ inspectorTab, onTabChange }) {
 const KEYFRAMABLE_KEYS = new Set([
   "positionX",
   "positionY",
+  "scaleX",
+  "scaleY",
   "scale",
   "rotation",
   "opacity",
@@ -79,6 +81,7 @@ export function InspectorPanel({
   timelineTime = 0,
   tracksById,
   vidClip,
+  Icon,
 }) {
   if (!activeClipId) {
     return (
@@ -160,7 +163,7 @@ export function InspectorPanel({
         onClick?.();
       }}
     >
-      ↺
+      <Icon.Undo />
     </button>
   );
   const renderGroupActions = (clip, groupId, groupKeys, resetTitle, onReset) => (
@@ -186,6 +189,19 @@ export function InspectorPanel({
     return [...frames.values()].sort((a, b) => a - b);
   };
   const keyframeTimes = collectKeyframeTimes(vidClip, audClip);
+  const scaleLocked = vidClip ? vidClip.scaleLocked !== false : true;
+  const scaleBase = vidValue("scale") ?? 100;
+  const scaleXValue = vidValue("scaleX") ?? scaleBase;
+  const scaleYValue = vidValue("scaleY") ?? scaleBase;
+  const updateScalePair = (nextScaleX, nextScaleY, nextLocked = scaleLocked) => {
+    const nextScale = Math.round((Number(nextScaleX) + Number(nextScaleY)) / 2);
+    onUpdateClip?.(vidClip.id, {
+      scaleX: nextScaleX,
+      scaleY: nextScaleY,
+      scale: nextLocked ? nextScaleX : nextScale,
+      scaleLocked: nextLocked,
+    });
+  };
   const jumpToKeyframe = (direction) => {
     if (!keyframeTimes.length) return;
     if (direction < 0) {
@@ -225,7 +241,7 @@ export function InspectorPanel({
             onClick={() => jumpToKeyframe(-1)}
             disabled={keyframeTimes.length === 0}
           >
-            {"<"}
+            <Icon.StepBack />
           </button>
           <button
             type="button"
@@ -234,7 +250,7 @@ export function InspectorPanel({
             onClick={() => jumpToKeyframe(1)}
             disabled={keyframeTimes.length === 0}
           >
-            {">"}
+            <Icon.StepFwd />
           </button>
         </div>
         <div className="inspector-clip-name" title={displayName}>
@@ -253,13 +269,24 @@ export function InspectorPanel({
                 headerSlot={renderGroupActions(
                   vidClip,
                   "transform",
-                  ["positionX", "positionY", "scale", "rotation", "opacity"],
+                  [
+                    "positionX",
+                    "positionY",
+                    "scaleX",
+                    "scaleY",
+                    "scale",
+                    "rotation",
+                    "opacity",
+                  ],
                   "Transform zuruecksetzen",
                   () =>
                     onUpdateClip(vidClip.id, {
                       positionX: 0,
                       positionY: 0,
+                      scaleX: 100,
+                      scaleY: 100,
                       scale: 100,
+                      scaleLocked: true,
                       rotation: 0,
                       opacity: 100,
                     }),
@@ -272,6 +299,7 @@ export function InspectorPanel({
                     onUpdateClip(vidClip.id, { positionX: value })
                   }
                   step={1}
+                  dragResistance={1.1}
                   stopwatch={renderStopwatch(vidClip, "positionX")}
                   resetButton={renderResetButton("Pos X zuruecksetzen", () =>
                     onUpdateClip(vidClip.id, { positionX: 0 }),
@@ -284,22 +312,64 @@ export function InspectorPanel({
                     onUpdateClip(vidClip.id, { positionY: value })
                   }
                   step={1}
+                  dragResistance={1.1}
                   stopwatch={renderStopwatch(vidClip, "positionY")}
                   resetButton={renderResetButton("Pos Y zuruecksetzen", () =>
                     onUpdateClip(vidClip.id, { positionY: 0 }),
                   )}
                 />
                 <InspectorDragger
-                  label="Scale"
-                  value={vidValue("scale") ?? 100}
-                  onChange={(value) => onUpdateClip(vidClip.id, { scale: value })}
+                  label="Scale X"
+                  value={scaleXValue}
+                  onChange={(value) =>
+                    updateScalePair(value, scaleLocked ? value : scaleYValue)
+                  }
                   step={1}
                   unit="%"
-                  stopwatch={renderStopwatch(vidClip, "scale")}
-                  resetButton={renderResetButton("Scale zuruecksetzen", () =>
-                    onUpdateClip(vidClip.id, { scale: 100 }),
+                  dragResistance={1.1}
+                  stopwatch={renderStopwatch(vidClip, "scaleX")}
+                  resetButton={renderResetButton("Scale X zuruecksetzen", () =>
+                    updateScalePair(100, scaleLocked ? 100 : scaleYValue),
                   )}
                 />
+                <InspectorDragger
+                  label="Scale Y"
+                  value={scaleYValue}
+                  onChange={(value) =>
+                    updateScalePair(scaleLocked ? value : scaleXValue, value)
+                  }
+                  step={1}
+                  unit="%"
+                  dragResistance={1.1}
+                  stopwatch={renderStopwatch(vidClip, "scaleY")}
+                  disabled={scaleLocked}
+                  resetButton={renderResetButton("Scale Y zuruecksetzen", () =>
+                    updateScalePair(scaleLocked ? 100 : scaleXValue, 100),
+                  )}
+                />
+                <div className="idf-row">
+                  <span className="idf-label">Scale Link</span>
+                  <button
+                    type="button"
+                    className={`insp-scale-lock-btn ${scaleLocked ? "active" : ""}`}
+                    onClick={() => {
+                      const aligned = Math.round((scaleXValue + scaleYValue) / 2);
+                      if (scaleLocked) {
+                        onUpdateClip(vidClip.id, { scaleLocked: false });
+                      } else {
+                        onUpdateClip(vidClip.id, {
+                          scaleLocked: true,
+                          scaleX: aligned,
+                          scaleY: aligned,
+                          scale: aligned,
+                        });
+                      }
+                    }}
+                    title={scaleLocked ? "Skalierung entkoppeln" : "Skalierung koppeln"}
+                  >
+                    {scaleLocked ? <Icon.Lock /> : <Icon.Unlock />}
+                  </button>
+                </div>
                 <InspectorDragger
                   label="Rotation"
                   value={vidValue("rotation") ?? 0}
@@ -308,6 +378,7 @@ export function InspectorPanel({
                   }
                   step={1}
                   unit="deg"
+                  dragResistance={1.3}
                   stopwatch={renderStopwatch(vidClip, "rotation")}
                   resetButton={renderResetButton("Rotation zuruecksetzen", () =>
                     onUpdateClip(vidClip.id, { rotation: 0 }),

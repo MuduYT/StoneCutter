@@ -42,11 +42,10 @@ export const Timeline = ({
   handlePlayheadMouseDown,
   handleClipMouseDown,
   handleClipContextMenu,
-  handleClipRemove,
   handleTrimMouseDown,
   handleUpdateTrack,
-  handleRemoveTrack,
-  handleAddTrack,
+  marqueeBox,
+  snapIndicatorTime,
   setEditingTrackId,
   fadeDragRef,
   volumeLineDragRef,
@@ -69,7 +68,10 @@ export const Timeline = ({
   const clipsByTrack = visibleClipsByTrack || allClipsByTrack;
 
   const tracksHeight = useMemo(() => {
-    return tracks.reduce((sum, t) => sum + (t.height || DEFAULT_TRACK_HEIGHT), 0);
+    return tracks.reduce(
+      (sum, t) => sum + (t.height || DEFAULT_TRACK_HEIGHT),
+      0,
+    );
   }, [tracks, DEFAULT_TRACK_HEIGHT]);
 
   return (
@@ -85,7 +87,7 @@ export const Timeline = ({
             return (
               <div
                 key={track.id}
-                className={`track-header-row ${track.type === "video" ? "video" : "audio"} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""}`}
+                className={`track-header-row ${track.type === "video" ? "video" : "audio"} ${track.hidden ? "hidden" : ""} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""}`}
                 style={{
                   height: `${track.height || DEFAULT_TRACK_HEIGHT}px`,
                 }}
@@ -131,7 +133,7 @@ export const Timeline = ({
                     }
                     title={track.hidden ? "Spur einblenden" : "Spur ausblenden"}
                   >
-                    {track.hidden ? "◌" : "👁"}
+                    {track.hidden ? <Icon.EyeOff /> : <Icon.Eye />}
                   </button>
                   {track.type === "audio" && (
                     <>
@@ -162,17 +164,8 @@ export const Timeline = ({
                     }
                     title={track.locked ? "Entsperren" : "Sperren"}
                   >
-                    🔒
+                    <Icon.Lock />
                   </button>
-                  {tracks.length > 1 && (
-                    <button
-                      className="track-btn delete"
-                      onClick={() => handleRemoveTrack(track.id)}
-                      title="Spur löschen"
-                    >
-                      ×
-                    </button>
-                  )}
                 </div>
               </div>
             );
@@ -191,23 +184,6 @@ export const Timeline = ({
               </span>
             </div>
           )}
-        </div>
-        {/* Add track buttons */}
-        <div className="track-header-actions">
-          <button
-            className="add-track-btn"
-            onClick={() => handleAddTrack("video")}
-            title="Video-Spur hinzufügen"
-          >
-            + Video
-          </button>
-          <button
-            className="add-track-btn"
-            onClick={() => handleAddTrack("audio")}
-            title="Audio-Spur hinzufügen"
-          >
-            + Audio
-          </button>
         </div>
       </div>
 
@@ -267,18 +243,37 @@ export const Timeline = ({
           >
             <div className="playhead-line" />
           </div>
+          {snapIndicatorTime != null && (
+            <div
+              className="snap-indicator"
+              style={{ left: `${snapIndicatorTime * pxPerSec}px` }}
+              aria-hidden="true"
+            />
+          )}
+          {marqueeBox && (
+            <div
+              className="marquee-box"
+              style={{
+                left: `${marqueeBox.x1}px`,
+                top: `${marqueeBox.y1}px`,
+                width: `${Math.max(0, marqueeBox.x2 - marqueeBox.x1)}px`,
+                height: `${Math.max(0, marqueeBox.y2 - marqueeBox.y1)}px`,
+              }}
+              aria-hidden="true"
+            />
+          )}
 
           {/* Track lanes */}
           {tracks.map((track) => (
             <div
               key={track.id}
-              className={`track-lane ${track.type} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""} ${track.locked ? "locked" : ""}`}
+              className={`track-lane ${track.type} ${track.hidden ? "hidden" : ""} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""} ${track.locked ? "locked" : ""}`}
               style={{
                 height: `${track.height || DEFAULT_TRACK_HEIGHT}px`,
               }}
               data-track-id={track.id}
             >
-              {(clipsByTrack.get(track.id) || []).map((clip) => {
+              {!track.hidden && (clipsByTrack.get(track.id) || []).map((clip) => {
                 const dur = clip.outPoint - clip.inPoint;
                 const left = clip.startTime * pxPerSec;
                 const width = Math.max(20, dur * pxPerSec);
@@ -517,14 +512,6 @@ export const Timeline = ({
                       }}
                       title={`Fade-Out: ${(clip.fadeOut ?? 0).toFixed(1)}s`}
                     />
-                    <button
-                      className="clip-remove"
-                      onClick={(e) => handleClipRemove(clip.id, e)}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      title="Aus Timeline entfernen"
-                    >
-                      <Icon.Trash />
-                    </button>
                     <div
                       className={`trim-handle right ${trimmedRight ? "trimmed" : ""}`}
                       onMouseDown={(e) =>

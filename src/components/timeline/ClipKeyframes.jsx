@@ -86,6 +86,7 @@ export function ClipKeyframes({
                 clipId: clip.id,
                 propertyKey: primary.propertyKey,
                 kfId: primary.id,
+                entries: marker.ids,
                 startTime: marker.time,
                 pxPerSec,
               });

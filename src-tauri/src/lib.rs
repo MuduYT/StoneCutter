@@ -333,6 +333,10 @@ struct ExportSegment {
     #[serde(default)]
     position_y: f64,
     #[serde(default = "default_scale")]
+    scale_x: f64,
+    #[serde(default = "default_scale")]
+    scale_y: f64,
+    #[serde(default = "default_scale")]
     scale: f64,
     #[serde(default)]
     rotation: f64,
@@ -474,12 +478,15 @@ fn build_ffmpeg_args(
         };
 
         let dur = seg.duration();
-        let scale_factor = clamp_f64(seg.scale / 100.0, 1.0, 0.01, 4.0);
-        let target_w = ((width as f64 * scale_factor).round() as u32).max(1);
-        let target_h = ((height as f64 * scale_factor).round() as u32).max(1);
-        let mut ops = vec![format!(
-            "scale={target_w}:{target_h}:force_original_aspect_ratio=decrease"
-        )];
+        let use_legacy_scale =
+            (seg.scale_x - 100.0).abs() < 0.0001 && (seg.scale_y - 100.0).abs() < 0.0001;
+        let scale_x_source = if use_legacy_scale { seg.scale } else { seg.scale_x };
+        let scale_y_source = if use_legacy_scale { seg.scale } else { seg.scale_y };
+        let scale_x_factor = clamp_f64(scale_x_source / 100.0, 1.0, 0.01, 4.0);
+        let scale_y_factor = clamp_f64(scale_y_source / 100.0, 1.0, 0.01, 4.0);
+        let target_w = ((width as f64 * scale_x_factor).round() as u32).max(1);
+        let target_h = ((height as f64 * scale_y_factor).round() as u32).max(1);
+        let mut ops = vec![format!("scale={target_w}:{target_h}")];
         ops.push("format=rgba".to_string());
         if seg.flip_h {
             ops.push("hflip".to_string());
@@ -661,8 +668,8 @@ fn generate_proxy(
     input_path: String,
     height: u32,
 ) -> Result<ProxyInfo, String> {
-    if height != 360 && height != 480 {
-        return Err("Preview-Aufloesung muss 360 oder 480 sein.".to_string());
+    if !matches!(height, 135 | 270 | 360 | 480 | 540) {
+        return Err("Preview-Aufloesung muss 135, 270, 360, 480 oder 540 sein.".to_string());
     }
     let source = PathBuf::from(&input_path);
     if !source.is_file() {
@@ -1126,6 +1133,8 @@ mod tests {
             fade_out: 0.0,
             position_x: 0.0,
             position_y: 0.0,
+            scale_x: 100.0,
+            scale_y: 100.0,
             scale: 100.0,
             rotation: 0.0,
             opacity: 100.0,
@@ -1196,6 +1205,8 @@ mod tests {
                 has_video: true,
                 position_x: 100.0,
                 position_y: -50.0,
+                scale_x: 75.0,
+                scale_y: 125.0,
                 scale: 50.0,
                 rotation: 15.0,
                 opacity: 70.0,
@@ -1221,7 +1232,7 @@ mod tests {
         let args = build_ffmpeg_args(&segments, "out.mp4", 1920, 1080, true, 18, "slow");
         let filter = filter_complex(&args);
 
-        assert!(filter.contains("scale=960:540:force_original_aspect_ratio=decrease"));
+        assert!(filter.contains("scale=1440:1350"));
         assert!(filter.contains("rotate=0.261799"));
         assert!(filter.contains("fade=t=in:st=0:d=0.5000:alpha=1"));
         assert!(filter.contains("colorchannelmixer=aa=0.7000"));

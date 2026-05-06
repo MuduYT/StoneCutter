@@ -1,59 +1,48 @@
 ---
-description: Codex project rules for StoneCutter development - TOKEN EFFICIENT MODE
+description: StoneCutter Codex rules - token efficient
 source: .windsurf/workflows/rules.md
 ---
 
-# StoneCutter Codex Rules
+# StoneCutter Rules
 
-## Token Efficiency (HIGHEST PRIORITY)
+## Prime
 
-- **NEVER** read test files (*.test.js) unless explicitly asked to fix a test.
-- **NEVER** read CHANGELOG.md, README.md, or AGENTS.md unless the task is documentation.
-- **NEVER** explain what you're doing - just do it.
-- **NEVER** ask clarifying questions unless the request is genuinely ambiguous.
-- **ALWAYS** prefer direct file edits over search/grep when the user provides paths.
-- **ALWAYS** use batch edits (multi_edit) instead of sequential single edits.
-- **NO** acknowledgement phrases ("Sure!", "Great idea!", "I'll help you...").
-- **NO** markdown code blocks in explanations - only in actual file edits.
-- Start responses immediately with the action/substantive content.
+- Be terse. Act first. No fluff, no acknowledgements, no broad explanations.
+- Ask only when a wrong assumption would cause real damage.
+- If paths/errors are given, use them directly; avoid broad scans.
+- Do not read `*.test.js` unless fixing tests. Do not read `README.md`, `CHANGELOG.md`, or `AGENTS.md` unless docs/release/rules are affected.
+- Edit the smallest file set; avoid unrelated refactors and fake implementations.
+- Tests are off by default. Run tests only when the request ends with `tt` or the user explicitly asks for tests.
+- If tests are requested, run the smallest relevant check and report blocked verification honestly.
+
+## Triggers
+
+- `44`: combine Caveman, Steelman, Devil, LigmaLM. Short answer, strongest practical reasoning, concrete risks.
+- `pp`: internally improve the prompt, keep scope, execute; show rewritten prompt only if asked.
+- `rr`: root repair. Prove/reproduce cause first, make smallest fix, verify exact scenario, state residual risk.
+- Caveman: minimum tokens, blunt final: files, checks, blockers.
+- Steelman: best version of idea, then risks, then recommendation.
+- Devil's Advocate: hunt bugs, regressions, edge cases, test gaps; no contrarian filler.
+- LigmaLM: ultra-compact helper mode; smallest useful context; safe local assumptions.
 
 ## Architecture
 
-- Frontend in `src/` is UI and interaction logic only.
-- Pure timeline, playback, and export rules belong in `src/lib/` first, with tests.
-- Rust/Tauri owns export, file access, and persisted state.
-- Keep React components small; do not grow `App.jsx` for new core behavior.
-- If a change affects release flow, update `README.md`, `CHANGELOG.md`, and the release scripts together.
+- `src/`: UI/interaction only.
+- `src/lib/`: pure timeline/playback/export rules, with tests.
+- Rust/Tauri: export, file access, persisted state.
+- Keep React components small; do not grow `App.jsx` for core behavior.
+- Release-impacting changes update `README.md`, `CHANGELOG.md`, and release scripts together.
 
 ## Execution
 
-- Finish one feature or fix before starting the next one.
-- Use the simplest working solution first.
-- Prefer visible, testable progress over hidden refactors.
-- Do not introduce fake implementations unless they unblock a visible editor flow.
-- Do not claim a build, installer, or release succeeded unless it was actually run in this workspace.
-- Keep related project files up to date when behavior changes, especially `CHANGELOG.md`, documentation, and release rules.
+- Finish one fix/feature before another.
+- Simplest working solution first; visible, testable progress.
+- Do not claim build/test/release success unless run here.
+- Failures are not ignored; reduce scope, fix root cause.
 
-## Quality Gates
-
-- Run the relevant tests before marking work done.
-- For release or installer changes, verify `npm.cmd test`, `npm.cmd run lint`, and the affected release script.
-- Keep the Git worktree clean before creating a release tag or installer artifact.
-- Do not silently ignore broken scripts, failed commands, or exit-code issues.
-
-## Debugging
-
-- When something fails, reduce scope before adding complexity.
-- Fix breakages immediately instead of stacking temporary workarounds.
-- Prefer small pure functions that are easy to test.
-
-## Windows Dev Environment
+## Windows
 
 - Use `npm.cmd` in PowerShell.
-- Rust/Cargo is installed at `C:\Users\viuser\.cargo\bin\` but may not be in PATH for IDE terminals.
-- Before running `npm.cmd run tauri dev` or any installer build, ensure cargo is available in the current shell.
-- PowerShell execution policy may need `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`.
-- First Tauri build takes longer than later builds.
-- FFmpeg is only needed for the export path and must be present in system PATH at runtime.
-- Release tags use the annotated `vX.Y.Z` format.
-- Release builds must use the scripted workflow, not manual copying of artifacts.
+- Cargo may be at `C:\Users\viuser\.cargo\bin\`; ensure it exists before Tauri dev/build.
+- FFmpeg must be in PATH for export runtime.
+- Release tags: annotated `vX.Y.Z`; use scripted release flow.

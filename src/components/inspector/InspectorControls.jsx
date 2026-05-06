@@ -32,9 +32,8 @@ export function InspectorCollapsible({
           )}
           <span
             className={`inspector-section-chevron ${open ? "" : "collapsed"}`}
-          >
-            v
-          </span>
+            aria-hidden="true"
+          />
         </span>
       </div>
       <div
@@ -59,6 +58,7 @@ export function InspectorDragger({
   stopwatch,
   resetButton,
   disabled = false,
+  dragResistance = 1,
 }) {
   const [editing, setEditing] = useState(false);
   const [editVal, setEditVal] = useState("");
@@ -83,7 +83,8 @@ export function InspectorDragger({
     const startX = event.clientX;
     const startVal = value ?? 0;
     const range = hasFiniteRange ? Math.max(0.001, max - min) : null;
-    const pxFull = 220;
+    const resistance = Math.max(0.1, Number(dragResistance) || 1);
+    const pxFull = 220 * resistance;
     let moved = false;
 
     const onMove = (moveEvent) => {
@@ -92,7 +93,7 @@ export function InspectorDragger({
       if (!moved) return;
       const delta = hasFiniteRange
         ? (dx / pxFull) * range
-        : (dx / 8) * Math.max(step, 0.001);
+        : (dx / (8 * resistance)) * Math.max(step, 0.001);
       const snapped = Math.round((startVal + delta) / step) * step;
       onChange(clamp(snapped));
     };

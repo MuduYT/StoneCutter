@@ -22,6 +22,8 @@ export const KEYFRAME_GROUPS = {
 export const ANIMATABLE_VIDEO_PROPERTIES = [
   { key: "positionX", group: "transform", default: 0, min: -10000, max: 10000 },
   { key: "positionY", group: "transform", default: 0, min: -10000, max: 10000 },
+  { key: "scaleX", group: "transform", default: 100, min: 0, max: 400 },
+  { key: "scaleY", group: "transform", default: 100, min: 0, max: 400 },
   { key: "scale", group: "transform", default: 100, min: 0, max: 400 },
   { key: "rotation", group: "transform", default: 0, min: -360, max: 360 },
   { key: "opacity", group: "transform", default: 100, min: 0, max: 100 },

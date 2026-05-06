@@ -75,6 +75,7 @@ export const getTimelineVisualClips = ({ time, clips, tracks = [], videos = [], 
     })
     .filter(({ clip, media, track }) => {
       const mediaType = media?.mediaType || 'video'
+      if (track?.hidden) return false
       return getTrackType(track, clip) === 'video' &&
         clip.trackMode !== 'audio' &&
         (mediaType === 'video' || mediaType === 'image')
@@ -101,6 +102,7 @@ export const getTimelineAudibleClips = ({ time, clips, tracks = [], videos = [],
     })
     .filter(({ clip, media, track }) => {
       if (!media?.src) return false
+      if (track?.hidden) return false
       if (getTrackType(track, clip) !== 'audio' && clip.trackMode !== 'audio') return false
       if (track?.muted) return false
       if (hasSoloAudio && !track?.solo) return false

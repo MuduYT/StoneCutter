@@ -4,7 +4,10 @@ import {
   VIDEO_EXTS,
   getMediaType,
 } from "../timeline.js";
-import { getPreviewResolution } from "../proxyGenerator.js";
+import {
+  getPreviewResolution,
+  normalizePreviewQuality,
+} from "../proxyGenerator.js";
 
 const MEDIA_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
 
@@ -69,25 +72,38 @@ export class MediaAssetService {
     });
   }
 
-  static getPreviewSrc(media, previewQuality = "full") {
+  static getPreviewSrc(media, previewQuality = "half") {
     if (!media) return null;
-    if (previewQuality === "full") return media.src;
-    return media.proxySrc || media.src;
+    const quality = normalizePreviewQuality(previewQuality);
+    const previewProxy = media.previewProxies?.[quality];
+    if (previewProxy?.proxySrc) return previewProxy.proxySrc;
+    if (media.proxyQuality === quality && media.proxySrc) return media.proxySrc;
+    if (!media.proxyQuality && !media.previewProxies && media.proxySrc) {
+      return media.proxySrc;
+    }
+    return media.src;
   }
 
-  static async generateProxy(media, previewQuality = "quarter") {
+  static async generateProxy(media, previewQuality = "half") {
     if (!media || media.mediaType !== "video" || !media.path) return null;
-    const height = getPreviewResolution(previewQuality) || 360;
+    const quality = normalizePreviewQuality(previewQuality);
+    if (quality === "full") return null;
+    const height = getPreviewResolution(quality) || 360;
     const { invoke, convertFileSrc } = await import("@tauri-apps/api/core");
     const result = await invoke("generate_proxy", {
       inputPath: media.originalPath || media.path,
       height,
     });
     if (!result?.path) return null;
-    return {
+    const proxy = {
       proxyPath: result.path,
       proxyResolution: result.resolution || height,
       proxySrc: convertFileSrc(result.path),
+    };
+    return {
+      proxyQuality: quality,
+      ...proxy,
+      previewProxies: { [quality]: proxy },
     };
   }
 

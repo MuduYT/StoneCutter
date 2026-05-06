@@ -1,5 +1,18 @@
 # StoneCutter Update Log
 
+## 2026-05-06 - Preview Transform & Proxy Quality Fixes
+
+### Fixes
+- Gruppierte Timeline-Keyframe-Marker verschieben jetzt alle Keyframes am selben Frame zusammen, statt scheinbare Duplikate stehen zu lassen.
+- Preview-Qualitaet `Full`, `1/2`, `1/4` und `1/8` erzeugt und nutzt jetzt passende Proxy-Dateien; die Rust-Proxy-Erzeugung akzeptiert die benoetigten 540p/270p/135p Hoehen.
+- Legacy-Proxies aus gespeicherten Projekten bleiben als Fallback nutzbar, werden aber nicht mehr fuer eine falsche neue Qualitaetsstufe wiederverwendet.
+
+### UI
+- Timeline-Preview-Transform ist jetzt als eigene Overlay-Ebene umgesetzt, damit die echte Layer-Reihenfolge sichtbar korrekt bleibt und Handles trotzdem greifbar sind.
+- Vorschau-Bearbeitung hat Corner-/Side-Handles, Rotationsgriff, Center-Crosshair und Snap-Guides beim Verschieben.
+- Inspector-Scrubbing ist fuer Position/Scale um 10% und fuer Rotation um 30% feiner dosiert.
+- Inspector-Reset und Keyframe-Navigation nutzen jetzt Icon-Buttons statt Textpfeile.
+
 ## 2026-05-05 - Frontend Performance & Playback Stabilization
 
 ### Fixes
@@ -20,10 +33,10 @@
 - Clip-Drag bleibt normal verfuegbar: Lautstaerke-Drag startet nur noch in der Naehe der blauen Kurve, inklusive `ns-resize` Mauszeiger bei treffender Hover-Position.
 - Wenn bereits Volume-Keyframes vorhanden sind, verschiebt Drag auf der Kurvenlinie die betroffene Gerade (Segment-Endpunkte) vertikal statt den globalen Clip-Volume-Wert zu veraendern.
 - Inspector-Keyframes sind nicht mehr durch Multi-Auswahl blockiert; Gruppen-Stopwatches bleiben klickbar.
-- Jede Inspector-Einstellung und jede Gruppe hat jetzt einen kleinen Reset-Button (`↺`) direkt daneben.
+- Jede Inspector-Einstellung und jede Gruppe hat jetzt einen kleinen Reset-Button direkt daneben.
 - Transform-Werte fuer `Pos X`, `Pos Y`, `Scale` und `Rotation` sind nicht mehr auf feste Min/Max-Grenzen beschraenkt.
 - Timeline-Keyframe-Marker wurden robuster gegen Duplikate gemacht (pro Frame/ID dedupliziert), inklusive Bereinigung doppelter Frame-Eintraege beim Laden alter Daten.
-- Im Inspector gibt es jetzt Keyframe-Navigation mit `<` und `>` zum Springen auf den vorherigen/naechsten Keyframe des aktiven Clips.
+- Im Inspector gibt es jetzt Keyframe-Navigation zum Springen auf den vorherigen/naechsten Keyframe des aktiven Clips.
 - Play/Pause ist robuster: Wenn irgendein Playback aktiv ist (inklusive Source-Video), stoppt `Space`/Play jetzt zuerst zuverlaessig die laufende Wiedergabe statt unbeabsichtigt Timeline-Playback neu zu starten.
 - `Space` ignoriert jetzt Keyboard-Auto-Repeat (`e.repeat`), damit schnelles/gedruecktes Ausloesen nicht sofort wieder Playback startet.
 - Zusaetzlicher Transport-Debounce verhindert doppelte Start/Stop-Toggles bei sehr schneller Leertaste-/UI-Ausloesung (Race zwischen mehreren Events).
