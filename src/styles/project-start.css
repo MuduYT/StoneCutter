@@ -1,0 +1,261 @@
+/* ===== Project Start ===== */
+.project-start-app {
+    display: grid;
+    place-items: center;
+    padding: 32px;
+}
+
+.project-start-shell {
+    width: min(760px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 22px;
+}
+
+.project-start-logo {
+    width: min(260px, 52vw);
+    height: auto;
+    object-fit: contain;
+    filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.55));
+}
+
+.project-start-shell h1 {
+    font-size: clamp(28px, 5vw, 54px);
+    line-height: 1;
+    font-weight: 800;
+    color: var(--text);
+    text-align: center;
+}
+
+.project-start-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.project-primary-action,
+.project-secondary-action {
+    min-width: 190px;
+    min-height: 46px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 800;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer;
+    transition:
+        transform 0.12s,
+        filter 0.12s,
+        border-color 0.12s;
+}
+
+.project-primary-action {
+    background: linear-gradient(135deg, #7c3aed, #0891b2);
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(8, 145, 178, 0.28);
+}
+
+.project-secondary-action {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.project-primary-action:hover,
+.project-secondary-action:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.12);
+}
+
+.project-primary-action:disabled,
+.project-secondary-action:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.recent-projects-panel {
+    width: min(680px, 100%);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(21, 16, 42, 0.82);
+    overflow: hidden;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.recent-projects-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.recent-projects-header h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+.recent-clear-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-faint);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.recent-clear-btn:hover {
+    color: var(--text);
+}
+
+.recent-project-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.recent-project-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 14px;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+}
+
+.recent-project-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+.recent-project-item:last-child {
+    border-bottom: none;
+}
+
+.recent-project-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    display: grid;
+    place-items: center;
+    background: rgba(6, 182, 212, 0.16);
+    color: #67e8f9;
+    flex-shrink: 0;
+}
+
+.recent-project-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 3px;
+}
+
+.recent-project-info strong {
+    font-size: 13px;
+    color: var(--text);
+}
+
+.recent-project-info span {
+    font-size: 11px;
+    color: var(--text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.recent-empty {
+    padding: 26px 14px;
+    color: var(--text-faint);
+    text-align: center;
+}
+
+.project-status,
+.project-toast {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.34);
+}
+
+.project-status.ok,
+.project-toast.ok {
+    border-color: rgba(34, 197, 94, 0.5);
+    color: #86efac;
+}
+.project-status.err,
+.project-toast.err {
+    border-color: rgba(239, 68, 68, 0.55);
+    color: #fca5a5;
+}
+
+.project-toast {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 180;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(680px, calc(100vw - 32px));
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    animation: toastAutoDismiss 1.5s ease forwards;
+}
+
+@keyframes toastAutoDismiss {
+    0%,
+    66% {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+    100% {
+        opacity: 0;
+        transform: translateX(-50%) translateY(-8px);
+    }
+}
+
+.project-toast button {
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-weight: 800;
+}
+
+.project-dialog .settings-body {
+    gap: 14px;
+}
+
+.project-name-field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.project-name-field input {
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-base);
+    color: var(--text);
+    font-size: 14px;
+}
+
+.project-name-field input:focus {
+    outline: none;
+    border-color: var(--accent);
+}

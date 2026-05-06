@@ -1,0 +1,314 @@
+/* =====================================================================
+   UI Redesign – Screendesign Reference (2026-05-04)
+   All additive; no existing class behavior removed.
+   ===================================================================== */
+
+/* ---------- CSS VARS ADDITIONS ---------- */
+:root {
+    --topbar-height: 52px;
+    --sidebar-tabs-width: 56px;
+    --orange-accent: #f97316;
+    --orange-accent-hover: #fb923c;
+    --orange-glow: rgba(249, 115, 22, 0.45);
+}
+
+/* ---------- TOP NAVIGATION BAR ---------- */
+.topbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--topbar-height);
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 16px;
+    background: linear-gradient(180deg, rgba(21, 16, 42, 0.98), rgba(13, 10, 26, 0.96));
+    border-bottom: 1px solid var(--border);
+    z-index: 100;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+.topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+.topbar-logo {
+    height: 28px;
+    width: auto;
+    object-fit: contain;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5));
+    -webkit-user-drag: none;
+    user-select: none;
+}
+
+.topbar-app-name {
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.topbar-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin: 0 16px;
+    flex-shrink: 0;
+}
+
+.topbar-nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 14px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.topbar-nav-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+.topbar-nav-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+}
+
+.topbar-nav-btn.active {
+    background: var(--orange-accent);
+    color: #fff;
+    box-shadow: 0 2px 10px var(--orange-glow);
+}
+
+.topbar-center {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.topbar-project-info {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+}
+
+.topbar-project-details {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.topbar-back-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-right: 4px;
+    transition: all 0.12s;
+}
+
+.topbar-back-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+.topbar-back-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.topbar-project-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.topbar-project-name:hover {
+    border-color: var(--border-strong);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.topbar-project-name-input {
+    padding: 5px 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 200px;
+    max-width: 280px;
+    outline: none;
+}
+
+.topbar-project-name-input:focus {
+    border-color: var(--accent);
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.topbar-project-path {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.topbar-project-chevron {
+    font-size: 8px;
+    opacity: 0.6;
+}
+
+.topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.topbar-btn {
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.topbar-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+.topbar-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.topbar-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.topbar-divider {
+    width: 1px;
+    height: 24px;
+    background: var(--border);
+    margin: 0 6px;
+}
+
+.topbar-export-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 18px;
+    background: var(--orange-accent);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+    box-shadow: 0 2px 10px var(--orange-glow);
+    white-space: nowrap;
+}
+
+.topbar-export-btn:hover {
+    background: var(--orange-accent-hover);
+    box-shadow: 0 4px 16px var(--orange-glow);
+    transform: translateY(-1px);
+}
+
+.topbar-export-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.topbar-export-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.topbar-save-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--orange-accent);
+    flex-shrink: 0;
+    animation: savePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes savePulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
+/* --- Layout adjustments for top bar --- */
+.app.has-topbar {
+    padding-top: calc(var(--topbar-height) + 8px);
+}
+
+.app.has-topbar .sidebar {
+    top: calc(var(--topbar-height) + var(--gap));
+}
+
+.app.has-topbar .main-content {
+    top: calc(var(--topbar-height) + var(--gap));
+}
+
+.app.has-topbar .inspector-panel {
+    top: calc(var(--topbar-height) + var(--gap));
+    max-height: calc(100vh - var(--timeline-height) - var(--topbar-height) - var(--gap) * 4);
+}
+
+/* Hide old floating logo-area when topbar is present */
+.app.has-topbar .logo-area {
+    display: none;
+}

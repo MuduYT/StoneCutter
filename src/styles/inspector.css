@@ -1,0 +1,678 @@
+/* ===== Inspector Panel (redesigned) ===== */
+.inspector-panel {
+    position: absolute;
+    top: var(--gap);
+    right: var(--gap);
+    width: 300px;
+    max-height: calc(100vh - var(--timeline-height) - var(--gap) * 4);
+    overflow: hidden;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(139, 92, 246, 0.2);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+}
+
+.inspector-header {
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--bg-elevated), var(--bg-panel));
+    border-radius: 12px 12px 0 0;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.inspector-title {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--accent-hover);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.inspector-linked-badge {
+    font-size: 9px;
+    font-weight: 800;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(139, 92, 246, 0.25);
+    border: 1px solid rgba(139, 92, 246, 0.5);
+    color: #c4b5fd;
+    letter-spacing: 0.04em;
+}
+
+.inspector-clip-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.inspector-body {
+    flex: 1;
+    padding: 10px 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+}
+.inspector-body::-webkit-scrollbar {
+    width: 5px;
+}
+.inspector-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+.inspector-body::-webkit-scrollbar-thumb {
+    background: rgba(124, 58, 237, 0.3);
+    border-radius: 3px;
+}
+.inspector-body::-webkit-scrollbar-thumb:hover {
+    background: rgba(124, 58, 237, 0.55);
+}
+
+.inspector-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.inspector-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    padding: 4px 0 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.inspector-section-subtitle {
+    font-size: 10px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 4px 0 1px;
+    padding-left: 2px;
+}
+
+.inspector-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.05);
+    margin: 3px 0;
+}
+
+/* ===== InspectorDragger ===== */
+.idf-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+}
+
+.idf-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    width: 64px;
+    flex-shrink: 0;
+    cursor: ew-resize;
+    user-select: none;
+    line-height: 1.2;
+    padding: 2px 0;
+}
+.idf-label:hover {
+    color: var(--text);
+}
+
+.idf-scrub {
+    flex: 1;
+    position: relative;
+    cursor: ew-resize;
+    min-width: 0;
+    user-select: none;
+}
+
+.idf-value {
+    display: block;
+    padding: 5px 9px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-size: 12px;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    color: var(--text);
+    text-align: right;
+    user-select: none;
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    transition:
+        border-color 0.1s,
+        background 0.1s;
+}
+.idf-value::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(139, 92, 246, 0.06),
+        transparent 40%
+    );
+    pointer-events: none;
+}
+.idf-value:hover {
+    border-color: var(--border-strong);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.idf-input {
+    display: block;
+    width: 100%;
+    padding: 5px 9px;
+    background: var(--bg-base);
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 12px;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    text-align: right;
+    outline: none;
+    cursor: text;
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.18);
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+.idf-input::-webkit-inner-spin-button,
+.idf-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+}
+
+.idf-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 0 0 5px 5px;
+    overflow: hidden;
+    z-index: 2;
+}
+.idf-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+    border-radius: inherit;
+    transition: width 0.04s linear;
+}
+
+/* ===== Volume Line on Audio Clips ===== */
+.volume-line-container {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 4;
+    overflow: hidden;
+}
+
+.volume-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: rgba(250, 204, 21, 0.85);
+    cursor: ns-resize;
+    pointer-events: all;
+    transition: background 0.1s;
+}
+.volume-line:hover {
+    background: #fde047;
+    box-shadow: 0 0 8px rgba(250, 204, 21, 0.75);
+    height: 3px;
+}
+
+.volume-line-handle {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 8px;
+    height: 8px;
+    background: #fde047;
+    border-radius: 50%;
+    box-shadow: 0 0 4px rgba(250, 204, 21, 0.8);
+}
+
+/* ===== Fade Overlays ===== */
+.fade-in-overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(
+        to bottom-right,
+        rgba(0, 0, 0, 0.42) 0%,
+        rgba(13, 10, 26, 0.18) 42%,
+        transparent 100%
+    );
+    pointer-events: none;
+    z-index: 3;
+    border-radius: 5px 0 0 5px;
+}
+
+.fade-out-overlay {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(
+        to bottom-left,
+        rgba(0, 0, 0, 0.42) 0%,
+        rgba(13, 10, 26, 0.18) 42%,
+        transparent 100%
+    );
+    pointer-events: none;
+    z-index: 3;
+    border-radius: 0 5px 5px 0;
+}
+
+/* ===== Fade Handles ===== */
+.fade-handle-in,
+.fade-handle-out {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 20px;
+    z-index: 6;
+    cursor: ew-resize;
+    opacity: 0;
+    transition: opacity 0.15s, box-shadow 0.12s;
+    background: rgba(196, 181, 253, 0.85);
+    border-radius: 3px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    border: 0;
+}
+
+.fade-handle-in {
+    margin-left: -3px;
+}
+
+.fade-handle-out {
+    margin-right: -3px;
+}
+
+.clip:hover .fade-handle-in,
+.clip:hover .fade-handle-out,
+.clip.active .fade-handle-in,
+.clip.active .fade-handle-out {
+    opacity: 0.75;
+}
+
+.fade-handle-in:hover,
+.fade-handle-out:hover {
+    opacity: 1 !important;
+    background: #e9d5ff;
+    box-shadow: 0 0 8px rgba(139, 92, 246, 0.7);
+}
+
+/* ===== Inspector – new controls ===== */
+
+/* Flip toggle buttons */
+.insp-flip-group {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+}
+
+.insp-flip-btn {
+    flex: 1;
+    padding: 5px 6px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+    text-align: center;
+}
+.insp-flip-btn:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+}
+.insp-flip-btn.active {
+    background: rgba(139, 92, 246, 0.25);
+    border-color: var(--accent);
+    color: var(--accent-hover);
+}
+
+.insp-scale-lock-btn {
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg-base);
+    color: var(--text-muted);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+.insp-scale-lock-btn:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+}
+.insp-scale-lock-btn.active {
+    background: rgba(139, 92, 246, 0.22);
+    border-color: var(--accent);
+    color: var(--accent-hover);
+}
+
+/* Mute / generic toggle buttons */
+.insp-toggle-btn {
+    flex: 1;
+    padding: 5px 10px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+    text-align: center;
+}
+.insp-toggle-btn:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+}
+.insp-toggle-btn.active {
+    background: rgba(139, 92, 246, 0.2);
+    border-color: var(--accent);
+    color: var(--accent-hover);
+}
+.insp-toggle-btn.active.danger {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.55);
+    color: #fca5a5;
+}
+
+/* Reset color button */
+.insp-reset-btn {
+    margin-top: 4px;
+    padding: 5px 10px;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 5px;
+    color: #fca5a5;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+    width: 100%;
+}
+.insp-reset-btn:hover {
+    background: rgba(239, 68, 68, 0.22);
+    border-color: rgba(239, 68, 68, 0.65);
+}
+
+/* Clip Info rows */
+.insp-info-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 0;
+    font-size: 11px;
+    gap: 8px;
+}
+.insp-info-row > span:first-child {
+    color: var(--text-faint);
+    flex-shrink: 0;
+    width: 62px;
+}
+.insp-info-row > span:last-child {
+    color: var(--text);
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    font-size: 10px;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+
+/* Inspector empty state (no clip selected) */
+.inspector-empty {
+    padding: 24px 14px;
+    text-align: center;
+    color: var(--text-faint);
+    font-size: 12px;
+    font-style: italic;
+}
+/* ---------- INSPECTOR TABS ---------- */
+.inspector-tabs {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+    border-radius: 12px 12px 0 0;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.inspector-tab {
+    flex: 1;
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+    position: relative;
+    white-space: nowrap;
+}
+
+.inspector-tab:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.inspector-tab.active {
+    color: var(--text);
+}
+
+.inspector-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 10%;
+    right: 10%;
+    height: 2px;
+    background: var(--orange-accent);
+    border-radius: 2px 2px 0 0;
+}
+
+/* Inspector type label (e.g., "Video") */
+.inspector-type-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    padding: 10px 14px 6px;
+    flex-shrink: 0;
+}
+
+/* ---------- COLLAPSIBLE INSPECTOR SECTIONS ---------- */
+.inspector-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0 6px;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    margin-bottom: 4px;
+    transition: color 0.15s;
+}
+
+.inspector-section-header:hover {
+    color: var(--text);
+}
+
+.inspector-section-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.inspector-section-label .section-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--orange-accent);
+    flex-shrink: 0;
+}
+
+.inspector-section-chevron {
+    position: relative;
+    width: 14px;
+    height: 14px;
+    color: rgba(214, 221, 232, 0.9);
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+}
+
+.inspector-section-chevron.collapsed {
+    transform: rotate(-90deg);
+}
+.inspector-section-chevron::before,
+.inspector-section-chevron::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    width: 8px;
+    height: 1.5px;
+    border-radius: 999px;
+    background: var(--text-faint);
+    transition: background 0.15s ease;
+}
+.inspector-section-chevron::before {
+    left: 1px;
+    transform: rotate(45deg);
+}
+.inspector-section-chevron::after {
+    right: 1px;
+    transform: rotate(-45deg);
+}
+.inspector-section-header:hover .inspector-section-chevron::before,
+.inspector-section-header:hover .inspector-section-chevron::after {
+    background: var(--text);
+}
+
+.inspector-section-content {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    overflow: hidden;
+    transition: max-height 0.2s ease, opacity 0.15s ease;
+}
+
+.inspector-section-content.collapsed {
+    max-height: 0 !important;
+    opacity: 0;
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
+}
+/* Inspector panel inner glow */
+.inspector-panel {
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(139, 92, 246, 0.2),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* Show inspector panel when timeline focused (even without clip selected) */
+.app.has-topbar .inspector-panel {
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* --- Inspector Position/Scale/etc. field layout matching screenshot --- */
+.inspector-field-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 30px;
+}
+
+.inspector-field-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    width: 80px;
+    flex-shrink: 0;
+}
+
+.inspector-field-inputs {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.inspector-field-axis {
+    font-size: 10px;
+    color: var(--text-faint);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+/* ── Inspector Placeholder (Effects / History tabs) ── */
+.inspector-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 32px 14px;
+    text-align: center;
+}
+.inspector-placeholder-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim, #8a8a9a);
+    margin: 0;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.inspector-placeholder-hint {
+    font-size: 11px;
+    font-style: italic;
+    color: var(--text-faint);
+    margin: 0;
+}

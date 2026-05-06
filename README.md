@@ -100,6 +100,51 @@ Keep feature logic out of `App.jsx` when it can be expressed as pure data transf
 - `src/lib/project.js`: `.stonecutter` project schema, project-name sanitizing, project document creation, and hydration from disk.
 - `src/lib/*.test.js`: Node `node:test` coverage for core editor behavior. Add tests here before or with behavior changes.
 
+### Frontend hooks (`src/hooks`)
+
+`App.jsx` composes the UI from these hooks. Each file is a thin orchestration layer over `src/lib` helpers.
+
+| File | Responsibility |
+|------|----------------|
+| `useClipActions.js` | Clip-focused commands: duplicate, split, linked-group operations, context-menu actions, status toasts. |
+| `useExport.js` | Export dialog state, `buildExportSegments`, Tauri `export-progress` subscription. |
+| `useHistory.js` | Undo/redo snapshots, push/pop, history stack size for the UI. |
+| `useKeyboardShortcuts.js` | Global shortcuts: playback, nudging, undo/redo, save, snap toggle, keyframe/gap helpers. |
+| `useKeyframeInteraction.js` | Timeline/inspector keyframe toggles, drags, grouped moves, history integration. |
+| `useMediaAnalysis.js` | Schedules waveform/thumbnail work for media referenced by clips. |
+| `useMediaManagement.js` | Import pipeline, media-bin selection, removal, drag-from-sidebar, source-monitor focus. |
+| `usePlaybackController.js` | Timeline vs source playback, layered preview video/audio, scrubbing, virtual timeline clock. |
+| `useProjectLifecycle.js` | Create/open/save `.stonecutter` projects, recent list, folder helpers, autosave-related state. |
+| `useThrottledCallback.js` | `requestAnimationFrame` throttling for noisy callbacks (e.g. pointer moves). |
+| `useTimelineDrop.js` | Drop from media onto the timeline: insert, linked A/V, track creation, ripple insert. |
+| `useTimelineMouseInteraction.js` | **Wired from `App.jsx`:** timeline mouse pipeline—seek, move/trim, marquee, preview transform, snap, global move/up. |
+| `useTimelineInteraction.js` | Same domain as `useTimelineMouseInteraction` (extracted earlier); not imported by `App.jsx` today—kept for migration/reference until one implementation is canonical. |
+
+## Frontend styles (CSS modules)
+
+UI styles live under `src/styles/*.css` plus `src/App.css`. `src/App.jsx` imports them in the order below; when specificity is equal, **later imports win**.
+
+| # | File | Responsibility |
+|---|------|----------------|
+| 1 | `base.css` | Global reset, `:root` tokens, `body`, `button` |
+| 2 | `layout.css` | `.app` shell layout |
+| 3 | `timeline.css` | Timeline panel and track UI |
+| 4 | `keyframes.css` | Shared `@keyframes` plus timeline keyframe / volume-curve helper rules moved from the legacy monolith |
+| 5 | `project-start.css` | Welcome / recent-projects screen |
+| 6 | `sidebar.css` | Media library and sidebar tab strip |
+| 7 | `topbar.css` | Top navigation and related layout tweaks |
+| 8 | `player.css` | Program monitor / main preview stack (incl. redesigned preview transport) |
+| 9 | `source-monitor.css` | Source trim UI and polish |
+| 10 | `overlays.css` | Context menu, settings + export modals, perf overlay, toasts, volume-drag tooltip |
+| 11 | `inspector.css` | Inspector panel, tabs, collapsible sections, fields, placeholders |
+| 12 | `App.css` | Remaining global polish (e.g. scrub tooltip, status bar, audio-clip styling, leftover redesign blocks) |
+
+`App.css` still repeats some rules that also exist in `base.css` / `layout.css`; that is intentional until a dedicated deduplication pass with visual regression checks.
+
+## Lint
+
+`npm run lint` is expected to pass on a clean tree. Two `useCallback` blocks in `usePlaybackController.js` use a file-local `eslint-disable` for `react-hooks/preserve-manual-memoization` where callbacks intentionally read `ref.current` while listing the ref object in the dependency array—refactoring those paths would be the long-term fix; avoid copying that pattern elsewhere.
+
 ## Project Files
 
 New projects create a project folder with a `ProjectName.stonecutter` JSON file and a `Media/` folder for managed media.

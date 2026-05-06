@@ -1,0 +1,278 @@
+.source-trim-panel {
+    margin-top: 8px;
+    padding: 10px;
+    background: rgba(8, 6, 18, 0.88);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+
+.source-trim-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text-muted);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.source-trim-header strong {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+    text-transform: none;
+}
+
+.source-point-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.source-point-actions button {
+    min-width: 34px;
+    height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.source-point-actions button:hover {
+    border-color: var(--border-strong);
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.source-range-rail {
+    position: relative;
+    height: 8px;
+    margin: 9px 0 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+
+.source-preview-timeline {
+    position: relative;
+    height: 34px;
+    margin: 11px 0 8px;
+    border-radius: 8px;
+    background:
+        repeating-linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.08) 0 1px,
+            transparent 1px 28px
+        ),
+        linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.12),
+            rgba(255, 255, 255, 0.05)
+        );
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.source-preview-window {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 2px solid rgba(255, 255, 255, 0.9);
+    border-right: 2px solid rgba(255, 255, 255, 0.9);
+    background: linear-gradient(
+        90deg,
+        rgba(139, 92, 246, 0.5),
+        rgba(6, 182, 212, 0.42)
+    );
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.source-preview-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    transform: translateX(-1px);
+    background: #f87171;
+    box-shadow: 0 0 8px rgba(248, 113, 113, 0.8);
+    pointer-events: none;
+    z-index: 3;
+}
+
+.source-preview-handle {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    width: 12px;
+    transform: translateX(-50%);
+    border: 1px solid rgba(255, 255, 255, 0.75);
+    background: #111827;
+    cursor: ew-resize;
+    z-index: 4;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.source-preview-handle.in {
+    border-radius: 6px 2px 2px 6px;
+}
+.source-preview-handle.out {
+    border-radius: 2px 6px 6px 2px;
+}
+.source-preview-handle:hover {
+    background: #1f2937;
+}
+
+.source-range-window {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: inherit;
+    background: linear-gradient(
+        90deg,
+        rgba(139, 92, 246, 0.95),
+        rgba(34, 211, 238, 0.85)
+    );
+    box-shadow: 0 0 14px rgba(139, 92, 246, 0.45);
+}
+
+.source-drag-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.source-drag-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: grab;
+    transition:
+        transform 0.12s,
+        border-color 0.12s,
+        filter 0.12s;
+}
+
+.source-drag-btn:active {
+    cursor: grabbing;
+    transform: translateY(1px);
+}
+.source-drag-btn:hover {
+    filter: brightness(1.12);
+    border-color: rgba(255, 255, 255, 0.24);
+}
+.source-drag-btn.video-source {
+    background: linear-gradient(
+        135deg,
+        rgba(124, 58, 237, 0.9),
+        rgba(91, 33, 182, 0.95)
+    );
+}
+.source-drag-btn.audio-source {
+    background: linear-gradient(
+        135deg,
+        rgba(6, 182, 212, 0.82),
+        rgba(14, 116, 144, 0.95)
+    );
+}
+/* --- 3. Source Monitor polish --------------------------------------- */
+/* Soft gradient at the bottom of the video preview behind the controls,
+   so the controls bar fades into the video instead of sitting on a hard edge.
+   Only shown when a source-monitor controls bar is present. */
+.video-container:has(.preview-player-bar)::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 96px;
+    background: linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(13, 10, 26, 0.85) 100%
+    );
+    pointer-events: none;
+    z-index: 3;
+}
+/* Soften the bar's own dark background so the gradient does the work */
+.video-container .preview-player-bar {
+    background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0.12),
+        rgba(0, 0, 0, 0.4)
+    );
+    border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* In/Out handles: 12px wide (already), add hover glow */
+.source-preview-handle {
+    top: -8px;
+    width: 20px;
+    height: 28px;
+    margin-left: -10px;
+    border-radius: 8px 8px 5px 5px;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.05)),
+        linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(3, 7, 18, 0.98));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-indent: 0;
+    transition:
+        background 0.15s ease,
+        box-shadow 0.15s ease,
+        transform 0.15s ease;
+}
+.source-preview-handle:hover {
+    transform: translateY(-1px);
+    box-shadow:
+        0 0 10px 2px rgba(139, 92, 246, 0.55),
+        0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.source-preview-handle::before {
+    position: absolute;
+    left: 50%;
+    top: 3px;
+    transform: translateX(-50%);
+    pointer-events: none;
+}
+.source-preview-handle.in::before {
+    content: "In";
+}
+.source-preview-handle.out::before {
+    content: "Out";
+}
+.source-preview-handle::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 12px;
+    width: 2px;
+    height: 10px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.7);
+    box-shadow: 0 0 4px rgba(255, 255, 255, 0.35);
+    pointer-events: none;
+}
+
+/* Smooth source progress fill width changes */
+.preview-player-progress-fill {
+    transition: width 0.05s linear;
+}

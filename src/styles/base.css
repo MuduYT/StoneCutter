@@ -1,0 +1,50 @@
+/* ===== Reset & Base ===== */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+:root {
+    --bg-base: #0d0a1a;
+    --bg-panel: #15102a;
+    --bg-elevated: #1c1638;
+    --bg-hover: #2a1f4a;
+    --border: rgba(124, 58, 237, 0.18);
+    --border-strong: rgba(124, 58, 237, 0.4);
+    --text: #e9e3f5;
+    --text-muted: rgba(233, 227, 245, 0.6);
+    --text-faint: rgba(233, 227, 245, 0.4);
+    --accent: #8b5cf6;
+    --accent-hover: #a78bfa;
+    --accent-glow: rgba(139, 92, 246, 0.45);
+    --video-color: #7c3aed;
+    --audio-color: #06b6d4;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --playhead: #f97316;
+    --gap: 12px;
+    --timeline-height: 320px;
+    --top-offset: calc(var(--timeline-height) + var(--gap) * 2);
+}
+
+body {
+    background: var(--bg-base);
+    font-family:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+}
+
+button {
+    font-family: inherit;
+}

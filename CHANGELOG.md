@@ -1,5 +1,48 @@
 # StoneCutter Update Log
 
+## 2026-05-06 - Fix: Timeline-Pause vs. Seek-Callback
+
+### Fixes
+- `usePlaybackController.js`: Nach Timeline-`seek` soll `play()` in `.then()`-Callbacks nicht mehr nach Pause laufen. Statt `timelinePlaybackStartTokenRef` (wird beim **Play-Start** erhoeht und invalidierte zu lange Audio-Seeks) gibt es `timelineSeekPlayEpochRef`: wird nur bei **Stop** und **Timeline-Ende** erhoeht und steuert die Seek→`play()`-Guards.
+- `usePlaybackController.js`: Timeline-Media-Sync respektiert wie der RAF-Ticker `interaction.type === "seek"` — waehrend Playhead-Drag bleiben Preview-Medien stumm/gestoppt statt sofort wieder `play()` zu bekommen (`isPlaying` war noch true).
+- `App.jsx`: `handleSourceVideoPlay` ignoriert Timeline-Modus (kein `setIsPlaying(true)` von Fremd-`play`-Events).
+
+### Cleanup
+- Temporaere Debug-Instrumentierung (NDJSON-Ingest-Fetches) aus `usePlaybackController.js` und `App.jsx` entfernt.
+
+## 2026-05-06 - Dokumentation: Hooks-Tabelle, Styles-Tabelle, Lint-Stand
+
+### Docs
+- `README.md`: Unter **Architecture** → **Frontend hooks** eine Tabelle aller `src/hooks/*.js` mit Kurzverantwortung; Hinweis, dass `App.jsx` `useTimelineMouseInteraction` nutzt und `useTimelineInteraction` derzeit unreferenziert ist.
+- `README.md`: **Frontend styles** als Tabelle (Import-Reihenfolge 1–12) statt nummerierter Liste; Kurznotiz zu absichtlichen Duplikaten in `App.css` unveraendert.
+- `README.md`: Abschnitt **Lint** aktualisiert: erwarteter gruener Lauf; gezielte `preserve-manual-memoization`-Disables in `usePlaybackController.js` dokumentiert.
+
+### Kontext (bereits im Log)
+- Seit dem Eintrag *Preview Transform & Proxy Quality* u. a.: modulare CSS-Auslagerung in mehreren Schritten (`project-start`, `sidebar`, `topbar`, `player`, `source-monitor`, `overlays`, `inspector`, `keyframes`), siehe die CSS-Eintraege vom 2026-05-06 darunter.
+
+## 2026-05-06 - CSS: Overlays, Inspector, Keyframes modules
+
+### Refactor
+- Aus `src/App.css` ausgelagert: `src/styles/overlays.css` (Kontextmenue, Settings-/Export-Dialoge, Performance-Overlay, Modal-Polish inkl. `vol-drag-tooltip`), `src/styles/inspector.css` (Inspector-Panel, Tabs, Collapsible, Feld-Layout, Placeholder, erweiterte Panel-Schatten), `src/styles/keyframes.css` (alle zuvor in `App.css` liegenden `@keyframes` plus Block Timeline-Keyframe-UI / Volume-Kurve).
+- `App.jsx`: `keyframes.css` direkt nach `timeline.css`, danach unveraenderte Modulreihenfolge; `overlays.css` und `inspector.css` vor `App.css`.
+
+### Cleanup
+- Ueberfluessige Leerzeilen in `App.css` nach dem CSS-Split reduziert.
+- Temporaeres Split-Skript unter `scripts/` nach einmaliger Ausfuehrung entfernt.
+
+## 2026-05-06 - CSS: Player & Source Monitor modules
+
+### Refactor
+- Aus `src/App.css` ausgelagert nach `src/styles/player.css` (Haupt-Player-Bereich, responsive `player-wrapper`, Redesign Preview-Controls) und `src/styles/source-monitor.css` (Source-Trim-UI inkl. UI-Polish-Block).
+- `App.jsx` importiert beide nach `topbar.css` und vor `App.css`.
+
+## 2026-05-06 - CSS: Project Start, Sidebar, Topbar modules
+
+### Refactor
+- Aus `src/App.css` ausgelagert nach `src/styles/project-start.css`, `src/styles/sidebar.css` und `src/styles/topbar.css` (nur Verschieben, gleiche Klassen und Werte).
+- Der zuvor in `App.css` eingebettete Timeline-Block entfaellt in `App.css`, weil die Timeline-Styles bereits in `src/styles/timeline.css` liegen (kein zweites Laden desselben Blocks).
+- `App.jsx` importiert die drei neuen Stylesheets nach `timeline.css` und vor `App.css`.
+
 ## 2026-05-06 - Preview Transform & Proxy Quality Fixes
 
 ### Fixes
@@ -91,6 +134,17 @@
 - Inspector UI controls (`InspectorCollapsible`, `InspectorDragger`) wurden aus `src/App.jsx` nach `src/components/inspector/InspectorControls.jsx` extrahiert.
 - Das komplette Inspector-Panel wurde nach `src/components/inspector/InspectorPanel.jsx` ausgelagert; `App.jsx` haelt nur noch die Zustandsableitung und die Update-Callbacks.
 - Das Refactoring ist funktional neutral gehalten und dient nur dazu, `App.jsx` schrittweise in kleinere, fokussierte Komponenten zu zerlegen.
+
+## 2026-05-06 - Preview Transform Corner Anchor Fix
+
+### Fixes
+- Corner-Resize in der Timeline-Vorschau skaliert Clips jetzt von der gezogenen Ecke aus statt immer aus der Mitte.
+- Seiten-Handles bleiben zentriert, und gedruecktes `Alt` erzwingt auch bei Corner-Handles weiterhin zentriertes Skalieren.
+- Geflippte Clips (`flipH`/`flipV`) respektieren beim Resize jetzt die sichtbare Handle-Richtung.
+- Die Richtungserkennung fuer `resize-*`-Handles wurde bereinigt und verlaesst sich nicht mehr auf fehleranfaellige `includes("e")`/`includes("s")`-Treffer im Wort `resize`.
+
+### Technical Changes
+- Neue pure Helper-Logik in `src/lib/previewTransform.js`.
 
 ## 2026-05-04 - Timeline Performance Optimization
 
