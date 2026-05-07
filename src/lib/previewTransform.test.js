@@ -1,6 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computePreviewResizeTransform } from "./previewTransform.js";
+import {
+  computePreviewResizeTransform,
+  softMagnetTowardZero,
+  smoothPreviewMove,
+} from "./previewTransform.js";
+
+test("softMagnetTowardZero leaves values outside magnet radius unchanged", () => {
+  assert.equal(softMagnetTowardZero(40, 22), 40);
+  assert.equal(softMagnetTowardZero(-40, 22), -40);
+});
+
+test("smoothPreviewMove passes through raw motion when snap disabled", () => {
+  const r = smoothPreviewMove(12.3, -4.2, { width: 100, height: 100 }, false);
+  assert.equal(r.positionX, 12.3);
+  assert.equal(r.positionY, -4.2);
+  assert.equal(r.guides, null);
+});
+
+test("smoothPreviewMove pulls gently toward center when snap enabled", () => {
+  const r = smoothPreviewMove(10, 0, { width: 200, height: 100 }, true);
+  assert.ok(Math.abs(r.positionX) < 10);
+  assert.equal(r.positionY, 0);
+  assert.ok(Number.isFinite(r.guides?.x));
+});
 
 test("corner resize keeps the opposite corner anchored by shifting position", () => {
   const result = computePreviewResizeTransform({

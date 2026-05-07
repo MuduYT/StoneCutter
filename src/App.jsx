@@ -405,7 +405,7 @@ function App() {
         clips,
         lookups: timelinePlaybackLookups,
       }),
-    [clips, timelinePlaybackLookups, timelineTime, settings.previewQuality],
+    [clips, timelinePlaybackLookups, timelineTime],
   );
   const timelineAudioLayers = useMemo(
     () =>
@@ -911,8 +911,13 @@ function App() {
       );
       return movedClips.map((clip) => {
         if (explicitTrackMoveIds.has(clip.id)) return clip;
-        const originalTrackId =
-          originalClipById.get(clip.id)?.trackId || clip.trackId;
+        const original = originalClipById.get(clip.id);
+        const originalTrackId = original?.trackId || clip.trackId;
+        // Linked partners keep their prior track unless the clip itself is dragged;
+        // only explicit movers get collision-based track reassignment.
+        if (original?.linkGroupId) {
+          return { ...clip, trackId: originalTrackId };
+        }
         const placement = getCollisionFreeTrackForClip({
           tracks,
           clips: interactionState.snapshotBefore,
@@ -1656,7 +1661,6 @@ const {
     seekToTime,
     setClips,
     setActiveClipId,
-    setSelectedClipIds,
     setSelectedKeyframe,
     keyframeDragRef,
     createHistorySnapshot,
@@ -1748,7 +1752,7 @@ const {
           <button className="project-toolbar-btn" onClick={() => setShowProjectStart(true)} title="Startscreen anzeigen">
             <Icon.File /> {currentProject?.name || "Projekt"}
           </button>
-          <button className="project-toolbar-btn" onClick={saveCurrentProject} title="Projekt speichern (Ctrl+S)" disabled={!currentProject?.path || !isProjectDirty}>
+          <button className="project-toolbar-btn" onClick={saveCurrentProject} title="Projekt speichern (Strg+S)" disabled={!currentProject?.path || !isProjectDirty}>
             <Icon.Save /> {isProjectDirty ? "Speichern" : "Gespeichert"}
           </button>
         </div>
@@ -1837,6 +1841,7 @@ const {
         activeClipId={activeClipId}
         previewTargetClipId={vidClip?.id || activeClipId}
         onPreviewClipMouseDown={handlePreviewClipMouseDown}
+        interaction={interaction}
         previewSnapGuides={previewSnapGuides}
         timelinePreviewRef={timelinePreviewRef}
         formatTime={formatTime}

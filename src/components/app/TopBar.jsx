@@ -75,7 +75,7 @@ export function TopBar({
         <button
           className="topbar-btn"
           onClick={onUndo}
-          title="Rueckgaengig (Ctrl+Z)"
+          title="Rueckgaengig (Strg+Z)"
           disabled={historySizes.past === 0}
         >
           <Icon.Undo />
@@ -83,7 +83,7 @@ export function TopBar({
         <button
           className="topbar-btn"
           onClick={onRedo}
-          title="Wiederholen (Ctrl+Y)"
+          title="Wiederholen (Strg+Y)"
           disabled={historySizes.future === 0}
         >
           <Icon.Redo />
@@ -97,7 +97,7 @@ export function TopBar({
           <button
             className="topbar-btn"
             onClick={onSaveProject}
-            title="Projekt speichern (Ctrl+S)"
+            title="Projekt speichern (Strg+S)"
             disabled={!currentProject?.path || !isProjectDirty}
           >
             <Icon.Save />

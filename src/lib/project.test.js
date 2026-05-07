@@ -61,6 +61,65 @@ test("builds and hydrates StoneCutter project documents", () => {
   assert.equal(hydrated.ui.pxPerSec, 60);
 });
 
+test("text clips round-trip with normalized content while legacy clips become media", () => {
+  const state = createEmptyProjectState("Text Clips");
+  state.clips = [
+    {
+      id: "text-1",
+      videoId: "",
+      name: "Title",
+      sourceDuration: 4,
+      inPoint: 0,
+      outPoint: 4,
+      startTime: 1,
+      trackMode: "video",
+      kind: "text",
+      content: {
+        text: "Hello",
+        style: {
+          fontSize: "64",
+          color: "#ffeeaa",
+          fontFamily: "Inter",
+          fontWeight: "700",
+          align: "center",
+        },
+      },
+    },
+    {
+      id: "media-clip",
+      videoId: "vid-1",
+      name: "Legacy Media",
+      sourceDuration: 3,
+      inPoint: 0,
+      outPoint: 3,
+      startTime: 5,
+      trackMode: "video",
+      content: { text: "should be removed" },
+    },
+  ];
+
+  const doc = buildProjectDocument(state);
+  const hydrated = hydrateProjectState(doc);
+
+  assert.equal(doc.timeline.clips[0].kind, "text");
+  assert.deepEqual(doc.timeline.clips[0].content, {
+    text: "Hello",
+    style: {
+      fontSize: 64,
+      color: "#ffeeaa",
+      fontFamily: "Inter",
+      fontWeight: "700",
+      align: "center",
+    },
+  });
+  assert.equal(doc.timeline.clips[1].kind, "media");
+  assert.equal("content" in doc.timeline.clips[1], false);
+  assert.equal(hydrated.clips[0].kind, "text");
+  assert.deepEqual(hydrated.clips[0].content, doc.timeline.clips[0].content);
+  assert.equal(hydrated.clips[1].kind, "media");
+  assert.equal("content" in hydrated.clips[1], false);
+});
+
 test("project documents serialize and hydrate back to the same document shape", () => {
   const state = createEmptyProjectState("Round Trip");
   state.videos = [
@@ -405,6 +464,8 @@ test("hydrates partial and corrupt project input with safe fallbacks", () => {
     trackMode: "video",
     trackId: "bad-video",
     linkGroupId: null,
+    kind: "media",
+    scaleLocked: true,
   });
   assert.equal(hydrated.clips[1].outPoint, 0);
   assert.equal(hydrated.clips[1].trackId, "bad-video");

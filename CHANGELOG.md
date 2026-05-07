@@ -1,5 +1,25 @@
 # StoneCutter Update Log
 
+## 2026-05-08 - Engine Contract: Text-Clip-Datenmodell vorbereitet
+
+### Refactor
+- `engine-contract.ts`, `applyCommand.js`, `project.js`: Text-Clips als `clip.kind = "text"` mit normalisiertem `clip.content` vorbereitet; fehlendes `kind` bleibt abwaertskompatibel `media`.
+- `applyCommand.js`: Neuer Engine-Command `clip.addText` erzeugt einen einfachen Default-Textclip am Playhead bzw. an `timelineTime`.
+- Timeline/Preview: Text-Clips werden minimal als normale Timeline-Clips und als Text-Overlay im Timeline-Monitor gerendert; Export/Playback-Media-Pfade bleiben unveraendert.
+- Tests fuer Engine-Commands und Projekt-Roundtrip sichern ab, dass Media-Clips ohne UI-/Render-/Export-Aenderungen weiter funktionieren.
+
+## 2026-05-07 - Cursor: Projektregeln (44, pp, rr) gespiegelt
+
+### Docs / Tooling
+- `.cursor/rules/stonecutter.mdc`: gleiche StoneCutter-Regeln wie `.codex/rules/stonecutter.codexrules.md` inkl. Keyword-Triggers (`44`, `pp`, `rr`, …), `alwaysApply`.
+- `AGENTS.md`: Cursor und Codex gemeinsam referenziert; Hinweis beide Dateien bei Regelaenderungen zu synchronisieren.
+
+## 2026-05-07 - Fix: Timeline-Pause nach Engine-Bridge (Race)
+
+### Fixes
+- `usePlaybackController.js`: Direkte Timeline-`play()`-Aufrufe pruefen zusaetzlich `playbackModeRef`/`playbackRef`, damit nach Pause kein verspaeteter Play mehr durch React-State-Timing laeuft.
+- `usePlaybackController.js`: `stopPlayback` pausiert Preview-Media ein zweites Mal im naechsten `requestAnimationFrame`, um kurz nach Stop noch startende Elemente zu erwischen.
+
 ## 2026-05-06 - Fix: Timeline-Pause vs. Seek-Callback
 
 ### Fixes

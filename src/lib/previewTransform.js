@@ -1,5 +1,47 @@
 const clampScale = (value) => Math.max(0, Math.min(400, value));
 
+/** Resolve-style: soft pull toward 0 (frame center offset in px). Quadratic falloff inside radius. */
+export const PREVIEW_POSITION_MAGNET_PX = 22;
+
+export function softMagnetTowardZero(value, magnetPx = PREVIEW_POSITION_MAGNET_PX) {
+  const v = Number(value) || 0;
+  const d = Math.abs(v);
+  if (d >= magnetPx || d < 1e-6) return v;
+  const t = d / magnetPx;
+  const eased = t * t;
+  return (v < 0 ? -1 : 1) * d * eased;
+}
+
+/**
+ * Free float when snap off. When snap on: soft center snap + optional alignment guides
+ * only while cursor is inside the magnet zone (Resolve-like, not per-frame quantization).
+ */
+export function smoothPreviewMove(rawX, rawY, rect, snapEnabled) {
+  const w = Math.max(1, Number(rect?.width) || 1);
+  const h = Math.max(1, Number(rect?.height) || 1);
+  const rx = Number(rawX) || 0;
+  const ry = Number(rawY) || 0;
+  if (!snapEnabled) {
+    return {
+      positionX: rx,
+      positionY: ry,
+      guides: null,
+    };
+  }
+  const nearCenterX = Math.abs(rx) < PREVIEW_POSITION_MAGNET_PX;
+  const nearCenterY = Math.abs(ry) < PREVIEW_POSITION_MAGNET_PX;
+  const x = softMagnetTowardZero(rx, PREVIEW_POSITION_MAGNET_PX);
+  const y = softMagnetTowardZero(ry, PREVIEW_POSITION_MAGNET_PX);
+  const guides = {};
+  if (nearCenterX) guides.x = w / 2 + x;
+  if (nearCenterY) guides.y = h / 2 + y;
+  return {
+    positionX: x,
+    positionY: y,
+    guides: Object.keys(guides).length > 0 ? guides : null,
+  };
+}
+
 const parseResizeMode = (mode) => {
   const token = String(mode || "").replace(/^resize-/, "");
   switch (token) {

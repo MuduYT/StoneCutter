@@ -182,6 +182,27 @@ test("createGroupKeyframes only writes properties that differ from default", () 
   assert.equal(map.opacity[0].value, 80);
 });
 
+test("createGroupKeyframes cold-starts full transform when all defaults and no tracks", () => {
+  const clip = {
+    id: "c1",
+    positionX: 0,
+    positionY: 0,
+    scaleX: 100,
+    scaleY: 100,
+    scale: 100,
+    rotation: 0,
+    opacity: 100,
+  };
+  const map = createGroupKeyframes({ clip, groupId: "transform", time: 1 });
+  const keys = Object.keys(map).sort();
+  assert.deepEqual(
+    keys,
+    ["opacity", "positionX", "positionY", "rotation", "scale", "scaleX", "scaleY"],
+  );
+  assert.equal(map.positionX[0].value, 0);
+  assert.equal(map.opacity[0].value, 100);
+});
+
 test("createGroupKeyframes updates existing keyframes for already-modified properties", () => {
   const clip = {
     id: "c1",
@@ -192,7 +213,7 @@ test("createGroupKeyframes updates existing keyframes for already-modified prope
   };
   const map = createGroupKeyframes({ clip, groupId: "transform", time: 1 });
   assert.equal(map.positionX.length, 1);
-  assert.equal(map.positionX[0].value, 50);
+  assert.equal(map.positionX[0].value, 999);
 });
 
 test("createGroupKeyframes still updates a property that already has a track even if currently at default", () => {
@@ -206,7 +227,7 @@ test("createGroupKeyframes still updates a property that already has a track eve
   const map = createGroupKeyframes({ clip, groupId: "transform", time: 2 });
   assert.equal(map.positionX.length, 2);
   assert.equal(map.positionX[1].time, 2);
-  assert.equal(map.positionX[1].value, 0);
+  assert.equal(map.positionX[1].value, 100);
 });
 
 test("getMergedKeyframeMarkers buckets keyframes by frame across properties", () => {

@@ -18,7 +18,10 @@ import {
 } from "../lib/timeline.js";
 import { getTopVisibleTimelineClip } from "../lib/playback.js";
 import { FOCUS_TIMELINE } from "../lib/sourceMonitor.js";
-import { computePreviewResizeTransform } from "../lib/previewTransform.js";
+import {
+  computePreviewResizeTransform,
+  smoothPreviewMove,
+} from "../lib/previewTransform.js";
 import { shiftKeyframeMap } from "../lib/keyframes.js";
 import { nextId } from "../lib/utils.js";
 
@@ -502,17 +505,14 @@ export function useTimelineInteraction({
         let guides = null;
         let next = {};
         if (it.mode === "move") {
-          let nextX = (orig.positionX ?? 0) + dx;
-          let nextY = (orig.positionY ?? 0) + dy;
-          if (effSnap) {
-            nextX = Math.round(nextX / 10) * 10;
-            nextY = Math.round(nextY / 10) * 10;
-            guides = {
-              x: rect.width / 2 + nextX,
-              y: rect.height / 2 + nextY,
-            };
-          }
-          next = { positionX: nextX, positionY: nextY };
+          const rawX = (orig.positionX ?? 0) + dx;
+          const rawY = (orig.positionY ?? 0) + dy;
+          const smoothed = smoothPreviewMove(rawX, rawY, rect, effSnap);
+          next = {
+            positionX: smoothed.positionX,
+            positionY: smoothed.positionY,
+          };
+          guides = smoothed.guides;
         } else if (it.mode === "resize") {
           const baseScaleX = Number(orig.scaleX ?? orig.scale ?? 100);
           const baseScaleY = Number(orig.scaleY ?? orig.scale ?? 100);
@@ -530,10 +530,6 @@ export function useTimelineInteraction({
           } else {
             nextScaleX = baseScaleX + (dx / Math.max(1, rect.width)) * 100;
             nextScaleY = baseScaleY + (dy / Math.max(1, rect.height)) * 100;
-          }
-          if (effSnap) {
-            nextScaleX = Math.round(nextScaleX);
-            nextScaleY = Math.round(nextScaleY);
           }
           next = {
             scaleX: clampScale(nextScaleX),
@@ -554,29 +550,14 @@ export function useTimelineInteraction({
             clip: orig,
             altKey: ev.altKey,
           });
-          if (effSnap) {
-            next = {
-              ...next,
-              scaleX: Math.round(next.scaleX),
-              scaleY: Math.round(next.scaleY),
-              scale: Math.round(next.scale),
-              ...(Number.isFinite(next.positionX)
-                ? { positionX: Math.round(next.positionX) }
-                : {}),
-              ...(Number.isFinite(next.positionY)
-                ? { positionY: Math.round(next.positionY) }
-                : {}),
-            };
-          }
         } else if (it.mode === "rotate") {
           const currentAngle = Math.atan2(
             ev.clientY - it.previewCenterY,
             ev.clientX - it.previewCenterX,
           );
           const baseRotation = Number(orig.rotation ?? 0);
-          let nextRotation =
+          const nextRotation =
             baseRotation + ((currentAngle - it.startAngle) * 180) / Math.PI;
-          if (effSnap) nextRotation = Math.round(nextRotation);
           next = { rotation: nextRotation };
         }
         setPreviewSnapGuides(guides);

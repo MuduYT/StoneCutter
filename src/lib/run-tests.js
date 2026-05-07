@@ -8,3 +8,4 @@ import "./trackStore.test.js";
 import "./timelineRender.test.js";
 import "./keyframes.test.js";
 import "./previewTransform.test.js";
+import "./engine/applyCommand.test.js";

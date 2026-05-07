@@ -76,6 +76,9 @@ export const getTimelineVisualClips = ({ time, clips, tracks = [], videos = [], 
     .filter(({ clip, media, track }) => {
       const mediaType = media?.mediaType || 'video'
       if (track?.hidden) return false
+      if (clip.kind === 'text') {
+        return getTrackType(track, clip) === 'video' && clip.trackMode !== 'audio'
+      }
       return getTrackType(track, clip) === 'video' &&
         clip.trackMode !== 'audio' &&
         (mediaType === 'video' || mediaType === 'image')

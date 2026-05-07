@@ -278,13 +278,14 @@ export const Timeline = ({
                 const left = clip.startTime * pxPerSec;
                 const width = Math.max(20, dur * pxPerSec);
                 const isVideo = track.type === "video";
+                const isText = clip.kind === "text";
                 const trimmedLeft = clip.inPoint > 0.01;
                 const trimmedRight =
                   clip.outPoint < clip.sourceDuration - 0.01;
                 return (
                   <div
                     key={clip.id}
-                    className={`clip ${isVideo ? "video-clip" : "audio-clip"} ${activeClipId === clip.id ? "active" : ""} ${selectedClipIds.has(clip.id) ? "selected" : ""} ${draggingIds?.has(clip.id) ? "dragging" : ""} ${track.locked ? "track-locked" : ""} ${clip.linkGroupId ? "linked" : ""}`}
+                    className={`clip ${isVideo ? "video-clip" : "audio-clip"} ${isText ? "text-clip" : ""} ${activeClipId === clip.id ? "active" : ""} ${selectedClipIds.has(clip.id) ? "selected" : ""} ${draggingIds?.has(clip.id) ? "dragging" : ""} ${track.locked ? "track-locked" : ""} ${clip.linkGroupId ? "linked" : ""}`}
                     style={{ left: `${left}px`, width: `${width}px` }}
                     onMouseDown={(e) =>
                       !track.locked && handleClipMouseDown(e, clip)
@@ -309,7 +310,17 @@ export const Timeline = ({
                       }
                       title="Links trimmen"
                     />
-                    {isVideo ? (
+                    {isText ? (
+                      <div className="clip-content">
+                        <span className="clip-kind-label">Text</span>
+                        <span className="clip-name">
+                          {clip.content?.text || clip.name}
+                        </span>
+                        <span className="clip-duration">
+                          {formatTime(dur)}
+                        </span>
+                      </div>
+                    ) : isVideo ? (
                       <>
                         {(() => {
                           const thumbs = thumbsMap[clip.videoId];

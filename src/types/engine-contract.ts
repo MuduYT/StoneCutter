@@ -3,6 +3,8 @@ export type EngineId = string;
 export type EngineTrackType = "video" | "audio";
 export type EngineTrackMode = "video" | "audio" | "av";
 export type EngineInterpolation = "linear";
+export type EngineClipKind = "media" | "text";
+export type EngineTextAlign = "left" | "center" | "right";
 
 export interface EngineTrack {
   id: EngineId;
@@ -23,6 +25,19 @@ export interface EngineKeyframe {
 
 export type EngineKeyframeMap = Record<string, EngineKeyframe[]>;
 
+export interface EngineTextClipStyle {
+  fontSize: number;
+  color: string;
+  fontFamily?: string;
+  fontWeight?: string;
+  align?: EngineTextAlign;
+}
+
+export interface EngineTextClipContent {
+  text: string;
+  style: EngineTextClipStyle;
+}
+
 export interface EngineClip {
   id: EngineId;
   videoId: EngineId;
@@ -35,8 +50,9 @@ export interface EngineClip {
   sourceDuration?: number;
   linkGroupId?: EngineId | null;
   keyframes?: EngineKeyframeMap;
-  // Forward-compatible for future clip categories.
-  kind?: "media" | "text" | "transition";
+  // Missing kind is treated as "media" for backwards compatibility.
+  kind?: EngineClipKind;
+  content?: EngineTextClipContent;
 }
 
 export interface EngineSelectionState {
@@ -83,6 +99,11 @@ export type SetPlayheadCommand = EngineCommandBase<
 export type AddClipCommand = EngineCommandBase<
   "clip.add",
   { clips: EngineClip[]; ripple?: boolean; resolveOverlaps?: boolean }
+>;
+
+export type AddTextClipCommand = EngineCommandBase<
+  "clip.addText",
+  { timelineTime?: number; trackId?: EngineId; resolveOverlaps?: boolean }
 >;
 
 export type UpdateClipPropsCommand = EngineCommandBase<
@@ -178,6 +199,7 @@ export type GroupSetKeyframeCommand = EngineCommandBase<
 export type EngineCommand =
   | SetPlayheadCommand
   | AddClipCommand
+  | AddTextClipCommand
   | UpdateClipPropsCommand
   | MoveClipCommand
   | TrimLeftCommand

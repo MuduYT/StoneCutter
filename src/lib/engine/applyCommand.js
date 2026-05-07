@@ -105,6 +105,83 @@ const shiftClipOnTimeline = (clip, deltaSec) => ({
   keyframes: shiftKeyframeMap(clip.keyframes, deltaSec),
 })
 
+const DEFAULT_TEXT_CLIP_DURATION = 5
+
+const DEFAULT_TEXT_CLIP_CONTENT = {
+  text: "Text",
+  style: {
+    fontSize: 48,
+    color: "#ffffff",
+    fontFamily: "Inter",
+    fontWeight: "600",
+    align: "center",
+  },
+}
+
+const TEXT_ALIGN_VALUES = new Set(["left", "center", "right"])
+
+const normalizeTextContent = (content) => {
+  const safeContent = content && typeof content === "object" ? content : {}
+  const safeStyle =
+    safeContent.style && typeof safeContent.style === "object" ? safeContent.style : {}
+  const fontSize = Number(safeStyle.fontSize)
+  const align = typeof safeStyle.align === "string" ? safeStyle.align : undefined
+  const out = {
+    text: typeof safeContent.text === "string" ? safeContent.text : "",
+    style: {
+      fontSize: Number.isFinite(fontSize) ? Math.max(1, fontSize) : 48,
+      color: typeof safeStyle.color === "string" && safeStyle.color ? safeStyle.color : "#ffffff",
+    },
+  }
+  if (typeof safeStyle.fontFamily === "string" && safeStyle.fontFamily) {
+    out.style.fontFamily = safeStyle.fontFamily
+  }
+  if (typeof safeStyle.fontWeight === "string" && safeStyle.fontWeight) {
+    out.style.fontWeight = safeStyle.fontWeight
+  }
+  if (align && TEXT_ALIGN_VALUES.has(align)) {
+    out.style.align = align
+  }
+  return out
+}
+
+const normalizeClipKindAndContent = (clip) => {
+  const kind = clip?.kind === "text" ? "text" : "media"
+  if (kind !== "text") {
+    const nextClip = { ...clip, kind }
+    if (nextClip && "content" in nextClip) {
+      delete nextClip.content
+    }
+    return nextClip
+  }
+  return {
+    ...clip,
+    kind,
+    content: normalizeTextContent(clip?.content),
+  }
+}
+
+const getDefaultVideoTrackId = (tracks = []) =>
+  tracks.find((track) => track?.type === "video")?.id || "track-v1"
+
+const createDefaultTextClip = ({ id, timelineTime, trackId }) => {
+  const startTime = Number(timelineTime)
+  const safeStartTime = Number.isFinite(startTime) ? Math.max(0, startTime) : 0
+  return normalizeClipKindAndContent({
+    id,
+    videoId: "",
+    trackId,
+    trackMode: "video",
+    name: "Text",
+    startTime: safeStartTime,
+    inPoint: 0,
+    outPoint: DEFAULT_TEXT_CLIP_DURATION,
+    sourceDuration: DEFAULT_TEXT_CLIP_DURATION,
+    kind: "text",
+    content: DEFAULT_TEXT_CLIP_CONTENT,
+  })
+}
+
 const resolveClipMoveOverlaps = (clipList, movedIds, makeId) => {
   const ids = movedIds instanceof Set ? movedIds : new Set(movedIds)
   const byTrack = new Map()
@@ -212,7 +289,9 @@ export const applyCommand = (engineState, command) => {
     if (payload.ripple) {
       return validationError(state, commandId, "ripple not implemented for this command")
     }
-    const additions = Array.isArray(payload.clips) ? payload.clips.map((clip) => ({ ...clip })) : []
+    const additions = Array.isArray(payload.clips)
+      ? payload.clips.map((clip) => normalizeClipKindAndContent({ ...clip }))
+      : []
     if (additions.length === 0) return validationError(state, commandId, "No clips provided.")
     let updated = [...clips, ...additions]
     if (payload.resolveOverlaps) {
@@ -224,13 +303,34 @@ export const applyCommand = (engineState, command) => {
     return finish(next, commandId, { changedClipIds: additions.map((clip) => clip.id) })
   }
 
+  if (type === "clip.addText") {
+    const playhead = Number(next.timeline.playhead)
+    const timelineTime = Object.prototype.hasOwnProperty.call(payload, "timelineTime")
+      ? payload.timelineTime
+      : Number.isFinite(playhead)
+        ? playhead
+        : 0
+    const addition = createDefaultTextClip({
+      id: nextGeneratedId("clip"),
+      timelineTime,
+      trackId: payload.trackId || getDefaultVideoTrackId(next.timeline.tracks),
+    })
+    let updated = [...clips, addition]
+    if (payload.resolveOverlaps) {
+      updated = resolveOverlaps(updated, addition.id, () => nextGeneratedId("clip"))
+    }
+    next.timeline.clips = updated
+    return finish(next, commandId, { changedClipIds: [addition.id] })
+  }
+
   if (type === "clip.updateProps") {
     const clipId = payload.clipId
     const clip = findClipById(clips, clipId)
     if (!clip) return validationError(state, commandId, `Clip not found: ${clipId}`)
-    next.timeline.clips = clips.map((item) =>
-      item.id === clipId ? { ...item, ...(payload.props || {}) } : item
-    )
+    next.timeline.clips = clips.map((item) => {
+      if (item.id !== clipId) return item
+      return normalizeClipKindAndContent({ ...item, ...(payload.props || {}) })
+    })
     return finish(next, commandId, { changedClipIds: [clipId] })
   }
 

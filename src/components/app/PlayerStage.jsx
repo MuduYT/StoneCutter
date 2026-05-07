@@ -1,6 +1,6 @@
 import { resolveAnimatedClip } from "../../lib/keyframes.js";
 import { getPreviewMediaSrc } from "../../lib/proxyGenerator.js";
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 
 export function PlayerStage({
   mainContentClassName,
@@ -37,6 +37,7 @@ export function PlayerStage({
   perfStats,
   previewTargetClipId,
   onPreviewClipMouseDown,
+  interaction,
   previewSnapGuides,
   timelinePreviewRef,
   formatTime,
@@ -44,6 +45,9 @@ export function PlayerStage({
   Icon,
   timelineVisualRefs,
 }) {
+  const [previewChromeHover, setPreviewChromeHover] = useState(false);
+  const transformChromeActive =
+    previewChromeHover || interaction?.type === "preview-transform";
   const prevQualityRef = useRef(settings.previewQuality);
   const getPreviewTransform = (clip) => {
     const scaleBase = clip.scale ?? 100;
@@ -52,6 +56,26 @@ export function PlayerStage({
     const scaleX = (scaleXValue / 100) * (clip.flipH ? -1 : 1);
     const scaleY = (scaleYValue / 100) * (clip.flipV ? -1 : 1);
     return `translate(${clip.positionX ?? 0}px, ${clip.positionY ?? 0}px) rotate(${clip.rotation ?? 0}deg) scale(${scaleX}, ${scaleY})`;
+  };
+  const getTextClipStyle = (clip) => {
+    const style = clip.content?.style || {};
+    const fontSize = Number(style.fontSize);
+    const align = ["left", "center", "right"].includes(style.align)
+      ? style.align
+      : "center";
+    return {
+      color: typeof style.color === "string" && style.color ? style.color : "#ffffff",
+      fontFamily: typeof style.fontFamily === "string" && style.fontFamily
+        ? style.fontFamily
+        : "Inter",
+      fontSize: `${Number.isFinite(fontSize) ? Math.max(1, fontSize) : 48}px`,
+      fontWeight: typeof style.fontWeight === "string" && style.fontWeight
+        ? style.fontWeight
+        : "600",
+      textAlign: align,
+      justifySelf:
+        align === "left" ? "start" : align === "right" ? "end" : "center",
+    };
   };
   const previewTransformClip =
     isTimelineMonitorActive && previewTargetClipId
@@ -126,12 +150,18 @@ export function PlayerStage({
 
         <div className="video-container">
           {isTimelineMonitorActive ? (
-            <div className="timeline-composite-preview" ref={timelinePreviewRef}>
+            <div
+              className="timeline-composite-preview"
+              ref={timelinePreviewRef}
+              onMouseEnter={() => setPreviewChromeHover(true)}
+              onMouseLeave={() => setPreviewChromeHover(false)}
+            >
               <div className="preview-grid-overlay" aria-hidden="true" />
               {timelineVisualLayers.length > 0 ? (
                 timelineVisualLayers.map(({ clip: rawClip, media }, index) => {
                   const clip = resolveAnimatedClip(rawClip, timelineTime);
                   const isPreviewTarget = clip.id === previewTargetClipId;
+                  const isTextClip = clip.kind === "text";
                   const mediaType = media?.mediaType || "video";
                   const previewSrc = getPreviewMediaSrc(
                     media,
@@ -182,7 +212,14 @@ export function PlayerStage({
                         filter: cssFilters || undefined,
                       }}
                     >
-                      {mediaType === "image" ? (
+                      {isTextClip ? (
+                        <div
+                          className="timeline-preview-text"
+                          style={getTextClipStyle(clip)}
+                        >
+                          {clip.content?.text || clip.name || "Text"}
+                        </div>
+                      ) : mediaType === "image" ? (
                           <img
                             src={previewSrc}
                           className="timeline-preview-media"
@@ -212,7 +249,9 @@ export function PlayerStage({
               )}
               {previewTransformClip && onPreviewClipMouseDown && (
                 <div
-                  className="timeline-preview-transform-overlay"
+                  className={`timeline-preview-transform-overlay ${
+                    transformChromeActive ? "is-active" : ""
+                  }`}
                   onMouseDown={(event) =>
                     onPreviewClipMouseDown(event, previewTransformClip, "move")
                   }

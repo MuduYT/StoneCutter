@@ -535,6 +535,17 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     margin-bottom: 4px;
     transition: color 0.15s;
+    position: relative;
+    z-index: 1;
+    gap: 8px;
+}
+
+.inspector-section-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: auto;
 }
 
 .inspector-section-header:hover {

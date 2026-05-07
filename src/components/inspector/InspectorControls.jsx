@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function InspectorCollapsible({
   title,
@@ -60,6 +60,7 @@ export function InspectorDragger({
   disabled = false,
   dragResistance = 1,
 }) {
+  const scrubRef = useRef(null);
   const [editing, setEditing] = useState(false);
   const [editVal, setEditVal] = useState("");
   const dec = decimals != null ? decimals : step < 1 ? 1 : 0;
@@ -111,12 +112,35 @@ export function InspectorDragger({
     window.addEventListener("mouseup", onUp);
   };
 
-  const onWheel = (event) => {
-    if (disabled) return;
-    event.stopPropagation();
-    const direction = event.deltaY > 0 ? -1 : 1;
-    onChange(clamp(Math.round(((value ?? 0) + direction * step) / step) * step));
-  };
+  useEffect(() => {
+    const el = scrubRef.current;
+    if (!el || disabled) return;
+    const onWheelNative = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const base = Number(step);
+      const safeStep = Number.isFinite(base) && base > 0 ? base : 1;
+      const micro = Math.max(safeStep * 0.1, 1e-6);
+      const wheelStep = event.shiftKey
+        ? micro
+        : event.ctrlKey || event.metaKey
+          ? safeStep * 5
+          : safeStep;
+      let deltaPx = event.deltaY;
+      if (event.deltaMode === 1) deltaPx *= 16;
+      else if (event.deltaMode === 2) deltaPx *= 120;
+      const direction = deltaPx > 0 ? -1 : 1;
+      const increments = Math.max(1, Math.round(Math.abs(deltaPx) / 40));
+      const bump = direction * increments * wheelStep;
+      const nextRounded = Math.round(((value ?? 0) + bump) / wheelStep) * wheelStep;
+      let clamped = nextRounded;
+      if (Number.isFinite(min)) clamped = Math.max(min, clamped);
+      if (Number.isFinite(max)) clamped = Math.min(max, clamped);
+      onChange(clamped);
+    };
+    el.addEventListener("wheel", onWheelNative, { passive: false });
+    return () => el.removeEventListener("wheel", onWheelNative);
+  }, [disabled, max, min, onChange, step, value]);
 
   const commitEdit = (rawValue) => {
     const parsed = parseFloat(rawValue ?? editVal);
@@ -125,15 +149,19 @@ export function InspectorDragger({
   };
 
   return (
-    <div className={`idf-row ${disabled ? "disabled" : ""}`} onWheel={onWheel}>
+    <div className={`idf-row ${disabled ? "disabled" : ""}`}>
       <span
         className="idf-label"
         onMouseDown={beginDrag}
-        title="Ziehen zum Aendern - Scrollen zum Anpassen"
+        title="Ziehen: Wert aendern · Mausrad: schrittweise (Shift: feiner, Ctrl: groesser), scrollt die Seite nicht mit"
       >
         {label}
       </span>
-      <div className="idf-scrub" onMouseDown={beginDrag}>
+      <div
+        ref={scrubRef}
+        className="idf-scrub"
+        onMouseDown={beginDrag}
+      >
         {editing ? (
           <input
             className="idf-input"

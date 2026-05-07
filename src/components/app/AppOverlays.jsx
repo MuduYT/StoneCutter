@@ -334,7 +334,7 @@ export function AppOverlays({
                 onClick={() => handleContextMenuDuplicate(clip.id)}
               >
                 <Icon.Plus /> Duplizieren{" "}
-                <span className="cm-shortcut">Ctrl+D</span>
+                <span className="cm-shortcut">Strg+D</span>
               </button>
               <button
                 className="cm-item"
@@ -352,7 +352,7 @@ export function AppOverlays({
                   onClick={() => handleContextMenuUnlink(clip.id)}
                 >
                   Link aufheben{" "}
-                  <span className="cm-shortcut">Ctrl+Shift+L</span>
+                  <span className="cm-shortcut">Strg+Shift+L</span>
                 </button>
               )}
               <div className="cm-divider" />

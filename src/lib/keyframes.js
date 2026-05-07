@@ -136,6 +136,30 @@ export const resolveAnimatedClip = (clip, timelineTime) => {
       touched = true;
     }
   }
+  if (next.scaleLocked !== false && map) {
+    const t = finiteOr(timelineTime, 0);
+    const tx = getClipPropertyTrack(clip, "scaleX");
+    const ty = getClipPropertyTrack(clip, "scaleY");
+    const ts = getClipPropertyTrack(clip, "scale");
+    const hasScaleAnim =
+      tx.length > 0 || ty.length > 0 || ts.length > 0;
+    if (hasScaleAnim) {
+      let uniform = next.scaleX ?? clip.scaleX ?? clip.scale ?? 100;
+      if (tx.length > 0) uniform = sampleProperty(tx, t, uniform);
+      if (ty.length > 0) uniform = sampleProperty(ty, t, uniform);
+      if (ts.length > 0) uniform = sampleProperty(ts, t, uniform);
+      if (
+        uniform !== next.scaleX ||
+        uniform !== next.scaleY ||
+        uniform !== next.scale
+      ) {
+        next.scaleX = uniform;
+        next.scaleY = uniform;
+        next.scale = uniform;
+        touched = true;
+      }
+    }
+  }
   return touched ? next : clip;
 };
 
@@ -231,6 +255,39 @@ export const toggleClipKeyframeAt = ({
 }) => {
   const property = getAnimatableProperty(propertyKey);
   if (!property) return clip?.keyframes || {};
+  const scaleKeys = ["scaleX", "scaleY", "scale"];
+  const scaleLocked = clip?.scaleLocked !== false;
+  const isScaleFamily = scaleLocked && scaleKeys.includes(propertyKey);
+
+  if (isScaleFamily) {
+    let map = safeMap(clip?.keyframes) ? { ...clip.keyframes } : {};
+    const anyKeyframeAtTime = scaleKeys.some((key) =>
+      hasKeyframeAt(getClipPropertyTrack({ ...clip, keyframes: map }, key), time, fps),
+    );
+    if (anyKeyframeAtTime) {
+      for (const key of scaleKeys) {
+        const track = getClipPropertyTrack({ ...clip, keyframes: map }, key);
+        if (!hasKeyframeAt(track, time, fps)) continue;
+        const cleared = removeKeyframeAt(track, time, fps);
+        map = setClipPropertyTrack({ ...clip, keyframes: map }, key, cleared);
+      }
+      return map;
+    }
+    const uniform = sampleClipProperty(clip, "scaleX", time);
+    const value = Number.isFinite(uniform)
+      ? uniform
+      : (property.default ?? 100);
+    for (const key of scaleKeys) {
+      const tr = getClipPropertyTrack({ ...clip, keyframes: map }, key);
+      map = setClipPropertyTrack(
+        { ...clip, keyframes: map },
+        key,
+        addOrUpdateKeyframe(tr, { time, value }, fps),
+      );
+    }
+    return map;
+  }
+
   const track = getClipPropertyTrack(clip, propertyKey);
   if (hasKeyframeAt(track, time, fps)) {
     return setClipPropertyTrack(
@@ -266,7 +323,9 @@ export const shiftKeyframeMap = (keyframes, delta) => {
 
 // Group helper: for every animatable property in the group whose current clip
 // value differs from its default, create or update a keyframe at `time`. No
-// "phantom" keyframes are created on properties left at default.
+// "phantom" keyframes are created on properties left at default — except when
+// the group would otherwise write nothing (no tracks yet, all defaults): then we
+// record the full group state so the first group click always does something.
 export const createGroupKeyframes = ({
   clip,
   groupId,
@@ -274,26 +333,42 @@ export const createGroupKeyframes = ({
   fps = PROJECT_FPS,
 }) => {
   const properties = getPropertiesForGroup(groupId);
+  const snappedTime = snapTimeToFrame(finiteOr(time, 0), fps);
   let nextMap = safeMap(clip?.keyframes) ? { ...clip.keyframes } : {};
-  for (const property of properties) {
-    const current = clip?.[property.key];
-    const existingTrack = nextMap[property.key];
-    const hasExistingTrack = Array.isArray(existingTrack) && existingTrack.length > 0;
-    const isAtDefault =
-      current === undefined ||
-      current === null ||
-      (typeof current === "number" && current === property.default);
-    if (isAtDefault && !hasExistingTrack) continue;
-    const value = current === undefined || current === null
-      ? property.default
-      : current;
+  let wroteInFirstPass = false;
+
+  const writeKeyframe = (property, existingTrack) => {
+    const sampled = sampleClipProperty(clip, property.key, snappedTime);
+    const value =
+      typeof sampled === "number" && Number.isFinite(sampled)
+        ? sampled
+        : property.default;
     const nextTrack = addOrUpdateKeyframe(
       existingTrack || [],
-      { time, value },
+      { time: snappedTime, value },
       fps,
     );
     nextMap = { ...nextMap, [property.key]: nextTrack };
+  };
+
+  for (const property of properties) {
+    const existingTrack = nextMap[property.key];
+    const hasExistingTrack = Array.isArray(existingTrack) && existingTrack.length > 0;
+    const sampled = sampleClipProperty(clip, property.key, snappedTime);
+    const isAtDefault =
+      typeof sampled === "number" && sampled === property.default;
+    if (isAtDefault && !hasExistingTrack) continue;
+    wroteInFirstPass = true;
+    writeKeyframe(property, existingTrack);
   }
+
+  if (!wroteInFirstPass && properties.length > 0) {
+    nextMap = safeMap(clip?.keyframes) ? { ...clip.keyframes } : {};
+    for (const property of properties) {
+      writeKeyframe(property, nextMap[property.key]);
+    }
+  }
+
   return nextMap;
 };
 

@@ -67,6 +67,7 @@ const clampNumber = (value, fallback, min = -Infinity, max = Infinity) => {
 
 const safeBoolean = (value, fallback) =>
   typeof value === "boolean" ? value : fallback;
+const TEXT_ALIGN_VALUES = new Set(["left", "center", "right"]);
 
 const optionalNumber = (
   source,
@@ -82,6 +83,39 @@ const optionalNumber = (
 const optionalBoolean = (source, key) => {
   if (!Object.prototype.hasOwnProperty.call(source, key)) return undefined;
   return safeBoolean(source[key], false);
+};
+
+const normalizeClipKind = (clip) => (safeString(clip?.kind) === "text" ? "text" : "media");
+
+const normalizeTextClipContent = (content) => {
+  const safeContent = safeObject(content);
+  const safeStyle = safeObject(safeContent.style);
+  const fontSize = finiteNumber(safeStyle.fontSize, 48);
+  const align = safeString(safeStyle.align);
+  const style = {
+    fontSize: Math.max(1, fontSize),
+    color: safeString(safeStyle.color, "#ffffff") || "#ffffff",
+  };
+  const fontFamily = safeString(safeStyle.fontFamily);
+  const fontWeight = safeString(safeStyle.fontWeight);
+  if (fontFamily) style.fontFamily = fontFamily;
+  if (fontWeight) style.fontWeight = fontWeight;
+  if (align && TEXT_ALIGN_VALUES.has(align)) style.align = align;
+  return {
+    text: safeString(safeContent.text),
+    style,
+  };
+};
+
+const attachClipKindContent = (clip) => {
+  const kind = normalizeClipKind(clip);
+  const out = { ...clip, kind };
+  if (kind === "text") {
+    out.content = normalizeTextClipContent(clip.content);
+  } else {
+    delete out.content;
+  }
+  return out;
 };
 
 const normalizeClipInspectorProperties = (clip) => {
@@ -278,9 +312,14 @@ export function buildProjectDocument(state) {
           linkGroupId: clip.linkGroupId || null,
           ...normalizeClipInspectorProperties(clip),
         };
+        const withKind = attachClipKindContent({
+          ...out,
+          kind: clip.kind,
+          content: clip.content,
+        });
         const keyframes = sanitizeKeyframeMap(clip.keyframes);
-        if (keyframes) out.keyframes = keyframes;
-        return out;
+        if (keyframes) withKind.keyframes = keyframes;
+        return withKind;
       }),
       playhead: Number.isFinite(state.timelineTime) ? state.timelineTime : 0,
     },
@@ -344,7 +383,7 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
       inPoint,
       finiteNumber(safeClip.outPoint, inPoint),
     );
-    const baseClip = {
+    const baseClip = attachClipKindContent({
       id: safeString(safeClip.id, `clip-${index + 1}`),
       videoId: safeString(safeClip.videoId),
       name: safeString(safeClip.name, `Clip ${index + 1}`),
@@ -367,8 +406,10 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
           ? defaultAudioTrackId
           : defaultVideoTrackId),
       linkGroupId: safeString(safeClip.linkGroupId, "") || null,
+      kind: safeClip.kind,
+      content: safeClip.content,
       ...normalizeClipInspectorProperties(safeClip),
-    };
+    });
     const keyframes = sanitizeKeyframeMap(safeClip.keyframes);
     if (keyframes) baseClip.keyframes = keyframes;
 

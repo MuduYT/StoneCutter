@@ -79,6 +79,35 @@ test('returns stacked visual clips from lower tracks to upper tracks', () => {
   assert.equal(getTopVisibleTimelineClip({ time: 1.5, clips, tracks, videos })?.id, 'base')
 })
 
+test('returns text clips as visual timeline layers without media assets', () => {
+  const tracks = [
+    { id: 'track-v1', type: 'video' },
+    { id: 'track-a1', type: 'audio' },
+  ]
+  const clips = [
+    {
+      ...clip('title', 2, 0, 5),
+      videoId: '',
+      trackId: 'track-v1',
+      trackMode: 'video',
+      kind: 'text',
+      content: { text: 'Text', style: { fontSize: 48, color: '#ffffff' } },
+    },
+    {
+      ...clip('audio-text', 2, 0, 5),
+      videoId: '',
+      trackId: 'track-a1',
+      trackMode: 'audio',
+      kind: 'text',
+    },
+  ]
+
+  const layers = getTimelineVisualClips({ time: 3, clips, tracks, videos: [] })
+
+  assert.deepEqual(layers.map(({ clip: item }) => item.id), ['title'])
+  assert.equal(layers[0].media, undefined)
+})
+
 test('returns audible clips while honoring audio mute and solo state', () => {
   const tracks = [
     { id: 'track-v1', type: 'video' },

@@ -302,6 +302,9 @@ export function usePlaybackController({
       });
     }
     pauseTimelinePreviewMedia();
+    requestAnimationFrame(() => {
+      pauseTimelinePreviewMedia();
+    });
     imagePlaybackRef.current = null;
     timelinePlaybackRef.current = null;
     pendingPlayRef.current = false;
@@ -459,6 +462,8 @@ export function usePlaybackController({
       }
       if (
         shouldPlay &&
+        playbackModeRef.current === "timeline" &&
+        playbackRef.current.isPlaying &&
         !timelineSeekDragActive &&
         !node.seeking &&
         performance.now() >= timelineSeekGraceUntilRef.current
@@ -520,6 +525,8 @@ export function usePlaybackController({
       }
       if (
         shouldPlay &&
+        playbackModeRef.current === "timeline" &&
+        playbackRef.current.isPlaying &&
         !timelineSeekDragActive &&
         !node.muted &&
         !node.seeking &&
@@ -549,6 +556,7 @@ export function usePlaybackController({
     timelinePlayingAudioDriftTolerance,
     timelinePlayingVideoDriftTolerance,
     timelineSeekGraceUntilRef,
+    timelineSeekPlayEpochRef,
     timelineTime,
     timelineVisualLayers,
     timelineVisualRefs,

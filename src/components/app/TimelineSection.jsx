@@ -125,7 +125,7 @@ export function TimelineSection({
           <button
             className="tb-btn"
             onClick={undo}
-            title="Rueckgaengig (Ctrl+Z)"
+            title="Rueckgaengig (Strg+Z)"
             disabled={historySizes.past === 0}
           >
             <Icon.Undo />
@@ -133,7 +133,7 @@ export function TimelineSection({
           <button
             className="tb-btn"
             onClick={redo}
-            title="Wiederholen (Ctrl+Y)"
+            title="Wiederholen (Strg+Y)"
             disabled={historySizes.future === 0}
           >
             <Icon.Redo />
@@ -275,15 +275,18 @@ export function TimelineSection({
             <span className="kbd-sep">·</span>
             <span className="kbd-group"><kbd>S</kbd> Split</span>
             <span className="kbd-group"><kbd>Del</kbd></span>
-            <span className="kbd-group"><kbd>Ctrl+Del</kbd> Ripple</span>
             <span className="kbd-sep">·</span>
-            <span className="kbd-group"><kbd>Ctrl+C/X/V</kbd></span>
-            <span className="kbd-group"><kbd>Ctrl+D</kbd> Dup</span>
+            <span className="kbd-group"><kbd>Strg+Z</kbd>/<kbd>Strg+Y</kbd></span>
+            <span className="kbd-sep">·</span>
+            <span className="kbd-group"><kbd>Strg+Del</kbd> Ripple</span>
+            <span className="kbd-sep">·</span>
+            <span className="kbd-group"><kbd>Strg+C/X/V</kbd></span>
+            <span className="kbd-group"><kbd>Strg+D</kbd> Dup</span>
             <span className="kbd-sep">·</span>
             <span className="kbd-group"><kbd>N</kbd> Snap</span>
             <span className="kbd-group"><kbd>Shift</kbd></span>
             <span className="kbd-group"><kbd>Alt+Drag</kbd> Klon</span>
-            <span className="kbd-group"><kbd>Ctrl+Shift+L</kbd> Unlink</span>
+            <span className="kbd-group"><kbd>Strg+Shift+L</kbd> Unlink</span>
           </div>
         </div>
       </div>
