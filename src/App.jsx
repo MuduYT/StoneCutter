@@ -392,7 +392,7 @@ function App() {
         clips,
         lookups: timelinePlaybackLookups,
       }),
-    [clips, timelinePlaybackLookups, timelineTime],
+    [clips, timelinePlaybackLookups, timelineTime, settings.previewQuality],
   );
   const timelineAudioLayers = useMemo(
     () =>
