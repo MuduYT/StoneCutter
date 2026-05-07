@@ -29,7 +29,7 @@ export function usePlaybackController({
   setEditorFocus,
   setSourceMonitorId,
   setActiveId,
-  setTimelineTime,
+  dispatchEngineCommand,
   setIsPlaying,
   videoRef,
   timelineVisualRefs,
@@ -62,6 +62,16 @@ export function usePlaybackController({
   timelineStateFps,
   timelineLayerBoundaryEpsilon,
 }) {
+  const dispatchPlayheadCommand = useCallback(
+    (time) => {
+      dispatchEngineCommand({
+        type: "timeline.setPlayhead",
+        payload: { time },
+      });
+    },
+    [dispatchEngineCommand],
+  );
+
   // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const pauseTimelinePreviewMedia = useCallback(() => {
     timelineVisualRefs.current.forEach((node) => {
@@ -220,7 +230,7 @@ export function usePlaybackController({
       if (target?.videoId) setActiveId(target.videoId);
       timelineTimeRef.current = timelineStart;
       updateTimelinePlayheadPosition(timelineStart);
-      setTimelineTime(timelineStart);
+      dispatchPlayheadCommand(timelineStart);
       await primeTimelinePlayback(timelineStart);
       if (timelinePlaybackStartTokenRef.current !== startToken) return;
       timelineSeekGraceUntilRef.current = Math.max(
@@ -248,11 +258,11 @@ export function usePlaybackController({
       playingClipIdRef,
       primeTimelinePlayback,
       setActiveId,
+      dispatchPlayheadCommand,
       setEditorFocus,
       setIsPlaying,
       setPlaybackMode,
       setSourceMonitorId,
-      setTimelineTime,
       timelineMediaSeekGraceMs,
       timelinePlaybackRef,
       timelinePlaybackStartTokenRef,
@@ -300,10 +310,11 @@ export function usePlaybackController({
       isPlaying: false,
       timelineTime: timelineTimeRef.current,
     };
-    setTimelineTime(timelineTimeRef.current);
+    dispatchPlayheadCommand(timelineTimeRef.current);
     setPlaybackMode(null);
     setIsPlaying(false);
   }, [
+    dispatchPlayheadCommand,
     imagePlaybackRef,
     pauseTimelinePreviewMedia,
     pendingPlayRef,
@@ -311,7 +322,6 @@ export function usePlaybackController({
     playbackRef,
     setIsPlaying,
     setPlaybackMode,
-    setTimelineTime,
     sourcePlayLockMs,
     sourcePauseLockUntilRef,
     timelinePlaybackRef,
@@ -626,14 +636,14 @@ export function usePlaybackController({
         pauseTimelinePreviewMedia();
         timelineTimeRef.current = finalTime;
         updateTimelinePlayheadPosition(finalTime);
-        setTimelineTime(finalTime);
+        dispatchPlayheadCommand(finalTime);
         setPlaybackMode(null);
         setIsPlaying(false);
         return;
       }
       timelineTimeRef.current = nextTime;
       updateTimelinePlayheadPosition(nextTime);
-      setTimelineTime(nextTime);
+      dispatchPlayheadCommand(nextTime);
       const shouldSyncState =
         nowMs - timelineLastStateUpdateRef.current >= 1000 / timelineStateFps;
       const shouldCheckLayers =
@@ -676,7 +686,7 @@ export function usePlaybackController({
           audioLayers,
           nextBoundary: getNextTimelineLayerBoundary(nextTime, state.clips),
         };
-        setTimelineTime(nextTime);
+        dispatchPlayheadCommand(nextTime);
       } else {
         activeTimelineLayersRef.current = {
           ...activeTimelineLayersRef.current,
@@ -689,6 +699,7 @@ export function usePlaybackController({
     return () => cancelAnimationFrame(raf);
   }, [
     activeTimelineLayersRef,
+    dispatchPlayheadCommand,
     getNextTimelineLayerBoundary,
     imagePlaybackRef,
     interactionRef,
@@ -701,7 +712,6 @@ export function usePlaybackController({
     playingClipIdRef,
     setIsPlaying,
     setPlaybackMode,
-    setTimelineTime,
     timelineLayerBoundaryEpsilon,
     timelineLastStateUpdateRef,
     timelinePlaybackLookups,

@@ -21,6 +21,120 @@ import { computePreviewResizeTransform } from "../lib/previewTransform.js";
 import { shiftKeyframeMap } from "../lib/keyframes.js";
 import { nextId } from "../lib/utils.js";
 
+const TIMELINE_COMMIT_EPSILON = 1e-6;
+
+const getClipMoveIds = (interactionState) =>
+  interactionState?.selectedSnaps && interactionState.selectedSnaps.length > 1
+    ? interactionState.selectedSnaps.map((clip) => clip.id)
+    : [interactionState.clipId];
+
+const hasTimelineMoveChange = (beforeClip, afterClip) =>
+  Math.abs((beforeClip?.startTime ?? 0) - (afterClip?.startTime ?? 0)) >
+    TIMELINE_COMMIT_EPSILON ||
+  beforeClip?.trackId !== afterClip?.trackId ||
+  Math.abs((beforeClip?.inPoint ?? 0) - (afterClip?.inPoint ?? 0)) >
+    TIMELINE_COMMIT_EPSILON ||
+  Math.abs((beforeClip?.outPoint ?? 0) - (afterClip?.outPoint ?? 0)) >
+    TIMELINE_COMMIT_EPSILON;
+
+const buildEngineMoveCommit = (interactionState, finalClips) => {
+  if (
+    !interactionState ||
+    interactionState.type !== "move" ||
+    !interactionState.moved ||
+    !interactionState.snapshotBefore
+  ) {
+    return null;
+  }
+
+  const moveIds = getClipMoveIds(interactionState).filter(Boolean);
+  if (moveIds.length === 0) return null;
+
+  const moveIdSet = new Set(moveIds);
+  const beforeById = new Map(
+    interactionState.snapshotBefore.map((clip) => [clip.id, clip]),
+  );
+  const finalById = new Map(finalClips.map((clip) => [clip.id, clip]));
+
+  for (const clip of interactionState.snapshotBefore) {
+    const finalClip = finalById.get(clip.id);
+    if (!finalClip) return null;
+    if (!moveIdSet.has(clip.id) && hasTimelineMoveChange(clip, finalClip)) {
+      return null;
+    }
+  }
+
+  const movedPairs = moveIds.map((id) => ({
+    before: beforeById.get(id),
+    after: finalById.get(id),
+  }));
+  if (movedPairs.some(({ before, after }) => !before || !after)) return null;
+
+  const deltaTime = movedPairs[0].after.startTime - movedPairs[0].before.startTime;
+  if (
+    movedPairs.some(
+      ({ before, after }) =>
+        Math.abs(after.startTime - before.startTime - deltaTime) >
+        TIMELINE_COMMIT_EPSILON,
+    )
+  ) {
+    return null;
+  }
+
+  const finalTrackIds = new Set(movedPairs.map(({ after }) => after.trackId));
+  const trackChanged = movedPairs.some(
+    ({ before, after }) => before.trackId !== after.trackId,
+  );
+  if (trackChanged && finalTrackIds.size !== 1) return null;
+
+  const [targetTrackId] = finalTrackIds;
+  return {
+    type: "clip.move",
+    payload: {
+      clipIds: moveIds,
+      deltaTime,
+      ...(trackChanged || moveIds.length === 1 ? { targetTrackId } : {}),
+      ripple: false,
+      resolveOverlaps: true,
+    },
+  };
+};
+
+const buildEngineTrimCommit = (interactionState, finalClips) => {
+  if (
+    !interactionState ||
+    !interactionState.moved ||
+    !interactionState.snapshotBefore ||
+    (interactionState.type !== "trim-left" &&
+      interactionState.type !== "trim-right")
+  ) {
+    return null;
+  }
+
+  const finalClip = finalClips.find(
+    (clip) => clip.id === interactionState.clipId,
+  );
+  if (!finalClip) return null;
+
+  const time =
+    interactionState.type === "trim-left"
+      ? finalClip.startTime
+      : finalClip.startTime + (finalClip.outPoint - finalClip.inPoint);
+  if (!Number.isFinite(time)) return null;
+
+  return {
+    type:
+      interactionState.type === "trim-left"
+        ? "clip.trimLeft"
+        : "clip.trimRight",
+    payload: {
+      clipId: interactionState.clipId,
+      time,
+      ripple: false,
+    },
+  };
+};
+
 export function useTimelineMouseInteraction({
   clips,
   setClips,
@@ -32,7 +146,7 @@ export function useTimelineMouseInteraction({
   setActiveClipId,
   setActiveId,
   timelineTime,
-  setTimelineTime,
+  dispatchEngineCommand,
   isPlaying,
   interaction,
   setInteraction,
@@ -82,7 +196,10 @@ export function useTimelineMouseInteraction({
       setEditorFocus(FOCUS_TIMELINE);
       timelineTimeRef.current = t;
       updateTimelinePlayheadPosition(t);
-      setTimelineTime(t);
+      dispatchEngineCommand({
+        type: "timeline.setPlayhead",
+        payload: { time: t },
+      });
       const clip = getTopVisibleTimelineClip({
         time: t,
         clips,
@@ -118,7 +235,7 @@ export function useTimelineMouseInteraction({
       setSourceMonitorId,
       setEditorFocus,
       timelineTimeRef,
-      setTimelineTime,
+      dispatchEngineCommand,
       playingClipIdRef,
       setActiveClipId,
       setActiveId,
@@ -558,11 +675,10 @@ export function useTimelineMouseInteraction({
           next = { rotation: nextRotation };
         }
         setPreviewSnapGuides(guides);
-        setClips((prev) =>
-          prev.map((clip) =>
-            clip.id === it.clipId ? { ...clip, ...next } : clip,
-          ),
-        );
+        dispatchEngineCommand({
+          type: "clip.updateProps",
+          payload: { clipId: it.clipId, patch: next },
+        });
         it.moved = true;
         return;
       }
@@ -915,6 +1031,7 @@ export function useTimelineMouseInteraction({
         );
         const pendingAutoTracks =
           it.pendingAutoTracks || it.trackMovePlan?.autoTracks || [];
+        let movedViaEngine = false;
         if (it.type === "move" && pendingAutoTracks.length > 0) {
           setTracks(
             (prev) =>
@@ -925,7 +1042,30 @@ export function useTimelineMouseInteraction({
               }).tracks,
           );
         }
-        if (!snapEnabled) {
+        if (it.type === "move" && pendingAutoTracks.length === 0) {
+          const moveCommand = buildEngineMoveCommit(it, clips);
+          if (moveCommand) {
+            dispatchEngineCommand(moveCommand, {
+              clips: it.snapshotBefore,
+              tracks: it.tracksBefore || tracks,
+              selectedClipIds: new Set(it.trackMoveClipIds || [it.clipId]),
+              activeClipId: it.clipId,
+            });
+            movedViaEngine = true;
+          }
+        }
+        if (it.type === "trim-left" || it.type === "trim-right") {
+          const trimCommand = buildEngineTrimCommit(it, clips);
+          if (trimCommand) {
+            dispatchEngineCommand(trimCommand, {
+              clips: it.snapshotBefore,
+              tracks: it.tracksBefore || tracks,
+              selectedClipIds,
+              activeClipId: it.clipId,
+            });
+          }
+        }
+        if (!movedViaEngine && !snapEnabled) {
           const isMultiMove =
             it.type === "move" &&
             it.selectedSnaps &&

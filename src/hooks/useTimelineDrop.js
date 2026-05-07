@@ -32,14 +32,15 @@ export function useTimelineDrop({
   getSourceSelection,
   getFullMediaSelection,
   handleFileChange,
-  commitClips,
+  createHistorySnapshot,
+  pushHistory,
+  dispatchEngineCommand,
   nextId,
   formatTime,
   draggedVideoIdRef,
   draggedTrackModeRef,
   draggedUseSourceRangeRef,
   setClips,
-  setTracks,
   setVideoDurations,
   setProjectStatus,
   setDragOver,
@@ -58,6 +59,26 @@ export function useTimelineDrop({
       return Math.max(0, x / pxPerSec);
     },
     [pxPerSec, totalEnd, tracksContentRef],
+  );
+
+  const addClipsWithPreparedTimeline = useCallback(
+    (nextClips, addedClipIds, nextTracks = tracks) => {
+      const addedIds = new Set((addedClipIds || []).filter(Boolean));
+      if (addedIds.size === 0) return;
+      const addedClips = nextClips.filter((clip) => addedIds.has(clip.id));
+      if (addedClips.length === 0) return;
+      const baseClips = nextClips.filter((clip) => !addedIds.has(clip.id));
+
+      pushHistory(createHistorySnapshot());
+      dispatchEngineCommand(
+        {
+          type: "clip.add",
+          payload: { clips: addedClips, ripple: false },
+        },
+        { clips: baseClips, tracks: nextTracks },
+      );
+    },
+    [createHistorySnapshot, dispatchEngineCommand, pushHistory, tracks],
   );
 
   const computeImportPreview = useCallback(
@@ -377,8 +398,6 @@ export function useTimelineDrop({
               );
             }
           }
-          if (tracksUpdateExplorer) setTracks(tracksUpdateExplorer);
-
           const targetTrackId = targetTrack.id;
           const cachedDuration = videoDurations[lastVideo.id];
           const duration =
@@ -480,8 +499,13 @@ export function useTimelineDrop({
               ]
             : [];
           const initialList = [...otherTrackClips, ...primaryList, ...audioList];
+          const nextTracksForAdd = tracksUpdateExplorer || tracks;
           if (snapEnabled) {
-            commitClips(initialList);
+            addClipsWithPreparedTimeline(
+              initialList,
+              producedClips.map((clip) => clip.id),
+              nextTracksForAdd,
+            );
           } else {
             const resolvedPrimary = resolveOverlaps(
               primaryList,
@@ -492,11 +516,11 @@ export function useTimelineDrop({
               audioTrackForExplorer && audioClipIdE
                 ? resolveOverlaps(audioList, audioClipIdE, () => nextId("clip"))
                 : audioList;
-            commitClips([
-              ...otherTrackClips,
-              ...resolvedPrimary,
-              ...resolvedAudio,
-            ]);
+            addClipsWithPreparedTimeline(
+              [...otherTrackClips, ...resolvedPrimary, ...resolvedAudio],
+              producedClips.map((clip) => clip.id),
+              nextTracksForAdd,
+            );
           }
         }
         return;
@@ -558,8 +582,6 @@ export function useTimelineDrop({
           tracksUpdate = insertTrackOrdered(candidateTracks, linkedAudioTrack);
         }
       }
-      if (tracksUpdate) setTracks(tracksUpdate);
-
       const targetTrackId = targetTrack.id;
       const dropTime = dropTimeFromEvent(e);
       const videoClipId = nextId("clip");
@@ -664,9 +686,14 @@ export function useTimelineDrop({
           ]
         : [];
       const initialList = [...otherTrackClips, ...primaryList, ...audioList];
+      const nextTracksForAdd = tracksUpdate || tracks;
 
       if (snapEnabled) {
-        commitClips(initialList);
+        addClipsWithPreparedTimeline(
+          initialList,
+          producedClips.map((clip) => clip.id),
+          nextTracksForAdd,
+        );
       } else {
         const resolvedPrimary = resolveOverlaps(primaryList, videoClipId, () =>
           nextId("clip"),
@@ -675,7 +702,11 @@ export function useTimelineDrop({
           linkedAudioTrack && audioClipId
             ? resolveOverlaps(audioList, audioClipId, () => nextId("clip"))
             : audioList;
-        commitClips([...otherTrackClips, ...resolvedPrimary, ...resolvedAudio]);
+        addClipsWithPreparedTimeline(
+          [...otherTrackClips, ...resolvedPrimary, ...resolvedAudio],
+          producedClips.map((clip) => clip.id),
+          nextTracksForAdd,
+        );
       }
 
       const cachedDuration = videoDurations[video.id];
@@ -693,6 +724,8 @@ export function useTimelineDrop({
       }
       const primaryClipId = videoClipId;
       const linkedIds = new Set([primaryClipId, audioClipId].filter(Boolean));
+      // Post-add normalization (duration probe / overlap clamp) remains legacy for now.
+      // Clip creation itself is already routed through `clip.add` above.
       setClips((prev) => {
         const placeholderClip = prev.find((c) => c.id === primaryClipId);
         if (!placeholderClip) return prev;
@@ -768,8 +801,8 @@ export function useTimelineDrop({
       });
     },
     [
+      addClipsWithPreparedTimeline,
       clips,
-      commitClips,
       draggedTrackModeRef,
       draggedUseSourceRangeRef,
       draggedVideoIdRef,
@@ -789,7 +822,6 @@ export function useTimelineDrop({
       setImportDragInfo,
       setProjectStatus,
       setTrackMovePreview,
-      setTracks,
       setVideoDurations,
       snapEnabled,
       sourceRanges,

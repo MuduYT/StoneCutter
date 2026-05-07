@@ -24,6 +24,7 @@ export function useKeyboardShortcuts({
   timelineTime,
   totalEnd,
   undo,
+  dispatchEngineCommand,
   createHistorySnapshot,
   pushHistory,
   // Coupled refs/setters/helpers used directly by keyboard actions.
@@ -205,7 +206,11 @@ export function useKeyboardShortcuts({
           if (ripple) {
             commitClips(rippleDeleteClips(clips, ids));
           } else {
-            commitClips(clips.filter((c) => !ids.has(c.id)));
+            pushHistory(createHistorySnapshot());
+            dispatchEngineCommand({
+              type: "clip.delete",
+              payload: { clipIds: [...ids] },
+            });
           }
           setSelectedClipIds(new Set());
           setActiveClipId(null);
@@ -443,6 +448,7 @@ export function useKeyboardShortcuts({
     totalEnd,
     undo,
     createHistorySnapshot,
+    dispatchEngineCommand,
     pushHistory,
     applyRippleInsert,
     closeGap,

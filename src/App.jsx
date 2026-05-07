@@ -67,11 +67,9 @@ import {
   createGroupKeyframes,
   getClipPropertyTrack,
   isAnimatableProperty,
-  moveKeyframe,
   removeKeyframe,
   setClipPropertyTrack,
   snapTimeToFrame,
-  toggleClipKeyframeAt,
 } from "./lib/keyframes.js";
 import { MediaAssetService } from "./lib/services/MediaAssetService.js";
 import {
@@ -80,6 +78,7 @@ import {
 import { Icon, NavIcon } from "./components/ui/Icons.jsx";
 import { nextId, formatTC, formatTime } from "./lib/utils.js";
 import { useExport } from "./hooks/useExport.js";
+import { useEngineBridge } from "./hooks/useEngineBridge.js";
 import { useClipActions } from "./hooks/useClipActions.js";
 import { useHistory } from "./hooks/useHistory.js";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.js";
@@ -260,6 +259,20 @@ function App() {
     }
   });
   const projectHydratingRef = useRef(false);
+
+  const { dispatchEngineCommand } = useEngineBridge({
+    clips,
+    tracks,
+    timelineTime,
+    selectedClipIds,
+    activeClipId,
+    setClips,
+    setTracks,
+    setTimelineTime,
+    setSelectedClipIds,
+    setActiveClipId,
+    timelineTimeRef,
+  });
 
   // --- UI Redesign state ---
   const [inspectorTab, setInspectorTab] = useState("inspector"); // "inspector" | "effects" | "history"
@@ -762,6 +775,16 @@ function App() {
     [createHistorySnapshot, pushHistory],
   );
 
+  const dispatchClipUpdateProps = useCallback(
+    (clipId, patch) => {
+      dispatchEngineCommand({
+        type: "clip.updateProps",
+        payload: { clipId, patch },
+      });
+    },
+    [dispatchEngineCommand],
+  );
+
   const scheduleInspectorHistoryCommit = useCallback(() => {
     if (!inspectorEditTimerRef.current) {
       pushHistory(createHistorySnapshot());
@@ -1096,7 +1119,7 @@ function App() {
     setEditorFocus,
     setSourceMonitorId,
     setActiveId,
-    setTimelineTime,
+    dispatchEngineCommand,
     setIsPlaying,
     videoRef,
     timelineVisualRefs,
@@ -1225,14 +1248,15 @@ const {
     getSourceSelection,
     getFullMediaSelection,
     handleFileChange,
-    commitClips,
+    createHistorySnapshot,
+    pushHistory,
+    dispatchEngineCommand,
     nextId,
     formatTime,
     draggedVideoIdRef,
     draggedTrackModeRef,
     draggedUseSourceRangeRef,
     setClips,
-    setTracks,
     setVideoDurations,
     setProjectStatus,
     setDragOver,
@@ -1263,7 +1287,7 @@ const {
     setActiveClipId,
     setActiveId,
     timelineTime,
-    setTimelineTime,
+    dispatchEngineCommand,
     isPlaying,
     interaction,
     setInteraction,
@@ -1321,6 +1345,9 @@ const {
     selectedClipIds,
     activeClipId,
     commitClips,
+    createHistorySnapshot,
+    pushHistory,
+    dispatchEngineCommand,
     setActiveClipId,
     setSelectedClipIds,
     setContextMenu,
@@ -1361,6 +1388,7 @@ const {
     timelineTime,
     totalEnd,
     undo,
+    dispatchEngineCommand,
     createHistorySnapshot,
     pushHistory,
     setClips,
@@ -1425,9 +1453,7 @@ const {
         setVolTooltip({ x: e.clientX, y: e.clientY, vol: previewVol });
         return;
       }
-      setClips((prev) =>
-        prev.map((c) => (c.id === d.clipId ? { ...c, volume: newVol } : c)),
-      );
+      dispatchClipUpdateProps(d.clipId, { volume: newVol });
       setVolTooltip({ x: e.clientX, y: e.clientY, vol: newVol });
     };
     const onVolLineUp = () => {
@@ -1440,7 +1466,7 @@ const {
       document.removeEventListener("mousemove", onVolLineMove);
       document.removeEventListener("mouseup", onVolLineUp);
     };
-  }, [pushHistory]);
+  }, [dispatchClipUpdateProps, pushHistory]);
 
   // Fade handle drag (DaVinci Resolve style)
   useEffect(() => {
@@ -1456,14 +1482,10 @@ const {
       }
       if (d.side === "in") {
         const newFade = Math.max(0, Math.min(maxFade, d.startFade + deltaSec));
-        setClips((prev) =>
-          prev.map((c) => (c.id === d.clipId ? { ...c, fadeIn: newFade } : c)),
-        );
+        dispatchClipUpdateProps(d.clipId, { fadeIn: newFade });
       } else {
         const newFade = Math.max(0, Math.min(maxFade, d.startFade - deltaSec));
-        setClips((prev) =>
-          prev.map((c) => (c.id === d.clipId ? { ...c, fadeOut: newFade } : c)),
-        );
+        dispatchClipUpdateProps(d.clipId, { fadeOut: newFade });
       }
     };
     const onFadeUp = () => {
@@ -1475,7 +1497,7 @@ const {
       document.removeEventListener("mousemove", onFadeMove);
       document.removeEventListener("mouseup", onFadeUp);
     };
-  }, [pushHistory]);
+  }, [dispatchClipUpdateProps, pushHistory]);
 
   // Close context menu on outside click / scroll
   useEffect(() => {
@@ -1576,7 +1598,19 @@ const {
     : activeClip?.name;
   const updateInspectorClip = useCallback(
     (clipId, patch) => {
+      const currentClip = clips.find((clip) => clip.id === clipId);
+      if (!currentClip) return;
       scheduleInspectorHistoryCommit();
+      const hasKeyframeCoupledUpdate =
+        Object.prototype.hasOwnProperty.call(patch, "keyframes") ||
+        Object.keys(patch).some((key) => {
+          if (!isAnimatableProperty(key)) return false;
+          return getClipPropertyTrack(currentClip, key).length > 0;
+        });
+      if (!hasKeyframeCoupledUpdate) {
+        dispatchClipUpdateProps(clipId, patch);
+        return;
+      }
       const kfTime = snapTimeToFrame(timelineTimeRef.current ?? 0);
       setClips((prev) =>
         prev.map((clip) => {
@@ -1597,7 +1631,7 @@ const {
         }),
       );
     },
-    [scheduleInspectorHistoryCommit],
+    [clips, dispatchClipUpdateProps, scheduleInspectorHistoryCommit],
   );
   useEffect(() => {
     return () => window.clearTimeout(inspectorEditTimerRef.current);
@@ -1628,13 +1662,13 @@ const {
     createHistorySnapshot,
     pushHistory,
     updateInspectorClip,
+    scheduleInspectorHistoryCommit,
+    dispatchEngineCommand,
     snapTimeToFrame,
-    toggleClipKeyframeAt,
     createGroupKeyframes,
     getClipPropertyTrack,
     addOrUpdateKeyframe,
     setClipPropertyTrack,
-    moveKeyframe,
     projectFps: PROJECT_FPS,
   });
 

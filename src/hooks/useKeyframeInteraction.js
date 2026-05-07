@@ -12,13 +12,13 @@ export function useKeyframeInteraction({
   createHistorySnapshot,
   pushHistory,
   updateInspectorClip,
+  scheduleInspectorHistoryCommit,
+  dispatchEngineCommand,
   snapTimeToFrame,
-  toggleClipKeyframeAt,
   createGroupKeyframes,
   getClipPropertyTrack,
   addOrUpdateKeyframe,
   setClipPropertyTrack,
-  moveKeyframe,
   projectFps,
 }) {
   const toggleKeyframeAtPlayhead = useCallback(
@@ -26,10 +26,24 @@ export function useKeyframeInteraction({
       const time = snapTimeToFrame(timelineTimeRef.current ?? 0);
       const clip = clips.find((c) => c.id === clipId);
       if (!clip) return;
-      const nextMap = toggleClipKeyframeAt({ clip, propertyKey, time });
-      updateInspectorClip(clipId, { keyframes: nextMap });
+      scheduleInspectorHistoryCommit();
+      dispatchEngineCommand({
+        type: "keyframe.toggle",
+        payload: {
+          clipId,
+          property: propertyKey,
+          time,
+          value: clip[propertyKey],
+        },
+      });
     },
-    [clips, snapTimeToFrame, timelineTimeRef, toggleClipKeyframeAt, updateInspectorClip],
+    [
+      clips,
+      dispatchEngineCommand,
+      scheduleInspectorHistoryCommit,
+      snapTimeToFrame,
+      timelineTimeRef,
+    ],
   );
 
   const toggleGroupKeyframeAtPlayhead = useCallback(
@@ -59,17 +73,33 @@ export function useKeyframeInteraction({
     ) => {
       event.preventDefault();
       event.stopPropagation();
+      const clip = clips.find((item) => item.id === clipId);
+      const keyframeValue = (entryPropertyKey, entryKeyframeId) =>
+        getClipPropertyTrack(clip, entryPropertyKey).find(
+          (keyframe) => keyframe.id === entryKeyframeId,
+        )?.value;
+      const dragEntries =
+        Array.isArray(entries) && entries.length > 0
+          ? entries.map((entry) => {
+              const entryKeyframeId = entry.id ?? entry.kfId;
+              return {
+                propertyKey: entry.propertyKey,
+                kfId: entryKeyframeId,
+                value: keyframeValue(entry.propertyKey, entryKeyframeId),
+              };
+            })
+          : [
+              {
+                propertyKey,
+                kfId,
+                value: keyframeValue(propertyKey, kfId),
+              },
+            ];
       keyframeDragRef.current = {
         clipId,
         propertyKey,
         kfId,
-        entries:
-          Array.isArray(entries) && entries.length > 0
-            ? entries.map((entry) => ({
-                propertyKey: entry.propertyKey,
-                kfId: entry.id,
-              }))
-            : [{ propertyKey, kfId }],
+        entries: dragEntries,
         startTime,
         startClientX: event.clientX,
         pxPerSec: dragPxPerSec || pxPerSec,
@@ -79,7 +109,14 @@ export function useKeyframeInteraction({
       };
       setSelectedKeyframe({ clipId, propertyKey, kfId });
     },
-    [createHistorySnapshot, keyframeDragRef, pxPerSec, setSelectedKeyframe],
+    [
+      clips,
+      createHistorySnapshot,
+      getClipPropertyTrack,
+      keyframeDragRef,
+      pxPerSec,
+      setSelectedKeyframe,
+    ],
   );
 
   const beginVolumeKeyframeDrag = useCallback(
@@ -90,11 +127,18 @@ export function useKeyframeInteraction({
         .closest(".clip")
         ?.getBoundingClientRect();
       if (!clipRect) return;
+      const clip = clips.find((item) => item.id === clipId);
+      if (!clip) return;
+      const startValue = getClipPropertyTrack(clip, "volume").find(
+        (keyframe) => keyframe.id === kfId,
+      )?.value;
       keyframeDragRef.current = {
         type: "volume",
         clipId,
         propertyKey: "volume",
         kfId,
+        clipStartTime: clip.startTime,
+        value: startValue,
         clipLeft: clipRect.left,
         clipTop: clipRect.top,
         clipHeight: Math.max(1, clipRect.height),
@@ -105,7 +149,14 @@ export function useKeyframeInteraction({
       };
       setSelectedKeyframe({ clipId, propertyKey: "volume", kfId });
     },
-    [createHistorySnapshot, keyframeDragRef, pxPerSec, setSelectedKeyframe],
+    [
+      clips,
+      createHistorySnapshot,
+      getClipPropertyTrack,
+      keyframeDragRef,
+      pxPerSec,
+      setSelectedKeyframe,
+    ],
   );
 
   const addVolumeKeyframeFromCurve = useCallback(
@@ -179,24 +230,20 @@ export function useKeyframeInteraction({
           pushHistory(drag.historyBefore);
           drag.historyPushed = true;
         }
-        setClips((prev) =>
-          prev.map((clip) => {
-            if (clip.id !== drag.clipId) return clip;
-            const nextTime = snapTimeToFrame(
-              clip.startTime + localX / Math.max(1, drag.pxPerSec),
-              projectFps,
-            );
-            const track = getClipPropertyTrack(clip, "volume");
-            const movedTrack = moveKeyframe(track, drag.kfId, nextTime);
-            const nextTrack = movedTrack.map((kf) =>
-              kf.id === drag.kfId ? { ...kf, value: nextValue } : kf,
-            );
-            return {
-              ...clip,
-              keyframes: setClipPropertyTrack(clip, "volume", nextTrack),
-            };
-          }),
+        const nextTime = snapTimeToFrame(
+          (drag.clipStartTime ?? 0) + localX / Math.max(1, drag.pxPerSec),
+          projectFps,
         );
+        dispatchEngineCommand({
+          type: "keyframe.move",
+          payload: {
+            clipId: drag.clipId,
+            property: "volume",
+            keyframeId: drag.kfId,
+            time: nextTime,
+            value: nextValue,
+          },
+        });
         return;
       }
       const dx = event.clientX - drag.startClientX;
@@ -211,26 +258,19 @@ export function useKeyframeInteraction({
         pushHistory(drag.historyBefore);
         drag.historyPushed = true;
       }
-      setClips((prev) =>
-        prev.map((clip) => {
-          if (clip.id !== drag.clipId) return clip;
-          let nextClip = clip;
-          for (const entry of drag.entries || []) {
-            if (!entry.propertyKey || !entry.kfId) continue;
-            const track = getClipPropertyTrack(nextClip, entry.propertyKey);
-            const nextTrack = moveKeyframe(track, entry.kfId, nextTime);
-            nextClip = {
-              ...nextClip,
-              keyframes: setClipPropertyTrack(
-                nextClip,
-                entry.propertyKey,
-                nextTrack,
-              ),
-            };
-          }
-          return nextClip;
-        }),
-      );
+      for (const entry of drag.entries || []) {
+        if (!entry.propertyKey || !entry.kfId) continue;
+        dispatchEngineCommand({
+          type: "keyframe.move",
+          payload: {
+            clipId: drag.clipId,
+            property: entry.propertyKey,
+            keyframeId: entry.kfId,
+            time: nextTime,
+            value: entry.value,
+          },
+        });
+      }
     };
     const onUp = () => {
       keyframeDragRef.current = null;
@@ -242,13 +282,10 @@ export function useKeyframeInteraction({
       document.removeEventListener("mouseup", onUp);
     };
   }, [
-    getClipPropertyTrack,
+    dispatchEngineCommand,
     keyframeDragRef,
-    moveKeyframe,
     projectFps,
     pushHistory,
-    setClipPropertyTrack,
-    setClips,
     snapTimeToFrame,
   ]);
 

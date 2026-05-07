@@ -3,11 +3,8 @@ import {
   MIN_CLIP_DURATION,
   constrainMoveStart,
   resolveOverlaps,
-  applyGroupSplit,
-  applySingleClipSplit,
   expandWithLinkedPartners,
   unlinkClipGroup,
-  nextLinkGroupId,
 } from "../lib/timeline.js";
 import { nextId } from "../lib/utils.js";
 
@@ -18,6 +15,9 @@ export function useClipActions({
   selectedClipIds,
   activeClipId,
   commitClips,
+  createHistorySnapshot,
+  pushHistory,
+  dispatchEngineCommand,
   setActiveClipId,
   setSelectedClipIds,
   setContextMenu,
@@ -123,6 +123,7 @@ export function useClipActions({
     let newClips = clips;
     const doneGroups = new Set();
     const allNewRightIds = [];
+    let historyPushed = false;
 
     for (const target of splitTargets) {
       const linkedGroup = target.linkGroupId
@@ -138,27 +139,29 @@ export function useClipActions({
       if (splitTogether && doneGroups.has(target.linkGroupId)) continue;
       if (splitTogether) doneGroups.add(target.linkGroupId);
       const before = newClips;
-      newClips = splitTogether
-        ? applyGroupSplit(
-            newClips,
-            target.id,
-            timelineTime,
-            () => nextId("clip"),
-            nextLinkGroupId,
-          )
-        : applySingleClipSplit(newClips, target.id, timelineTime, () =>
-            nextId("clip"),
-          );
-      if (newClips !== before) {
-        const freshIds = newClips
-          .filter((c) => !before.some((p) => p.id === c.id))
-          .map((c) => c.id);
+      const result = dispatchEngineCommand({
+        type: "clip.split",
+        payload: {
+          clipId: target.id,
+          time: timelineTime,
+          linked: Boolean(splitTogether),
+        },
+      });
+      const resultClips = result?.state?.timeline?.clips || before;
+      const freshIds = resultClips
+        .filter((c) => !before.some((p) => p.id === c.id))
+        .map((c) => c.id);
+      if (freshIds.length > 0) {
+        if (!historyPushed) {
+          pushHistory(createHistorySnapshot(clips));
+          historyPushed = true;
+        }
+        newClips = resultClips;
         allNewRightIds.push(...freshIds);
       }
     }
 
-    if (newClips === clips) return;
-    commitClips(newClips);
+    if (!historyPushed) return;
 
     if (allNewRightIds.length > 0) setActiveClipId(allNewRightIds[0]);
     const nextSel = new Set(selectedClipIds);
@@ -169,7 +172,9 @@ export function useClipActions({
   }, [
     activeClipId,
     clips,
-    commitClips,
+    createHistorySnapshot,
+    dispatchEngineCommand,
+    pushHistory,
     selectedClipIds,
     setActiveClipId,
     setSelectedClipIds,
@@ -186,12 +191,21 @@ export function useClipActions({
 
   const handleContextMenuDelete = useCallback(
     (clipId) => {
-      const toRemove = expandWithLinkedPartners(clips, [clipId]);
-      commitClips(clips.filter((c) => !toRemove.has(c.id)));
+      pushHistory(createHistorySnapshot());
+      dispatchEngineCommand({
+        type: "clip.delete",
+        payload: { clipIds: [clipId] },
+      });
       setActiveClipId(null);
       setContextMenu(null);
     },
-    [clips, commitClips, setActiveClipId, setContextMenu],
+    [
+      createHistorySnapshot,
+      dispatchEngineCommand,
+      pushHistory,
+      setActiveClipId,
+      setContextMenu,
+    ],
   );
 
   const handleContextMenuUnlink = useCallback(
