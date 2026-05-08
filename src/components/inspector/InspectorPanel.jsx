@@ -105,7 +105,8 @@ export function InspectorPanel({
   const audioDuration = audClip ? audClip.outPoint - audClip.inPoint : 0;
 
   const isMulti = selectedClipCount > 1;
-  const keyframesDisabled = false;
+  const isTextClip = activeClip?.kind === "text";
+  const keyframesDisabled = isTextClip;
 
   // Sampled values for video clip (live-update as the playhead moves).
   const vidValue = (key) =>
@@ -117,6 +118,7 @@ export function InspectorPanel({
 
   const renderStopwatch = (clip, key) => {
     if (!clip || !KEYFRAMABLE_KEYS.has(key)) return null;
+    if (clip.kind === "text") return null;
     const track = getClipPropertyTrack(clip, key);
     const active = hasKeyframeAt(track, timelineTime);
     return (
@@ -137,6 +139,7 @@ export function InspectorPanel({
 
   const renderGroupStopwatch = (clip, groupId, groupKeys) => {
     if (!clip) return null;
+    if (clip.kind === "text") return null;
     const active = groupHasAnyKeyframe(clip, groupKeys, timelineTime);
     return (
       <KeyframeStopwatch
@@ -216,13 +219,41 @@ export function InspectorPanel({
       keyframeTimes[0];
     onJumpToKeyframeTime?.(next);
   };
+  const textStyle = activeClip?.content?.style || {};
+  const updateTextContent = (text) => {
+    onUpdateClip?.(activeClip.id, {
+      name: text || "Text",
+      content: {
+        ...(activeClip.content || {}),
+        text,
+        style: textStyle,
+      },
+    });
+  };
+  const updateTextStyle = (patch) => {
+    onUpdateClip?.(activeClip.id, {
+      content: {
+        ...(activeClip.content || {}),
+        text: activeClip.content?.text ?? activeClip.name ?? "Text",
+        style: {
+          fontSize: 48,
+          color: "#ffffff",
+          fontFamily: "Inter",
+          fontWeight: "600",
+          align: "center",
+          ...textStyle,
+          ...patch,
+        },
+      },
+    });
+  };
 
   return (
     <div className="inspector-panel">
       <InspectorTabs inspectorTab={inspectorTab} onTabChange={onTabChange} />
       <div className="inspector-header">
         <div className="inspector-title">
-          {vidClip ? "Video" : "Audio"}
+          {isTextClip ? "Text" : vidClip ? "Video" : "Audio"}
           {isLinked && <span className="inspector-linked-badge">V+A</span>}
           {isMulti && (
             <span
@@ -262,6 +293,81 @@ export function InspectorPanel({
           <InspectorPlaceholder inspectorTab={inspectorTab} />
         ) : (
           <>
+            {isTextClip && (
+              <InspectorCollapsible title="Text" icon>
+                <div className="idf-row">
+                  <span className="idf-label">Inhalt</span>
+                  <input
+                    className="inspector-field"
+                    type="text"
+                    value={activeClip.content?.text ?? activeClip.name ?? "Text"}
+                    onChange={(event) => updateTextContent(event.target.value)}
+                  />
+                </div>
+                <InspectorDragger
+                  label="Font Size"
+                  value={Number(textStyle.fontSize) || 48}
+                  onChange={(value) => updateTextStyle({ fontSize: value })}
+                  min={8}
+                  max={240}
+                  step={1}
+                  unit="px"
+                />
+                <div className="idf-row">
+                  <span className="idf-label">Color</span>
+                  <input
+                    className="inspector-field"
+                    type="color"
+                    value={textStyle.color || "#ffffff"}
+                    onChange={(event) =>
+                      updateTextStyle({ color: event.target.value })
+                    }
+                  />
+                </div>
+                <div className="idf-row">
+                  <span className="idf-label">Font</span>
+                  <input
+                    className="inspector-field"
+                    type="text"
+                    value={textStyle.fontFamily || "Inter"}
+                    onChange={(event) =>
+                      updateTextStyle({ fontFamily: event.target.value })
+                    }
+                  />
+                </div>
+                <div className="idf-row">
+                  <span className="idf-label">Weight</span>
+                  <select
+                    className="inspector-field"
+                    value={textStyle.fontWeight || "600"}
+                    onChange={(event) =>
+                      updateTextStyle({ fontWeight: event.target.value })
+                    }
+                  >
+                    <option value="400">Regular</option>
+                    <option value="500">Medium</option>
+                    <option value="600">Semibold</option>
+                    <option value="700">Bold</option>
+                    <option value="800">Extra Bold</option>
+                  </select>
+                </div>
+                <div className="idf-row">
+                  <span className="idf-label">Align</span>
+                  <select
+                    className="inspector-field"
+                    value={textStyle.align || "center"}
+                    onChange={(event) =>
+                      updateTextStyle({ align: event.target.value })
+                    }
+                  >
+                    <option value="left">Left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                  </select>
+                </div>
+              </InspectorCollapsible>
+            )}
+
             {vidClip && (
               <InspectorCollapsible
                 title="Transform"
@@ -455,7 +561,7 @@ export function InspectorPanel({
               </InspectorCollapsible>
             )}
 
-            {vidClip && (
+            {vidClip && !isTextClip && (
               <InspectorCollapsible
                 title="Color"
                 icon
@@ -532,7 +638,7 @@ export function InspectorPanel({
               </InspectorCollapsible>
             )}
 
-            {vidClip && (
+            {vidClip && !isTextClip && (
               <InspectorCollapsible
                 title="Speed"
                 icon

@@ -28,6 +28,14 @@ export function Sidebar({
   Icon,
   formatTime,
 }) {
+  const handleTextDragStart = (event) => {
+    event.dataTransfer.setData("application/x-stonecutter-asset-kind", "text");
+    event.dataTransfer.setData("application/x-stonecutter-text-preset", "standard");
+    event.dataTransfer.setData("application/x-stonecutter-track-mode", "video");
+    event.dataTransfer.setData("text/plain", "stonecutter:text:standard");
+    event.dataTransfer.effectAllowed = "copy";
+  };
+
   return (
     <>
       <div className="sidebar-tabs-strip">
@@ -125,12 +133,37 @@ export function Sidebar({
               />
             </div>
           </>
+        ) : sidebarTab === "text" ? (
+          <>
+            <div className="sidebar-header">
+              <h2 className="sidebar-title">Text</h2>
+            </div>
+            <div className="media-list">
+              <div
+                className="video-item"
+                draggable
+                onDragStart={handleTextDragStart}
+                onDragEnd={handleDragEnd}
+                title="Auf die Timeline ziehen"
+              >
+                <div className="video-icon">
+                  <span aria-hidden="true">T</span>
+                </div>
+                <div className="video-info">
+                  <div className="video-name">Standard Text</div>
+                  <div className="media-meta-row">
+                    <span>Text</span>
+                    <span>5s</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
         ) : (
           <div className="sidebar-placeholder">
             <div className="sidebar-placeholder-icon">
               {sidebarTab === "effects" && "Effects"}
               {sidebarTab === "transitions" && "Trans"}
-              {sidebarTab === "text" && "Text"}
               {sidebarTab === "audio" && "Audio"}
               {sidebarTab === "elements" && "Elem"}
             </div>

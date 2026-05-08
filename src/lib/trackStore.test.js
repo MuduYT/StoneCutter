@@ -26,15 +26,15 @@ test('adds video tracks before audio tracks and audio tracks at the end', () => 
   )
 })
 
-test('maps timeline Y coordinates to tracks below the sticky ruler', () => {
+test('maps timeline Y coordinates to tracks and auto-track drop zones', () => {
   const tracks = [
     { id: 'track-v1', height: 80 },
     { id: 'track-a1', height: 80 },
   ]
   const base = { containerTop: 100, scrollTop: 0, rulerHeight: 30, tracks }
 
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 125 }), null)
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 130 }), 'track-v1')
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 125 }), '__above__')
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 130 }), '__above__')
   assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 170 }), 'track-v1')
   assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 230 }), 'track-a1')
   assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 291 }), '__below__')
@@ -48,7 +48,8 @@ test('maps timeline Y coordinates correctly while vertically scrolled', () => {
   ]
   const base = { containerTop: 100, scrollTop: 40, rulerHeight: 30, tracks }
 
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 100 }), 'track-v1')
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 100 }), '__above__')
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 110 }), 'track-v1')
   assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 170 }), 'track-a1')
   assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 250 }), 'track-a2')
   assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 335 }), '__below__')

@@ -25,6 +25,8 @@ import { shiftKeyframeMap } from "../lib/keyframes.js";
 import { nextId } from "../lib/utils.js";
 
 const TIMELINE_COMMIT_EPSILON = 1e-6;
+const isTextClip = (clip) => clip?.kind === "text";
+const getClipMediaId = (clip) => (isTextClip(clip) ? null : clip?.videoId);
 
 const unwrapSignedAngleDelta = (fromRad, toRad) => {
   let d = toRad - fromRad;
@@ -218,7 +220,7 @@ export function useTimelineMouseInteraction({
       if (clip) {
         playingClipIdRef.current = clip.id;
         setActiveClipId(clip.id);
-        setActiveId(clip.videoId);
+        setActiveId(getClipMediaId(clip));
         imagePlaybackRef.current = null;
         pendingSeekRef.current = null;
         pendingPlayRef.current = false;
@@ -368,7 +370,7 @@ export function useTimelineMouseInteraction({
       const newSelected = new Set(idMap.values());
       setSelectedClipIds(newSelected);
       setActiveClipId(newPrimaryId);
-      setActiveId(clip.videoId);
+      setActiveId(getClipMediaId(clip));
       const x = getXInTracks(e.clientX);
       const i = {
         type: "move",
@@ -401,7 +403,7 @@ export function useTimelineMouseInteraction({
       setSelectedClipIds(next);
       if (!wasSelected) {
         setActiveClipId(clip.id);
-        setActiveId(clip.videoId);
+        setActiveId(getClipMediaId(clip));
       } else if (activeClipId === clip.id) {
         setActiveClipId(next.size > 0 ? next.values().next().value : null);
       }
@@ -416,7 +418,7 @@ export function useTimelineMouseInteraction({
       setSelectedClipIds(explicitSelectedIds);
     }
     setActiveClipId(clip.id);
-    setActiveId(clip.videoId);
+    setActiveId(getClipMediaId(clip));
 
     const x = getXInTracks(e.clientX);
     const selectedSnaps = clips
@@ -445,7 +447,7 @@ export function useTimelineMouseInteraction({
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
     setActiveClipId(clip.id);
-    setActiveId(clip.videoId);
+    setActiveId(getClipMediaId(clip));
     const media = videos.find((v) => v.id === clip.videoId) || null;
     const x = getXInTracks(e.clientX);
     const i = {
@@ -473,7 +475,7 @@ export function useTimelineMouseInteraction({
       const selected = expandWithLinkedPartners(clips, [clip.id]);
       setSelectedClipIds(selected);
       setActiveClipId(clip.id);
-      setActiveId(clip.videoId);
+      setActiveId(getClipMediaId(clip));
       const previewCenterX = rect.left + rect.width / 2;
       const previewCenterY = rect.top + rect.height / 2;
       const centerX = previewCenterX + (clip.positionX ?? 0);
@@ -761,6 +763,7 @@ export function useTimelineMouseInteraction({
             });
             updateTrackMovePreviewFromClips(movedSnaps, movePlan, it);
             setSnapIndicatorTime(ins.insertPoint);
+            it.lastPreviewClips = moved;
             setClips(moved);
             it.moved = true;
             return;
@@ -808,6 +811,7 @@ export function useTimelineMouseInteraction({
         });
         updateTrackMovePreviewFromClips(movedSnaps, movePlan, it);
         setSnapIndicatorTime(null);
+        it.lastPreviewClips = moved;
         setClips(moved);
         it.moved = true;
         return;
@@ -834,17 +838,17 @@ export function useTimelineMouseInteraction({
               dur,
             );
             const rippleDelta = ins.insertPoint - orig.startTime;
-            setClips(
-              it.snapshotBefore
-                .filter(
-                  (c) => c.id !== orig.id && c.trackId !== targetTrackIdForMove,
-                )
-                .concat(rippledTrack, {
-                  ...movedOrig,
-                  startTime: ins.insertPoint,
-                  keyframes: shiftKeyframeMap(orig.keyframes, rippleDelta),
-                }),
-            );
+            const nextPreviewClips = it.snapshotBefore
+              .filter(
+                (c) => c.id !== orig.id && c.trackId !== targetTrackIdForMove,
+              )
+              .concat(rippledTrack, {
+                ...movedOrig,
+                startTime: ins.insertPoint,
+                keyframes: shiftKeyframeMap(orig.keyframes, rippleDelta),
+              });
+            it.lastPreviewClips = nextPreviewClips;
+            setClips(nextPreviewClips);
             setSnapIndicatorTime(ins.insertPoint);
             it.moved = true;
             return;
@@ -874,36 +878,78 @@ export function useTimelineMouseInteraction({
           newStart = constrained;
           const snapMoveDelta = newStart - orig.startTime;
           setSnapIndicatorTime(snappedAt);
-          setClips(
-            it.snapshotBefore.map((c) =>
-              c.id === orig.id
-                ? {
-                    ...movedOrig,
-                    startTime: newStart,
-                    keyframes: shiftKeyframeMap(orig.keyframes, snapMoveDelta),
-                  }
-                : c,
-            ),
+          const nextPreviewClips = it.snapshotBefore.map((c) =>
+            c.id === orig.id
+              ? {
+                  ...movedOrig,
+                  startTime: newStart,
+                  keyframes: shiftKeyframeMap(orig.keyframes, snapMoveDelta),
+                }
+              : c,
           );
+          it.lastPreviewClips = nextPreviewClips;
+          setClips(nextPreviewClips);
           it.moved = true;
         } else {
           if (newStart < 0) newStart = 0;
           const freeMoveDelta = newStart - orig.startTime;
           setSnapIndicatorTime(null);
-          setClips((prev) =>
-            prev.map((c) =>
-              c.id === orig.id
-                ? {
-                    ...movedOrig,
-                    startTime: newStart,
-                    keyframes: shiftKeyframeMap(orig.keyframes, freeMoveDelta),
-                  }
-                : c,
-            ),
+          const nextPreviewClips = it.snapshotBefore.map((c) =>
+            c.id === orig.id
+              ? {
+                  ...movedOrig,
+                  startTime: newStart,
+                  keyframes: shiftKeyframeMap(orig.keyframes, freeMoveDelta),
+                }
+              : c,
           );
+          it.lastPreviewClips = nextPreviewClips;
+          setClips(nextPreviewClips);
           it.moved = true;
         }
       } else if (it.type === "trim-left") {
+        if (isTextClip(orig)) {
+          const fixedRight = orig.startTime + (orig.outPoint - orig.inPoint);
+          let finalStart = Math.max(
+            0,
+            Math.min(fixedRight - MIN_CLIP_DURATION, orig.startTime + deltaSec),
+          );
+          const s = snapValue(finalStart, orig.id);
+          let snappedAt = null;
+          if (s.snapped) {
+            const snappedStart = Math.max(
+              0,
+              Math.min(fixedRight - MIN_CLIP_DURATION, s.value),
+            );
+            finalStart = snappedStart;
+            snappedAt = snappedStart;
+          }
+          if (effSnap) {
+            const others = clips.filter(
+              (c) => c.id !== orig.id && c.trackId === orig.trackId,
+            );
+            const minLeft = minStartForTrimLeft(fixedRight, others);
+            if (finalStart < minLeft - 1e-3) {
+              finalStart = Math.min(fixedRight - MIN_CLIP_DURATION, minLeft);
+              snappedAt = null;
+            }
+          }
+          setSnapIndicatorTime(snappedAt);
+          setClips((prev) =>
+            prev.map((clip) =>
+              clip.id === orig.id
+                ? {
+                    ...clip,
+                    startTime: finalStart,
+                    inPoint: 0,
+                    outPoint: Math.max(MIN_CLIP_DURATION, fixedRight - finalStart),
+                  }
+                : clip,
+            ),
+          );
+          it.moved = true;
+          return;
+        }
         const minNewIn = Math.max(0, orig.inPoint - orig.startTime);
         let newInPoint = Math.max(
           minNewIn,
@@ -953,13 +999,15 @@ export function useTimelineMouseInteraction({
         it.moved = true;
       } else if (it.type === "trim-right") {
         const maxOutPoint =
-          orig.mediaType === "image"
+          isTextClip(orig) || orig.mediaType === "image"
             ? Number.MAX_SAFE_INTEGER
             : (orig.sourceDuration || Number.MAX_SAFE_INTEGER);
-        let newOutPoint = Math.max(
-          orig.inPoint + MIN_CLIP_DURATION,
-          Math.min(maxOutPoint, orig.outPoint + deltaSec),
-        );
+        let newOutPoint = isTextClip(orig)
+          ? Math.max(MIN_CLIP_DURATION, Math.min(maxOutPoint, orig.outPoint + deltaSec))
+          : Math.max(
+              orig.inPoint + MIN_CLIP_DURATION,
+              Math.min(maxOutPoint, orig.outPoint + deltaSec),
+            );
         let rightOnTimeline = orig.startTime + (newOutPoint - orig.inPoint);
         const s = snapValue(rightOnTimeline, orig.id);
         let snappedAt = null;
@@ -983,7 +1031,7 @@ export function useTimelineMouseInteraction({
           if (rightOnTimeline > maxRight + 1e-3) {
             const delta = rightOnTimeline - maxRight;
             newOutPoint = Math.max(
-              orig.inPoint + MIN_CLIP_DURATION,
+              isTextClip(orig) ? MIN_CLIP_DURATION : orig.inPoint + MIN_CLIP_DURATION,
               newOutPoint - delta,
             );
             snappedAt = null;
@@ -991,7 +1039,13 @@ export function useTimelineMouseInteraction({
         }
         setSnapIndicatorTime(snappedAt);
         setClips((prev) =>
-          applyGroupTrimRight(prev, orig.id, { outPoint: newOutPoint }),
+          isTextClip(orig)
+            ? prev.map((clip) =>
+                clip.id === orig.id
+                  ? { ...clip, inPoint: 0, outPoint: newOutPoint }
+                  : clip,
+              )
+            : applyGroupTrimRight(prev, orig.id, { outPoint: newOutPoint }),
         );
         it.moved = true;
       }
@@ -1020,6 +1074,7 @@ export function useTimelineMouseInteraction({
       } else if (it && it.type === "move" && !it.moved) {
         setSelectedClipIds(new Set([it.clipId]));
       } else if (it && it.moved && it.snapshotBefore) {
+        const finalPreviewClips = it.lastPreviewClips || clips;
         pushHistory(
           it.historyBefore ||
             createHistorySnapshot(it.snapshotBefore, it.tracksBefore || tracks),
@@ -1036,9 +1091,12 @@ export function useTimelineMouseInteraction({
                 plan: { autoTracks: pendingAutoTracks },
               }).tracks,
           );
+          if (it.lastPreviewClips) {
+            setClips(it.lastPreviewClips);
+          }
         }
         if (it.type === "move" && pendingAutoTracks.length === 0) {
-          const moveCommand = buildEngineMoveCommit(it, clips);
+          const moveCommand = buildEngineMoveCommit(it, finalPreviewClips);
           if (moveCommand) {
             dispatchEngineCommand(moveCommand, {
               clips: it.snapshotBefore,
@@ -1067,9 +1125,9 @@ export function useTimelineMouseInteraction({
             it.selectedSnaps.length > 1;
           if (isMultiMove) {
             const ids = new Set(it.selectedSnaps.map((s) => s.id));
-            setClips((prev) => {
+            setClips(() => {
               const byTrack = new Map();
-              prev.forEach((c) => {
+              finalPreviewClips.forEach((c) => {
                 if (!byTrack.has(c.trackId)) byTrack.set(c.trackId, []);
                 byTrack.get(c.trackId).push(c);
               });
@@ -1094,12 +1152,12 @@ export function useTimelineMouseInteraction({
             it.type === "trim-left" ||
             it.type === "trim-right"
           ) {
-            setClips((prev) => {
-              const orig = prev.find((c) => c.id === it.clipId);
-              if (!orig) return prev;
+            setClips(() => {
+              const orig = finalPreviewClips.find((c) => c.id === it.clipId);
+              if (!orig) return finalPreviewClips;
               const trackId = orig.trackId;
-              const trackClips = prev.filter((c) => c.trackId === trackId);
-              const otherTracks = prev.filter((c) => c.trackId !== trackId);
+              const trackClips = finalPreviewClips.filter((c) => c.trackId === trackId);
+              const otherTracks = finalPreviewClips.filter((c) => c.trackId !== trackId);
               const resolvedTrack = resolveOverlaps(trackClips, it.clipId, () =>
                 nextId("clip"),
               );
@@ -1141,7 +1199,7 @@ export function useTimelineMouseInteraction({
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
     setActiveClipId(clip.id);
-    setActiveId(clip.videoId);
+    setActiveId(getClipMediaId(clip));
     setContextMenu({ x: e.clientX, y: e.clientY, clipId: clip.id });
   };
 

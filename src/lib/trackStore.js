@@ -28,13 +28,8 @@ export function addTrack(tracks, type) {
 }
 
 /** Insert a track at the correct position (video before audio, audio at end). */
-export function insertTrackOrdered(tracks, track) {
-  if (track.type === 'video') {
-    const lastVideoIdx = tracks.reduce((acc, t, i) => (t.type === 'video' ? i : acc), -1)
-    const insertAt = lastVideoIdx + 1
-    return [...tracks.slice(0, insertAt), track, ...tracks.slice(insertAt)]
-  }
-  return [...tracks, track]
+export function insertTrackOrdered(tracks, track, edge = 'end') {
+  return insertTrackAtTypeEdge(tracks, track, edge)
 }
 
 export function removeTrack(tracks, trackId) {
@@ -390,11 +385,14 @@ export function getTrackIdAtTimelineY({
   tracks,
 }) {
   const relativeY = clientY - containerTop + scrollTop - rulerHeight
-  if (relativeY < 0) return null
+  if (relativeY < 0) return TRACK_DROP_ABOVE
 
   let accumulated = 0
-  for (const track of tracks || []) {
+  const trackList = tracks || []
+  for (let index = 0; index < trackList.length; index += 1) {
+    const track = trackList[index]
     const height = track.height || DEFAULT_TRACK_HEIGHT
+    if (index === 0 && relativeY < Math.min(18, height / 3)) return TRACK_DROP_ABOVE
     if (relativeY < accumulated + height) return track.id
     accumulated += height
   }

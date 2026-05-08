@@ -83,13 +83,13 @@ test("clip.addText creates the default text clip at the requested timeline time"
   assert.equal(result.events[0].payload.changedClipIds[0], clip.id)
   assert.equal(clip.kind, "text")
   assert.equal(clip.name, "Text")
-  assert.equal(clip.videoId, "")
+  assert.equal(Object.prototype.hasOwnProperty.call(clip, "videoId"), false)
   assert.equal(clip.trackId, "track-v2")
   assert.equal(clip.trackMode, "video")
   assert.equal(clip.startTime, 12.25)
   assert.equal(clip.inPoint, 0)
   assert.equal(clip.outPoint, 5)
-  assert.equal(clip.sourceDuration, 5)
+  assert.equal(Object.prototype.hasOwnProperty.call(clip, "sourceDuration"), false)
   assert.deepEqual(clip.content, {
     text: "Text",
     style: {

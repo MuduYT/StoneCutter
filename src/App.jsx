@@ -1264,6 +1264,11 @@ const {
     setClips,
     setVideoDurations,
     setProjectStatus,
+    setSelectedClipIds,
+    setActiveClipId,
+    setActiveId,
+    setEditorFocus,
+    setSourceMonitorId,
     setDragOver,
     setDropIndicatorTime,
     setImportDragInfo,
@@ -1365,7 +1370,7 @@ const {
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
     setActiveClipId(clip.id);
-    setActiveId(clip.videoId);
+    setActiveId(clip.kind === "text" ? null : clip.videoId);
     setContextMenu({ x: e.clientX, y: e.clientY, clipId: clip.id });
   };
 
@@ -1600,7 +1605,9 @@ const {
   const inspectorIsLinked = inspectorLinkedGroup.length > 1;
   const inspectorDisplayName = inspectorIsLinked
     ? inspectorVideoClip?.name || inspectorAudioClip?.name
-    : activeClip?.name;
+    : activeClip?.kind === "text"
+      ? activeClip.content?.text || activeClip.name
+      : activeClip?.name;
   const updateInspectorClip = useCallback(
     (clipId, patch) => {
       const currentClip = clips.find((clip) => clip.id === clipId);

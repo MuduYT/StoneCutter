@@ -154,9 +154,28 @@ const normalizeClipKindAndContent = (clip) => {
     }
     return nextClip
   }
+  const textClip = { ...(clip || {}) }
+  delete textClip.videoId
+  delete textClip.src
+  delete textClip.sourceDuration
+  delete textClip.mediaType
+  delete textClip.waveform
+  delete textClip.thumbnail
+  delete textClip.linkGroupId
+  const outPoint = Number(textClip.outPoint)
+  const duration = Number(textClip.duration)
+  const safeOutPoint = Number.isFinite(outPoint)
+    ? Math.max(MIN_CLIP_DURATION, outPoint)
+    : Number.isFinite(duration)
+      ? Math.max(MIN_CLIP_DURATION, duration)
+      : DEFAULT_TEXT_CLIP_DURATION
   return {
-    ...clip,
+    ...textClip,
     kind,
+    trackMode: "video",
+    inPoint: 0,
+    outPoint: safeOutPoint,
+    duration: safeOutPoint,
     content: normalizeTextContent(clip?.content),
   }
 }
@@ -169,14 +188,12 @@ const createDefaultTextClip = ({ id, timelineTime, trackId }) => {
   const safeStartTime = Number.isFinite(startTime) ? Math.max(0, startTime) : 0
   return normalizeClipKindAndContent({
     id,
-    videoId: "",
     trackId,
     trackMode: "video",
     name: "Text",
     startTime: safeStartTime,
     inPoint: 0,
     outPoint: DEFAULT_TEXT_CLIP_DURATION,
-    sourceDuration: DEFAULT_TEXT_CLIP_DURATION,
     kind: "text",
     content: DEFAULT_TEXT_CLIP_CONTENT,
   })
@@ -414,7 +431,20 @@ export const applyCommand = (engineState, command) => {
         "expandLinked requested but clip has no linkGroupId"
       )
     }
-    if (clip.linkGroupId) {
+    if (clip.kind === "text") {
+      const fixedRight = clip.startTime + (clip.outPoint - clip.inPoint)
+      const clampedStart = Math.max(0, Math.min(fixedRight - MIN_CLIP_DURATION, nextStart))
+      next.timeline.clips = clips.map((item) =>
+        item.id === clipId
+          ? normalizeClipKindAndContent({
+              ...item,
+              startTime: clampedStart,
+              inPoint: 0,
+              outPoint: Math.max(MIN_CLIP_DURATION, fixedRight - clampedStart),
+            })
+          : item
+      )
+    } else if (clip.linkGroupId) {
       next.timeline.clips = applyGroupTrimLeft(clips, clipId, {
         inPoint: nextInPoint,
         startTime: nextStart,
@@ -445,7 +475,7 @@ export const applyCommand = (engineState, command) => {
     const trimTime = Number(payload.time)
     const hasTrimTime = Number.isFinite(trimTime)
     const minEnd = clip.startTime + MIN_CLIP_DURATION
-    const maxEnd = clip.sourceDuration
+    const maxEnd = clip.kind !== "text" && clip.sourceDuration
       ? clip.startTime + (clip.sourceDuration - clip.inPoint)
       : Number.MAX_SAFE_INTEGER
     const nextTime = hasTrimTime
@@ -464,7 +494,17 @@ export const applyCommand = (engineState, command) => {
         "expandLinked requested but clip has no linkGroupId"
       )
     }
-    if (clip.linkGroupId) {
+    if (clip.kind === "text") {
+      next.timeline.clips = clips.map((item) =>
+        item.id === clipId
+          ? normalizeClipKindAndContent({
+              ...item,
+              inPoint: 0,
+              outPoint: Math.max(MIN_CLIP_DURATION, nextOutPoint),
+            })
+          : item
+      )
+    } else if (clip.linkGroupId) {
       next.timeline.clips = applyGroupTrimRight(clips, clipId, { outPoint: nextOutPoint })
     } else {
       next.timeline.clips = clips.map((item) =>

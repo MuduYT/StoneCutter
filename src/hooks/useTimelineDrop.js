@@ -13,8 +13,75 @@ import {
   nextTrackId,
   insertTrackOrdered,
   DEFAULT_TRACK_HEIGHT,
+  TRACK_DROP_ABOVE,
+  TRACK_DROP_BELOW,
 } from "../lib/trackStore.js";
 import { MediaAssetService } from "../lib/services/MediaAssetService.js";
+
+const TEXT_ASSET_KIND = "text";
+const TEXT_ASSET_MIME = "application/x-stonecutter-asset-kind";
+const TEXT_PRESET_MIME = "application/x-stonecutter-text-preset";
+const TEXT_DRAG_ID = "stonecutter:text:standard";
+const TEXT_DURATION = 5;
+
+const isTextDragEvent = (dataTransfer) =>
+  dataTransfer?.types && Array.from(dataTransfer.types).includes(TEXT_ASSET_MIME);
+
+const isTextDropEvent = (dataTransfer) => {
+  if (!dataTransfer) return false;
+  const assetKind = dataTransfer.getData(TEXT_ASSET_MIME);
+  const preset = dataTransfer.getData(TEXT_PRESET_MIME);
+  const plain = dataTransfer.getData("text/plain") || dataTransfer.getData("text");
+  return (
+    assetKind === TEXT_ASSET_KIND ||
+    preset === "standard" ||
+    plain === TEXT_DRAG_ID
+  );
+};
+
+const getDropEdge = (dropTargetId) =>
+  dropTargetId === TRACK_DROP_ABOVE ? "start" : "end";
+
+const createTimelineTrack = (tracks, type, edge = "end") => {
+  const track = {
+    id: nextTrackId(),
+    type,
+    name: `${type === "audio" ? "Audio" : "Video"} ${tracks.filter((t) => t.type === type).length + 1}`,
+    locked: false,
+    height: DEFAULT_TRACK_HEIGHT,
+  };
+  if (type === "audio") {
+    track.muted = false;
+    track.solo = false;
+  }
+  return {
+    track,
+    tracks: insertTrackOrdered(tracks, track, edge),
+  };
+};
+
+const createTextClip = ({ id, trackId, startTime }) => ({
+  id,
+  kind: "text",
+  name: "Standard Text",
+  trackMode: "video",
+  trackId,
+  linkGroupId: null,
+  startTime,
+  duration: TEXT_DURATION,
+  inPoint: 0,
+  outPoint: TEXT_DURATION,
+  content: {
+    text: "Standard Text",
+    style: {
+      fontSize: 48,
+      color: "#ffffff",
+      fontFamily: "Inter",
+      fontWeight: "600",
+      align: "center",
+    },
+  },
+});
 
 export function useTimelineDrop({
   totalEnd,
@@ -43,6 +110,11 @@ export function useTimelineDrop({
   setClips,
   setVideoDurations,
   setProjectStatus,
+  setSelectedClipIds,
+  setActiveClipId,
+  setActiveId,
+  setEditorFocus,
+  setSourceMonitorId,
   setDragOver,
   setDropIndicatorTime,
   setImportDragInfo,
@@ -194,6 +266,45 @@ export function useTimelineDrop({
 
       const targetTrackId = getTrackAtClientY(e.clientY);
       setDropTargetTrackId(targetTrackId);
+      const textDrag = isTextDragEvent(e.dataTransfer);
+      if (textDrag) {
+        draggedVideoIdRef.current = null;
+        draggedTrackModeRef.current = "video";
+        draggedUseSourceRangeRef.current = false;
+        setDropZoneTrackMode("video");
+        const targetTrack =
+          targetTrackId &&
+          targetTrackId !== TRACK_DROP_ABOVE &&
+          targetTrackId !== TRACK_DROP_BELOW
+            ? tracks.find((t) => t.id === targetTrackId) || null
+            : null;
+        const start = Math.max(0, dropTime);
+        const textPreview = createTextClip({
+          id: "__text_preview__",
+          trackId: targetTrack?.type === "video" ? targetTrack.id : null,
+          startTime: start,
+        });
+        setImportDragInfo({
+          videoId: "__text__",
+          name: "Standard Text",
+          trackMode: "video",
+          mediaType: "text",
+          insertPoint: start,
+          mode: "text",
+          dur: TEXT_DURATION,
+          simulatedLayout: textPreview.trackId ? [...clips, textPreview] : clips,
+        });
+        const rect = tracksContentRef.current?.getBoundingClientRect();
+        if (rect) {
+          setDragTooltip({
+            x:
+              e.clientX - rect.left + (tracksContentRef.current?.scrollLeft || 0),
+            y: e.clientY - rect.top + (tracksContentRef.current?.scrollTop || 0),
+            label: `Standard Text · ${formatTime(TEXT_DURATION)}`,
+          });
+        }
+        return;
+      }
 
       const files = Array.from(e.dataTransfer.files).filter(
         MediaAssetService.isImportableMediaFile,
@@ -204,7 +315,9 @@ export function useTimelineDrop({
         draggedTrackModeRef.current = mediaType === "audio" ? "audio" : "av";
         setDropZoneTrackMode(mediaType === "audio" ? "audio" : "av");
         const targetTrack =
-          targetTrackId && targetTrackId !== "__below__"
+          targetTrackId &&
+          targetTrackId !== TRACK_DROP_ABOVE &&
+          targetTrackId !== TRACK_DROP_BELOW
             ? tracks.find((t) => t.id === targetTrackId) || null
             : null;
         const preview = computeImportPreview(
@@ -239,7 +352,9 @@ export function useTimelineDrop({
         const trackMode = draggedTrackModeRef.current || "av";
         const useSourceRange = draggedUseSourceRangeRef.current;
         const targetTrack =
-          targetTrackId && targetTrackId !== "__below__"
+          targetTrackId &&
+          targetTrackId !== TRACK_DROP_ABOVE &&
+          targetTrackId !== TRACK_DROP_BELOW
             ? tracks.find((t) => t.id === targetTrackId) || null
             : null;
         const preview = computeImportPreview(
@@ -270,6 +385,7 @@ export function useTimelineDrop({
     },
     [
       computeImportPreview,
+      clips,
       dragOver,
       draggedTrackModeRef,
       draggedUseSourceRangeRef,
@@ -321,14 +437,19 @@ export function useTimelineDrop({
       setDropTargetTrackId(null);
       setDropZoneTrackMode("av");
       setTrackMovePreview(null);
-      const droppedVideoId =
+      const isTextDrop = isTextDropEvent(e.dataTransfer);
+      const droppedTextValue =
         e.dataTransfer.getData("text/plain") ||
         e.dataTransfer.getData("text") ||
-        draggedVideoIdRef.current;
+        null;
+      const droppedVideoId =
+        isTextDrop ? null : droppedTextValue || draggedVideoIdRef.current;
       const droppedTrackMode =
-        e.dataTransfer.getData("application/x-stonecutter-track-mode") ||
-        draggedTrackModeRef.current ||
-        "av";
+        isTextDrop
+          ? "video"
+          : e.dataTransfer.getData("application/x-stonecutter-track-mode") ||
+            draggedTrackModeRef.current ||
+            "av";
       const droppedUsesSourceRange = draggedUseSourceRangeRef.current;
       draggedVideoIdRef.current = null;
       draggedTrackModeRef.current = "av";
@@ -336,9 +457,88 @@ export function useTimelineDrop({
 
       const dropTargetId = getTrackAtClientY(e.clientY);
       let targetTrack =
-        dropTargetId && dropTargetId !== "__below__"
+        dropTargetId &&
+        dropTargetId !== TRACK_DROP_ABOVE &&
+        dropTargetId !== TRACK_DROP_BELOW
           ? tracks.find((t) => t.id === dropTargetId) || null
           : null;
+      if (isTextDrop) {
+        const dropTime = dropTimeFromEvent(e);
+        let nextTracksForAdd = tracks;
+        if (targetTrack && targetTrack.type !== "video") {
+          setProjectStatus({
+            ok: false,
+            msg: "Text-Clips passen nur auf Video-Spuren.",
+          });
+          return;
+        }
+        if (
+          dropTargetId === TRACK_DROP_ABOVE ||
+          dropTargetId === TRACK_DROP_BELOW ||
+          !targetTrack
+        ) {
+          const created = createTimelineTrack(
+            tracks,
+            "video",
+            getDropEdge(dropTargetId),
+          );
+          targetTrack = created.track;
+          nextTracksForAdd = created.tracks;
+        }
+        const textClipId = nextId("clip");
+        const trackClips = clips.filter((clip) => clip.trackId === targetTrack.id);
+        let placeholderStart = Math.max(0, dropTime);
+        let baseTrackClips = trackClips;
+        if (snapEnabled) {
+          const ins = detectInsertPoint(
+            textClipId,
+            placeholderStart,
+            TEXT_DURATION,
+            trackClips,
+          );
+          if (ins) {
+            placeholderStart = ins.insertPoint;
+            baseTrackClips = applyRippleInsert(
+              trackClips,
+              textClipId,
+              ins.insertPoint,
+              TEXT_DURATION,
+            );
+          } else {
+            placeholderStart = constrainMoveStart(
+              placeholderStart,
+              TEXT_DURATION,
+              trackClips,
+            );
+          }
+        }
+        const textClip = createTextClip({
+          id: textClipId,
+          trackId: targetTrack.id,
+          startTime: placeholderStart,
+        });
+        const otherTrackClips = clips.filter(
+          (clip) => clip.trackId !== targetTrack.id,
+        );
+        const primaryList = [...baseTrackClips, textClip];
+        const nextClips = snapEnabled
+          ? [...otherTrackClips, ...primaryList]
+          : [
+              ...otherTrackClips,
+              ...resolveOverlaps(primaryList, textClipId, () => nextId("clip")),
+            ];
+        addClipsWithPreparedTimeline(
+          nextClips,
+          [textClipId],
+          nextTracksForAdd,
+        );
+        setSelectedClipIds(new Set([textClipId]));
+        setActiveClipId(textClipId);
+        setActiveId(null);
+        setEditorFocus?.("timeline");
+        setSourceMonitorId(null);
+        return;
+      }
 
       const files = Array.from(e.dataTransfer.files).filter(
         MediaAssetService.isImportableMediaFile,
@@ -361,20 +561,18 @@ export function useTimelineDrop({
           }
 
           let tracksUpdateExplorer = null;
-          if (dropTargetId === "__below__" || !targetTrack) {
-            const newTrack = {
-              id: nextTrackId(),
-              type: requiredTrackType,
-              name: `${requiredTrackType === "audio" ? "Audio" : "Video"} ${tracks.filter((t) => t.type === requiredTrackType).length + 1}`,
-              locked: false,
-              height: DEFAULT_TRACK_HEIGHT,
-            };
-            if (requiredTrackType === "audio") {
-              newTrack.muted = false;
-              newTrack.solo = false;
-            }
-            targetTrack = newTrack;
-            tracksUpdateExplorer = insertTrackOrdered(tracks, newTrack);
+          if (
+            dropTargetId === TRACK_DROP_ABOVE ||
+            dropTargetId === TRACK_DROP_BELOW ||
+            !targetTrack
+          ) {
+            const created = createTimelineTrack(
+              tracks,
+              requiredTrackType,
+              getDropEdge(dropTargetId),
+            );
+            targetTrack = created.track;
+            tracksUpdateExplorer = created.tracks;
           }
           let audioTrackForExplorer = null;
           if (isVideoFile) {
@@ -395,6 +593,7 @@ export function useTimelineDrop({
               tracksUpdateExplorer = insertTrackOrdered(
                 candidateTracks,
                 audioTrackForExplorer,
+                "end",
               );
             }
           }
@@ -546,20 +745,18 @@ export function useTimelineDrop({
       }
 
       let tracksUpdate = null;
-      if (dropTargetId === "__below__" || !targetTrack) {
-        const newTrack = {
-          id: nextTrackId(),
-          type: requiredTrackType,
-          name: `${requiredTrackType === "audio" ? "Audio" : "Video"} ${tracks.filter((t) => t.type === requiredTrackType).length + 1}`,
-          locked: false,
-          height: DEFAULT_TRACK_HEIGHT,
-        };
-        if (requiredTrackType === "audio") {
-          newTrack.muted = false;
-          newTrack.solo = false;
-        }
-        targetTrack = newTrack;
-        tracksUpdate = insertTrackOrdered(tracks, newTrack);
+      if (
+        dropTargetId === TRACK_DROP_ABOVE ||
+        dropTargetId === TRACK_DROP_BELOW ||
+        !targetTrack
+      ) {
+        const created = createTimelineTrack(
+          tracks,
+          requiredTrackType,
+          getDropEdge(dropTargetId),
+        );
+        targetTrack = created.track;
+        tracksUpdate = created.tracks;
       }
 
       const isAvLinkedDrop = trackMode === "av" && video.mediaType === "video";
@@ -579,7 +776,7 @@ export function useTimelineDrop({
             muted: false,
             solo: false,
           };
-          tracksUpdate = insertTrackOrdered(candidateTracks, linkedAudioTrack);
+          tracksUpdate = insertTrackOrdered(candidateTracks, linkedAudioTrack, "end");
         }
       }
       const targetTrackId = targetTrack.id;
@@ -814,6 +1011,11 @@ export function useTimelineDrop({
       nextId,
       settings.imageDuration,
       setClips,
+      setSelectedClipIds,
+      setActiveClipId,
+      setActiveId,
+      setEditorFocus,
+      setSourceMonitorId,
       setDragOver,
       setDragTooltip,
       setDropIndicatorTime,

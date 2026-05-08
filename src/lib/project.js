@@ -4,7 +4,7 @@ import {
   MIN_TRACK_HEIGHT,
   createDefaultTracks,
 } from "./trackStore.js";
-import { nextLinkGroupId } from "./timeline.js";
+import { MIN_CLIP_DURATION, nextLinkGroupId } from "./timeline.js";
 import { sanitizeKeyframeMap } from "./keyframes.js";
 
 export const PROJECT_FILE_EXTENSION = "stonecutter";
@@ -111,7 +111,16 @@ const attachClipKindContent = (clip) => {
   const kind = normalizeClipKind(clip);
   const out = { ...clip, kind };
   if (kind === "text") {
+    delete out.videoId;
+    delete out.src;
+    delete out.sourceDuration;
+    delete out.mediaType;
+    delete out.linkGroupId;
     out.content = normalizeTextClipContent(clip.content);
+    out.trackMode = "video";
+    out.inPoint = 0;
+    out.outPoint = Math.max(MIN_CLIP_DURATION, finiteNumber(out.outPoint, out.duration || 5));
+    out.duration = out.outPoint;
   } else {
     delete out.content;
   }

@@ -80,6 +80,15 @@ export const Timeline = ({
       <div className="track-headers">
         <div className="track-header time-header" />
         <div className="track-headers-list" ref={setTrackHeadersListRef}>
+          {dragOver && (
+            <div
+              className={`track-header-row drop-target-below ${dropTargetTrackId === "__above__" ? "active" : ""}`}
+            >
+              <span>
+                {dropZoneTrackMode === "audio" ? "+ Audio-Spur" : "+ Video-Spur"}
+              </span>
+            </div>
+          )}
           {tracks.map((track) => {
             const sameTypeTracks = tracks.filter(t => t.type === track.type);
             const typeIndex = sameTypeTracks.indexOf(track) + 1;
@@ -281,7 +290,7 @@ export const Timeline = ({
                 const isText = clip.kind === "text";
                 const trimmedLeft = clip.inPoint > 0.01;
                 const trimmedRight =
-                  clip.outPoint < clip.sourceDuration - 0.01;
+                  !isText && clip.outPoint < clip.sourceDuration - 0.01;
                 return (
                   <div
                     key={clip.id}
