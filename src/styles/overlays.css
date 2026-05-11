@@ -175,10 +175,73 @@
     color: var(--text-muted);
 }
 
+.settings-color {
+    width: 36px;
+    height: 28px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.settings-color::-webkit-color-swatch-wrapper {
+    padding: 2px;
+}
+.settings-color::-webkit-color-swatch {
+    border: none;
+    border-radius: 4px;
+}
+.settings-color-value {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: ui-monospace, monospace;
+    min-width: 60px;
+    text-align: right;
+}
+
 .settings-hint {
     font-size: 11px;
     color: var(--text-faint);
     margin-top: 8px;
+}
+
+.settings-reset-btn {
+    width: 100%;
+    padding: 10px 0;
+    margin-top: 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.settings-reset-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+    color: var(--accent-hover);
+}
+.settings-reset-btn:active {
+    transform: scale(0.98);
+}
+
+.settings-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+}
+
+.settings-section-arrow {
+    font-size: 10px;
+    transition: transform 0.2s ease;
+    display: inline-block;
+}
+
+.settings-section-arrow.expanded {
+    transform: rotate(90deg);
 }
 /* ===== Export modal ===== */
 .export-panel {
@@ -229,7 +292,7 @@
     background: var(--bg-hover);
 }
 .export-quality-btn.active {
-    background: rgba(139, 92, 246, 0.18);
+    background: var(--primary-18);
     border-color: var(--accent);
 }
 .eq-label {
@@ -262,10 +325,10 @@
     gap: 7px;
     width: 100%;
     padding: 10px 0;
-    background: linear-gradient(135deg, #7c3aed, #5b21b6);
+    background: linear-gradient(135deg, var(--video-color), var(--video-color));
     border: none;
     border-radius: 8px;
-    color: #fff;
+    color: var(--text);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
@@ -273,11 +336,11 @@
     transition:
         opacity 0.15s,
         box-shadow 0.15s;
-    box-shadow: 0 3px 12px rgba(124, 58, 237, 0.4);
+    box-shadow: 0 3px 12px var(--primary-40);
 }
 .export-start-btn:hover {
     opacity: 0.9;
-    box-shadow: 0 4px 18px rgba(139, 92, 246, 0.55);
+    box-shadow: 0 4px 18px var(--primary-55);
 }
 
 .export-running {
@@ -336,10 +399,10 @@
     line-height: 1.5;
 }
 .export-result.ok p {
-    color: #4ade80;
+    color: var(--success);
 }
 .export-result.err p {
-    color: #f87171;
+    color: var(--danger-hover);
     white-space: pre-wrap;
     word-break: break-word;
 }
@@ -359,12 +422,12 @@
     background: var(--bg-hover);
 }
 .export-action-btn.danger {
-    background: linear-gradient(135deg, #b91c1c, #ef4444);
+    background: linear-gradient(135deg, var(--danger-hover), var(--danger));
     border-color: rgba(248, 113, 113, 0.7);
-    box-shadow: 0 3px 12px rgba(239, 68, 68, 0.25);
+    box-shadow: 0 3px 12px var(--danger-25);
 }
 .export-action-btn.danger:hover {
-    background: linear-gradient(135deg, #991b1b, #dc2626);
+    background: linear-gradient(135deg, var(--danger-hover), var(--danger));
 }
 
 .perf-overlay {
@@ -409,13 +472,13 @@
         toastAutoDismiss 1.5s ease forwards;
 }
 .project-toast.ok {
-    border-left-color: rgba(34, 197, 94, 0.9);
+    border-left-color: var(--success-90);
 }
 .project-toast.err {
-    border-left-color: rgba(239, 68, 68, 0.95);
+    border-left-color: var(--danger-95);
 /* Export button: shimmer animation while running */
 .logo-export-btn.exporting {
-    background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 50%, #5b21b6 100%);
+    background: linear-gradient(135deg, var(--video-color) 0%, var(--accent-hover) 50%, var(--video-color) 100%);
     background-size: 220% 220%;
     animation: exportShimmer 1.6s linear infinite;
 }
@@ -423,8 +486,8 @@
 .vol-drag-tooltip {
     position: fixed;
     background: rgba(15, 10, 30, 0.92);
-    border: 1px solid rgba(249, 115, 22, 0.6);
-    color: #fdba74;
+    border: 1px solid var(--orange-border);
+    color: var(--orange-accent-hover);
     font-size: 11px;
     font-weight: 700;
     font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;

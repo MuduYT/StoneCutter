@@ -95,10 +95,49 @@ import { useProjectLifecycle } from "./hooks/useProjectLifecycle.js";
 import { useTimelineDrop } from "./hooks/useTimelineDrop.js";
 import { useTimelineMouseInteraction } from "./hooks/useTimelineMouseInteraction.js";
 import { buildProjectSnapshot } from "./lib/projectHelpers.js";
+import { useAudioLibrary } from "./hooks/useAudioLibrary.js";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const isDevMode = import.meta.env.DEV;
 const RECENT_PROJECTS_KEY = "stonecutter.recentProjects";
+
+function hexToRgb(hex) {
+  const clean = hex.replace("#", "");
+  const bigint = parseInt(clean, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  return { r, g, b };
+}
+function rgbToHex(r, g, b) {
+  return (
+    "#" +
+    [r, g, b]
+      .map((v) => {
+        const hex = Math.max(0, Math.min(255, Math.round(v))).toString(16);
+        return hex.length === 1 ? "0" + hex : hex;
+      })
+      .join("")
+  );
+}
+function lighten(hex, amount) {
+  const { r, g, b } = hexToRgb(hex);
+  return rgbToHex(r + (255 - r) * amount, g + (255 - g) * amount, b + (255 - b) * amount);
+}
+function darken(hex, amount) {
+  const { r, g, b } = hexToRgb(hex);
+  return rgbToHex(r * (1 - amount), g * (1 - amount), b * (1 - amount));
+}
+function toRgba(hex, alpha) {
+  const { r, g, b } = hexToRgb(hex);
+  return "rgba(" + r + ", " + g + ", " + b + ", " + alpha + ")";
+}
+function getContrastColor(bgColor) {
+  const { r, g, b } = hexToRgb(bgColor);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.5 ? "#000000" : "#ffffff";
+}
+
 const PROJECT_FILTER = [
   { name: "StoneCutter Project", extensions: ["stonecutter"] },
 ];
@@ -168,6 +207,8 @@ function App() {
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [videos, setVideos] = useState([]);
+  const [folders, setFolders] = useState([]);
+  const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [mediaSearch, setMediaSearch] = useState("");
   const [mediaTypeFilter, setMediaTypeFilter] = useState("all");
   const [mediaSort, setMediaSort] = useState("importedAt");
@@ -230,21 +271,137 @@ function App() {
           const parsed = JSON.parse(raw);
           return {
             imageDuration: 3,
+            primaryColor: "#8b5cf6",
+            secondaryColor: "#06b6d4",
+            tertiaryColor: "#f97316",
+            bgBase: "#0d0a1a",
+            bgPanel: "#15102a",
+            bgElevated: "#1c1638",
+            textColor: null, // Auto-adjusted for contrast
+            textMuted: null, // Auto-adjusted for contrast
+            dangerColor: "#ef4444",
+            successColor: "#10b981",
+            warnColor: "#f59e0b",
             ...parsed,
             previewQuality: normalizePreviewQuality(parsed?.previewQuality),
           };
         } catch (e) {
           console.error("Error parsing settings:", e);
-          return { imageDuration: 3, previewQuality: "half" };
+          return { imageDuration: 3, previewQuality: "half", primaryColor: "#8b5cf6", secondaryColor: "#06b6d4" };
         }
       }
     } catch (e) {
       console.error("Error loading settings:", e);
     }
-      return { imageDuration: 3, previewQuality: "half" };
+      return { imageDuration: 3, previewQuality: "half", primaryColor: "#8b5cf6", secondaryColor: "#06b6d4", tertiaryColor: "#f97316", bgBase: "#0d0a1a", bgPanel: "#15102a", bgElevated: "#1c1638", textColor: null, textMuted: null, dangerColor: "#ef4444", successColor: "#10b981", warnColor: "#f59e0b" };
   }, []);
 
   const [settings, setSettings] = useState(loadSettings());
+
+  useEffect(() => {
+    const root = document.documentElement.style;
+    const primary = settings.primaryColor || "#8b5cf6";
+    const secondary = settings.secondaryColor || "#06b6d4";
+    root.setProperty("--accent", primary);
+    root.setProperty("--accent-hover", lighten(primary, 0.22));
+    root.setProperty("--accent-glow", toRgba(primary, 0.45));
+    root.setProperty("--video-color", darken(primary, 0.12));
+    root.setProperty("--audio-color", secondary);
+    root.setProperty("--border", toRgba(primary, 0.18));
+    root.setProperty("--border-strong", toRgba(primary, 0.4));
+    const tertiary = settings.tertiaryColor || "#f97316";
+    root.setProperty("--orange-accent", tertiary);
+    root.setProperty("--orange-accent-hover", lighten(tertiary, 0.15));
+    root.setProperty("--orange-glow", toRgba(tertiary, 0.45));
+    root.setProperty("--orange-glow-strong", toRgba(tertiary, 0.7));
+    root.setProperty("--orange-glow-max", toRgba(tertiary, 0.9));
+    root.setProperty("--orange-bg", toRgba(tertiary, 0.15));
+    root.setProperty("--orange-border", toRgba(tertiary, 0.6));
+    root.setProperty("--playhead", tertiary);
+    root.setProperty("--playhead-dark", darken(tertiary, 0.15));
+    root.setProperty("--playhead-light", lighten(tertiary, 0.22));
+    root.setProperty("--bg-base", settings.bgBase || "#0d0a1a");
+    root.setProperty("--bg-panel", settings.bgPanel || "#15102a");
+    root.setProperty("--bg-elevated", settings.bgElevated || "#1c1638");
+    root.setProperty("--bg-hover", lighten(settings.bgPanel || "#15102a", 0.12));
+    root.setProperty("--text", settings.textColor || "#e9e3f5");
+    root.setProperty("--text-muted", settings.textMuted || "rgba(233,227,245,0.6)");
+    root.setProperty("--text-faint", toRgba(settings.textColor || "#e9e3f5", 0.4));
+    root.setProperty("--danger", settings.dangerColor || "#ef4444");
+    root.setProperty("--danger-hover", lighten(settings.dangerColor || "#ef4444", 0.15));
+    root.setProperty("--danger-glow", toRgba(settings.dangerColor || "#ef4444", 0.45));
+    root.setProperty("--success", settings.successColor || "#10b981");
+    root.setProperty("--success-glow", toRgba(settings.successColor || "#10b981", 0.85));
+    root.setProperty("--warn", settings.warnColor || "#f59e0b");
+    root.setProperty("--warn-glow", toRgba(settings.warnColor || "#f59e0b", 0.7));
+    const danger = settings.dangerColor || "#ef4444";
+    root.setProperty("--danger-18", toRgba(danger, 0.18));
+    root.setProperty("--danger-25", toRgba(danger, 0.25));
+    root.setProperty("--danger-30", toRgba(danger, 0.3));
+    root.setProperty("--danger-32", toRgba(danger, 0.32));
+    root.setProperty("--danger-45", toRgba(danger, 0.45));
+    root.setProperty("--danger-55", toRgba(danger, 0.55));
+    root.setProperty("--danger-85", toRgba(danger, 0.85));
+    root.setProperty("--danger-90", toRgba(danger, 0.9));
+    root.setProperty("--danger-95", toRgba(danger, 0.95));
+    const success = settings.successColor || "#10b981";
+    root.setProperty("--success-15", toRgba(success, 0.15));
+    root.setProperty("--success-22", toRgba(success, 0.22));
+    root.setProperty("--success-45", toRgba(success, 0.45));
+    root.setProperty("--success-55", toRgba(success, 0.55));
+    root.setProperty("--success-90", toRgba(success, 0.9));
+    const warn = settings.warnColor || "#f59e0b";
+    root.setProperty("--warn-15", toRgba(warn, 0.15));
+    root.setProperty("--warn-18", toRgba(warn, 0.18));
+    root.setProperty("--warn-45", toRgba(warn, 0.45));
+    root.setProperty("--warn-60", toRgba(warn, 0.6));
+    root.setProperty("--warn-70", toRgba(warn, 0.7));
+    root.setProperty("--warn-95", toRgba(warn, 0.95));
+    root.setProperty("--primary-05", toRgba(primary, 0.05));
+    root.setProperty("--primary-06", toRgba(primary, 0.06));
+    root.setProperty("--primary-08", toRgba(primary, 0.08));
+    root.setProperty("--primary-12", toRgba(primary, 0.12));
+    root.setProperty("--primary-14", toRgba(primary, 0.14));
+    root.setProperty("--primary-15", toRgba(primary, 0.15));
+    root.setProperty("--primary-18", toRgba(primary, 0.18));
+    root.setProperty("--primary-20", toRgba(primary, 0.2));
+    root.setProperty("--primary-25", toRgba(primary, 0.25));
+    root.setProperty("--primary-28", toRgba(primary, 0.28));
+    root.setProperty("--primary-30", toRgba(primary, 0.3));
+    root.setProperty("--primary-35", toRgba(primary, 0.35));
+    root.setProperty("--primary-40", toRgba(primary, 0.4));
+    root.setProperty("--primary-45", toRgba(primary, 0.45));
+    root.setProperty("--primary-50", toRgba(primary, 0.5));
+    root.setProperty("--primary-55", toRgba(primary, 0.55));
+    root.setProperty("--primary-60", toRgba(primary, 0.6));
+    root.setProperty("--primary-65", toRgba(primary, 0.65));
+    root.setProperty("--primary-70", toRgba(primary, 0.7));
+    root.setProperty("--primary-75", toRgba(primary, 0.75));
+    root.setProperty("--primary-85", toRgba(primary, 0.85));
+    root.setProperty("--primary-95", toRgba(primary, 0.95));
+    root.setProperty("--secondary-04", toRgba(secondary, 0.04));
+    root.setProperty("--secondary-06", toRgba(secondary, 0.06));
+    root.setProperty("--secondary-12", toRgba(secondary, 0.12));
+    root.setProperty("--secondary-14", toRgba(secondary, 0.14));
+    root.setProperty("--secondary-18", toRgba(secondary, 0.18));
+    root.setProperty("--secondary-22", toRgba(secondary, 0.22));
+    root.setProperty("--secondary-25", toRgba(secondary, 0.25));
+    root.setProperty("--secondary-28", toRgba(secondary, 0.28));
+    root.setProperty("--secondary-30", toRgba(secondary, 0.3));
+    root.setProperty("--secondary-34", toRgba(secondary, 0.34));
+    root.setProperty("--secondary-38", toRgba(secondary, 0.38));
+    root.setProperty("--secondary-40", toRgba(secondary, 0.4));
+    root.setProperty("--secondary-78", toRgba(secondary, 0.78));
+    const bgBase = settings.bgBase || "#0d0a1a";
+    // Auto-adjust text color for contrast if user hasn't explicitly set it
+    if (!settings.textColor) {
+      const autoText = getContrastColor(bgBase);
+      root.setProperty("--text", autoText);
+      root.setProperty("--text-muted", toRgba(autoText, 0.6));
+      root.setProperty("--text-faint", toRgba(autoText, 0.4));
+    }
+  }, [settings.primaryColor, settings.secondaryColor, settings.tertiaryColor, settings.bgBase, settings.bgPanel, settings.bgElevated, settings.textColor, settings.textMuted, settings.dangerColor, settings.successColor, settings.warnColor]);
+
   const [showSettings, setShowSettings] = useState(false);
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [previewTime, setPreviewTime] = useState(0);
@@ -343,14 +500,18 @@ function App() {
 
   const activeVideo = videos.find((v) => v.id === activeId);
   const visibleVideos = useMemo(
-    () =>
-      filterAndSortMedia(videos, {
+    () => {
+      const filteredByFolder = selectedFolderId
+        ? videos.filter((v) => v.folderId === selectedFolderId)
+        : videos;
+      return filterAndSortMedia(filteredByFolder, {
         query: mediaSearch,
         typeFilter: mediaTypeFilter,
         sortBy: mediaSort,
         durations: videoDurations,
-      }),
-    [videos, mediaSearch, mediaTypeFilter, mediaSort, videoDurations],
+      });
+    },
+    [videos, mediaSearch, mediaTypeFilter, mediaSort, videoDurations, selectedFolderId],
   );
   const videoSrc = activeVideo?.src || "";
   const activeClip = clips.find((c) => c.id === activeClipId);
@@ -1244,7 +1405,72 @@ const {
   isTauri,
 });
 
+  // --- Audio library (global, project-independent) ---
   const {
+    audioItems,
+    audioFolders,
+    importAudioDialog,
+    importAudioFromFiles,
+    removeAudioItem,
+    createAudioFolder,
+    deleteAudioFolder,
+    moveAudioToFolder,
+  } = useAudioLibrary({ isTauri });
+
+  const handleAudioLibraryDragStart = useCallback(
+    (item, e) => {
+      let mediaEntry = videos.find(
+        (v) => v.path && v.path === item.path && v.path !== item.name,
+      );
+      if (!mediaEntry) {
+        const id = nextId("vid");
+        mediaEntry = {
+          id,
+          name: item.name,
+          path: item.path,
+          src: item.src,
+          mediaType: "audio",
+          importedAt: item.importedAt || new Date().toISOString(),
+        };
+        setVideos((prev) => [...prev, mediaEntry]);
+      }
+      handleDragStart(e, mediaEntry);
+    },
+    [videos, setVideos, handleDragStart],
+  );
+
+  // --- Folder management ---
+  const handleCreateFolder = useCallback(() => {
+    const name = prompt("Ordnername:");
+    if (!name || !name.trim()) return;
+    const newFolder = {
+      id: nextId(),
+      name: name.trim(),
+      createdAt: Date.now(),
+    };
+    setFolders((prev) => [...prev, newFolder]);
+  }, []);
+
+  const handleDeleteFolder = useCallback((folderId) => {
+    if (!confirm("Ordner wirklich löschen? Die Medien werden nicht gelöscht.")) return;
+    setFolders((prev) => prev.filter((f) => f.id !== folderId));
+    setVideos((prev) =>
+      prev.map((v) => (v.folderId === folderId ? { ...v, folderId: undefined } : v)),
+    );
+    if (selectedFolderId === folderId) {
+      setSelectedFolderId(null);
+    }
+  }, [selectedFolderId]);
+
+  const handleMoveMediaToFolder = useCallback((mediaId, folderId) => {
+    setVideos((prev) =>
+      prev.map((v) =>
+        v.id === mediaId ? { ...v, folderId: folderId ?? undefined } : v,
+      ),
+    );
+  }, []);
+
+    const {
     handleTimelineDragEnter,
     handleTimelineDragOver,
     handleTimelineDragLeave,
@@ -1878,6 +2104,22 @@ const {
         onMediaSortChange={setMediaSort}
         Icon={Icon}
         formatTime={formatTime}
+        folders={folders}
+        selectedFolderId={selectedFolderId}
+        setSelectedFolderId={setSelectedFolderId}
+        handleCreateFolder={handleCreateFolder}
+        handleDeleteFolder={handleDeleteFolder}
+        handleMoveMediaToFolder={handleMoveMediaToFolder}
+        audioItems={audioItems}
+        audioFolders={audioFolders}
+        isTauri={isTauri}
+        importAudioDialog={importAudioDialog}
+        importAudioFromFiles={importAudioFromFiles}
+        removeAudioItem={removeAudioItem}
+        createAudioFolder={createAudioFolder}
+        deleteAudioFolder={deleteAudioFolder}
+        moveAudioToFolder={moveAudioToFolder}
+        onAudioDragStart={handleAudioLibraryDragStart}
       />
       <PlayerStage
         mainContentClassName={mainContentClassName}

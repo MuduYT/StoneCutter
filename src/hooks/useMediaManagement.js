@@ -294,7 +294,7 @@ export function useMediaManagement({
   // --- remove media ---
   const handleRemoveMedia = useCallback(
     (id, e) => {
-      e.stopPropagation();
+      e?.stopPropagation?.();
       const removedMedia = videos.find((v) => v.id === id);
       if (removedMedia) revokeBrowserObjectUrls([removedMedia]);
       const removedClipIds = new Set(

@@ -28,7 +28,7 @@ body,
     --accent-glow: rgba(139, 92, 246, 0.45);
     --video-color: #7c3aed;
     --audio-color: #06b6d4;
-    --warn: #f59e0b;
+    --warn: var(--warn);
     --danger: #ef4444;
     --playhead: #f97316;
     --gap: 12px;

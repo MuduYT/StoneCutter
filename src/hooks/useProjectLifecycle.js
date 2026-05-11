@@ -289,7 +289,7 @@ export function useProjectLifecycle({
   const saveCurrentProject = useCallback(async () => {
     if (!currentProject?.path || !isTauri) {
       setProjectStatus({ ok: false, msg: "Kein gespeichertes Projekt aktiv." });
-      return;
+      return false;
     }
     try {
       const document = JSON.stringify(getProjectSnapshot(currentProject.name), null, 2);
@@ -297,8 +297,10 @@ export function useProjectLifecycle({
       setIsProjectDirty(false);
       rememberProject(currentProject);
       setProjectStatus({ ok: true, msg: "Projekt gespeichert." });
+      return true;
     } catch (err) {
       setProjectStatus({ ok: false, msg: String(err) });
+      return false;
     }
   }, [
     currentProject,
@@ -348,8 +350,14 @@ export function useProjectLifecycle({
   }, [isProjectDirty, resetToProjectOverview, setShowSaveConfirmDialog]);
 
   const handleConfirmBack = useCallback(async () => {
+    let saved = false;
     if (isTauri && currentProject?.path) {
-      await saveCurrentProject();
+      saved = await saveCurrentProject();
+    } else {
+      setProjectStatus({ ok: false, msg: "Kein gespeichertes Projekt aktiv." });
+    }
+    if (!saved) {
+      return;
     }
     setShowSaveConfirmDialog(false);
     resetToProjectOverview();
@@ -358,6 +366,7 @@ export function useProjectLifecycle({
     isTauri,
     resetToProjectOverview,
     saveCurrentProject,
+    setProjectStatus,
     setShowSaveConfirmDialog,
   ]);
 

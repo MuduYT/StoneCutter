@@ -11,7 +11,7 @@
     border-radius: 12px;
     box-shadow:
         0 12px 40px rgba(0, 0, 0, 0.6),
-        0 0 0 1px rgba(139, 92, 246, 0.2);
+        0 0 0 1px var(--primary-20);
     z-index: 50;
     display: flex;
     flex-direction: column;
@@ -44,8 +44,8 @@
     font-weight: 800;
     padding: 1px 6px;
     border-radius: 10px;
-    background: rgba(139, 92, 246, 0.25);
-    border: 1px solid rgba(139, 92, 246, 0.5);
+    background: var(--primary-25);
+    border: 1px solid var(--primary-50);
     color: #c4b5fd;
     letter-spacing: 0.04em;
 }
@@ -74,11 +74,11 @@
     background: transparent;
 }
 .inspector-body::-webkit-scrollbar-thumb {
-    background: rgba(124, 58, 237, 0.3);
+    background: var(--primary-30);
     border-radius: 3px;
 }
 .inspector-body::-webkit-scrollbar-thumb:hover {
-    background: rgba(124, 58, 237, 0.55);
+    background: var(--primary-55);
 }
 
 .inspector-section {
@@ -171,7 +171,7 @@
     inset: 0;
     background: linear-gradient(
         90deg,
-        rgba(139, 92, 246, 0.06),
+        var(--primary-6),
         transparent 40%
     );
     pointer-events: none;
@@ -194,7 +194,7 @@
     text-align: right;
     outline: none;
     cursor: text;
-    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.18);
+    box-shadow: 0 0 0 2px var(--primary-18);
     appearance: textfield;
     -moz-appearance: textfield;
 }
@@ -330,7 +330,7 @@
 .fade-handle-out:hover {
     opacity: 1 !important;
     background: #e9d5ff;
-    box-shadow: 0 0 8px rgba(139, 92, 246, 0.7);
+    box-shadow: 0 0 8px var(--primary-70);
 }
 
 /* ===== Inspector – new controls ===== */
@@ -361,7 +361,7 @@
     background: rgba(255, 255, 255, 0.05);
 }
 .insp-flip-btn.active {
-    background: rgba(139, 92, 246, 0.25);
+    background: var(--primary-25);
     border-color: var(--accent);
     color: var(--accent-hover);
 }
@@ -383,7 +383,7 @@
     color: var(--text);
 }
 .insp-scale-lock-btn.active {
-    background: rgba(139, 92, 246, 0.22);
+    background: var(--primary-22);
     border-color: var(--accent);
     color: var(--accent-hover);
 }
@@ -407,7 +407,7 @@
     color: var(--text);
 }
 .insp-toggle-btn.active {
-    background: rgba(139, 92, 246, 0.2);
+    background: var(--primary-20);
     border-color: var(--accent);
     color: var(--accent-hover);
 }
@@ -626,7 +626,7 @@
 .inspector-panel {
     box-shadow:
         0 12px 40px rgba(0, 0, 0, 0.6),
-        0 0 0 1px rgba(139, 92, 246, 0.2),
+        0 0 0 1px var(--primary-20),
         inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 

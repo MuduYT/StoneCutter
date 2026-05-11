@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { InspectorPanel } from "../inspector/InspectorPanel.jsx";
 
 export function AppOverlays({
@@ -50,6 +51,8 @@ export function AppOverlays({
   selectedClipIds,
   Icon,
 }) {
+  const [designExpanded, setDesignExpanded] = useState(false);
+
   return (
     <>
       {showExport && (
@@ -266,6 +269,165 @@ export function AppOverlays({
                 <p className="settings-hint">
                   Timeline-Playback nutzt Proxies, wenn vorhanden. Export nutzt weiterhin Originaldateien.
                 </p>
+              </div>
+              <div className="settings-section">
+                <h4 className="settings-section-header" onClick={() => setDesignExpanded(!designExpanded)}>
+                  Design
+                  <span className="settings-section-arrow" style={{transform: designExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease', display: 'inline-block', fontSize: '10px'}}>▶</span>
+                </h4>
+                {designExpanded && (
+                <>
+                <label className="settings-row">
+                  <span>Primary Color</span>
+                  <input
+                    type="color"
+                    value={settings.primaryColor || "#8b5cf6"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        primaryColor: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <label className="settings-row">
+                  <span>Secondary Color</span>
+                  <input
+                    type="color"
+                    value={settings.secondaryColor || "#06b6d4"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        secondaryColor: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <label className="settings-row">
+                  <span>Tertiary Color</span>
+                  <input
+                    type="color"
+                    value={settings.tertiaryColor || "#f97316"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        tertiaryColor: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <label className="settings-row">
+                  <span>Background Base</span>
+                  <input
+                    type="color"
+                    value={settings.bgBase || "#0d0a1a"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        bgBase: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <label className="settings-row">
+                  <span>Background Panel</span>
+                  <input
+                    type="color"
+                    value={settings.bgPanel || "#15102a"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        bgPanel: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <label className="settings-row">
+                  <span>Text Color</span>
+                  <input
+                    type="color"
+                    value={settings.textColor || "#e9e3f5"}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSettings((prev) => ({
+                        ...prev,
+                        textColor: val === "#e9e3f5" ? null : val,
+                      }));
+                    }}
+                    className="settings-color"
+                  />
+                  <span className="settings-color-value">{settings.textColor || "Auto"}</span>
+                </label>
+                <label className="settings-row">
+                  <span>Success Color</span>
+                  <input
+                    type="color"
+                    value={settings.successColor || "#10b981"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        successColor: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <label className="settings-row">
+                  <span>Warning Color</span>
+                  <input
+                    type="color"
+                    value={settings.warnColor || "#f59e0b"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        warnColor: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <label className="settings-row">
+                  <span>Danger Color</span>
+                  <input
+                    type="color"
+                    value={settings.dangerColor || "#ef4444"}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        dangerColor: e.target.value,
+                      }))
+                    }
+                    className="settings-color"
+                  />
+                </label>
+                <button
+                  className="settings-reset-btn"
+                  onClick={() => {
+                    setSettings((prev) => ({
+                      ...prev,
+                      primaryColor: "#8b5cf6",
+                      secondaryColor: "#06b6d4",
+                      tertiaryColor: "#f97316",
+                      bgBase: "#0d0a1a",
+                      bgPanel: "#15102a",
+                      bgElevated: "#1c1638",
+                      textColor: null,
+                      textMuted: null,
+                      dangerColor: "#ef4444",
+                      successColor: "#10b981",
+                      warnColor: "#f59e0b",
+                    }));
+                  }}
+                >
+                  Standardfarben wiederherstellen
+                </button>
+                </>
+                )}
               </div>
             </div>
           </div>

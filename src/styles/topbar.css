@@ -7,9 +7,9 @@
 :root {
     --topbar-height: 52px;
     --sidebar-tabs-width: 56px;
-    --orange-accent: #f97316;
-    --orange-accent-hover: #fb923c;
-    --orange-glow: rgba(249, 115, 22, 0.45);
+    --orange-accent: var(--orange-accent);
+    --orange-accent-hover: var(--orange-accent-hover);
+    --orange-glow: var(--orange-glow);
 }
 
 /* ---------- TOP NAVIGATION BAR ---------- */

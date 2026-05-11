@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { MediaPanel } from "../MediaPanel.jsx";
+import { AudioPanel } from "./AudioPanel.jsx";
 
 export function Sidebar({
   sidebarTab,
@@ -25,9 +27,42 @@ export function Sidebar({
   onMediaSearchChange,
   onMediaTypeFilterChange,
   onMediaSortChange,
+  folders,
+  selectedFolderId,
+  setSelectedFolderId,
+  handleCreateFolder,
+  handleDeleteFolder,
+  handleMoveMediaToFolder,
+  audioItems,
+  audioFolders,
+  isTauri,
+  importAudioDialog,
+  importAudioFromFiles,
+  removeAudioItem,
+  createAudioFolder,
+  deleteAudioFolder,
+  moveAudioToFolder,
+  onAudioDragStart,
   Icon,
   formatTime,
 }) {
+  const [mediaContextMenu, setMediaContextMenu] = useState(null); // { x, y, mediaId }
+
+  const handleMediaContextMenu = (e, mediaId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMediaContextMenu({ x: e.clientX, y: e.clientY, mediaId });
+  };
+
+  const closeMediaContextMenu = () => setMediaContextMenu(null);
+
+  const handleMoveToFolder = (folderId) => {
+    if (mediaContextMenu) {
+      handleMoveMediaToFolder(mediaContextMenu.mediaId, folderId);
+      closeMediaContextMenu();
+    }
+  };
+
   const handleTextDragStart = (event) => {
     event.dataTransfer.setData("application/x-stonecutter-asset-kind", "text");
     event.dataTransfer.setData("application/x-stonecutter-text-preset", "standard");
@@ -54,6 +89,7 @@ export function Sidebar({
 
       <aside
         className={`sidebar ${editorFocus === focusSource ? "focus-source" : ""}`}
+        onClick={() => mediaContextMenu && closeMediaContextMenu()}
       >
         {sidebarTab === "media" ? (
           <>
@@ -62,11 +98,46 @@ export function Sidebar({
               <button
                 className={`import-btn ${videos.length === 0 ? "pulse" : ""}`}
                 onClick={handleImport}
-                title="Videos importieren"
+                title="Medien importieren"
               >
                 <Icon.Plus /> Import
               </button>
+              <button
+                className="folder-new-btn"
+                onClick={handleCreateFolder}
+                title="Neuen Ordner erstellen"
+              >
+                <Icon.Folder /> +
+              </button>
             </div>
+
+            {folders && folders.length > 0 && (
+              <div className="folder-nav">
+                <button
+                  className={`folder-chip ${!selectedFolderId ? "active" : ""}`}
+                  onClick={() => setSelectedFolderId(null)}
+                >
+                  Alle
+                </button>
+                {folders.map((f) => (
+                  <button
+                    key={f.id}
+                    className={`folder-chip ${selectedFolderId === f.id ? "active" : ""}`}
+                    onClick={() =>
+                      setSelectedFolderId(f.id === selectedFolderId ? null : f.id)
+                    }
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      handleDeleteFolder(f.id);
+                    }}
+                    title={`${f.name} (Rechtsklick zum Löschen)`}
+                  >
+                    <Icon.Folder /> {f.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="media-bin-controls">
               <input
                 className="media-search-input"
@@ -98,6 +169,7 @@ export function Sidebar({
                 </select>
               </div>
             </div>
+
             <div
               className="video-list"
               onDragOver={(e) => {
@@ -128,11 +200,70 @@ export function Sidebar({
                 handleRemoveMedia={handleRemoveMedia}
                 handleFileChange={handleFileChange}
                 isImportableMediaFile={isImportableMediaFile}
+                onMediaContextMenu={folders && folders.length > 0 ? handleMediaContextMenu : undefined}
                 Icon={Icon}
                 formatTime={formatTime}
               />
             </div>
+
+            {mediaContextMenu && (
+              <div
+                className="context-menu"
+                style={{
+                  position: "fixed",
+                  left: mediaContextMenu.x,
+                  top: mediaContextMenu.y,
+                }}
+                onMouseLeave={closeMediaContextMenu}
+              >
+                {folders && folders.length > 0 && (
+                  <>
+                    <div className="context-menu-label">In Ordner verschieben</div>
+                    {folders.map((f) => (
+                      <button
+                        key={f.id}
+                        className="context-menu-item"
+                        onClick={() => handleMoveToFolder(f.id)}
+                      >
+                        <Icon.Folder /> {f.name}
+                      </button>
+                    ))}
+                    <button
+                      className="context-menu-item"
+                      onClick={() => handleMoveToFolder(null)}
+                    >
+                      Aus Ordner entfernen
+                    </button>
+                    <div className="context-menu-divider" />
+                  </>
+                )}
+                <button
+                  className="context-menu-item danger"
+                  onClick={() => {
+                    handleRemoveMedia(mediaContextMenu.mediaId);
+                    closeMediaContextMenu();
+                  }}
+                >
+                  <Icon.Trash /> Löschen
+                </button>
+              </div>
+            )}
           </>
+        ) : sidebarTab === "audio" ? (
+          <AudioPanel
+            audioItems={audioItems}
+            audioFolders={audioFolders}
+            isTauri={isTauri}
+            importAudioDialog={importAudioDialog}
+            importAudioFromFiles={importAudioFromFiles}
+            removeAudioItem={removeAudioItem}
+            createAudioFolder={createAudioFolder}
+            deleteAudioFolder={deleteAudioFolder}
+            moveAudioToFolder={moveAudioToFolder}
+            onAudioDragStart={onAudioDragStart}
+            onDragEnd={handleDragEnd}
+            Icon={Icon}
+          />
         ) : sidebarTab === "text" ? (
           <>
             <div className="sidebar-header">
@@ -164,7 +295,6 @@ export function Sidebar({
             <div className="sidebar-placeholder-icon">
               {sidebarTab === "effects" && "Effects"}
               {sidebarTab === "transitions" && "Trans"}
-              {sidebarTab === "audio" && "Audio"}
               {sidebarTab === "elements" && "Elem"}
             </div>
             <p className="sidebar-placeholder-title">

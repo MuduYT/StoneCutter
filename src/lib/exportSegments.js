@@ -50,6 +50,7 @@ const getTrackIndex = (trackOrder, trackId, type) => {
 
 const shouldExportAudioClip = ({ clip, track, media, hasSoloAudio }) => {
   if (!media?.src && !media?.path) return false;
+  if (track?.hidden) return false;
   const mediaType = media.mediaType || "video";
   const trackType = getTrackType(track, clip, media);
   const hasPossibleAudio = mediaType !== "image";
@@ -129,6 +130,14 @@ export const buildExportSegments = ({ clips, videos, tracks }) => {
   for (const clip of clips) {
     const media = mediaById.get(clip.videoId);
     const track = trackById.get(clip.trackId);
+    if (track?.hidden) continue;
+    if (clip.kind === "text") {
+      return {
+        ok: false,
+        error:
+          "Text-Clips werden im Export noch nicht unterstuetzt. Bitte Text-Clips ausblenden oder entfernen, bevor du exportierst.",
+      };
+    }
     const mediaType = media?.mediaType || "video";
     const trackType = getTrackType(track, clip, media);
     const trackIndex = getTrackIndex(trackOrder, clip.trackId, trackType);

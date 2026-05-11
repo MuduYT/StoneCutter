@@ -20,6 +20,13 @@ export interface Media {
   previewProxies?: Record<string, { proxySrc: string; height: number }>;
   thumbnail?: string;
   audioTracks?: number;
+  folderId?: string;
+}
+
+export interface MediaFolder {
+  id: string;
+  name: string;
+  createdAt: number;
 }
 
 export interface Clip {
@@ -88,6 +95,7 @@ export interface Project {
   tracks: Track[];
   clips: Clip[];
   media: Media[];
+  folders: MediaFolder[];
   settings: Settings;
 }
 

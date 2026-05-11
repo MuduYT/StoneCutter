@@ -11,6 +11,7 @@ export const MediaPanel = ({
   handleRemoveMedia,
   handleFileChange,
   isImportableMediaFile,
+  onMediaContextMenu,
   Icon,
   formatTime,
 }) => {
@@ -49,6 +50,7 @@ export const MediaPanel = ({
           onDragEnd={handleDragEnd}
           onClick={() => handleSelectMedia(v.id)}
           onDoubleClick={() => handleDoubleClickMedia(v.id)}
+          onContextMenu={onMediaContextMenu ? (e) => onMediaContextMenu(e, v.id) : undefined}
           title={`${v.path}\nDoppelklick = Auswaehlen - Ziehen = auf Timeline`}
         >
           {(() => {

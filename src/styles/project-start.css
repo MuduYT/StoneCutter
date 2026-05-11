@@ -56,8 +56,8 @@
 }
 
 .project-primary-action {
-    background: linear-gradient(135deg, #7c3aed, #0891b2);
-    color: #fff;
+    background: linear-gradient(135deg, var(--video-color), var(--secondary-70));
+    color: var(--text);
     box-shadow: 0 8px 24px rgba(8, 145, 178, 0.28);
 }
 
@@ -148,7 +148,7 @@
     display: grid;
     place-items: center;
     background: rgba(6, 182, 212, 0.16);
-    color: #67e8f9;
+    color: var(--success);
     flex-shrink: 0;
 }
 
@@ -191,12 +191,12 @@
 .project-status.ok,
 .project-toast.ok {
     border-color: rgba(34, 197, 94, 0.5);
-    color: #86efac;
+    color: var(--success-hover);
 }
 .project-status.err,
 .project-toast.err {
     border-color: rgba(239, 68, 68, 0.55);
-    color: #fca5a5;
+    color: var(--danger-hover);
 }
 
 .project-toast {

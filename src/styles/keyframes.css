@@ -31,7 +31,7 @@
     50% {
         box-shadow:
             0 2px 8px var(--accent-glow),
-            0 0 0 6px rgba(139, 92, 246, 0.18);
+            0 0 0 6px var(--primary-18);
     }
 }
 @keyframes bgFloat {
@@ -96,7 +96,7 @@
     border-radius: 10px;
     background: rgba(234, 179, 8, 0.22);
     border: 1px solid rgba(234, 179, 8, 0.55);
-    color: #fde68a;
+    color: var(--warn);
     letter-spacing: 0.04em;
 }
 
@@ -150,16 +150,16 @@
 
 .keyframe-stopwatch:hover:not(.disabled) {
     color: var(--text);
-    background: rgba(139, 92, 246, 0.14);
+    background: var(--primary-14);
 }
 
 .keyframe-stopwatch.active {
-    color: #67e8f9;
+    color: var(--success);
     background: rgba(34, 211, 238, 0.16);
 }
 
 .keyframe-stopwatch.active:hover:not(.disabled) {
-    color: #a5f3fc;
+    color: var(--secondary-50);
     background: rgba(34, 211, 238, 0.24);
 }
 
@@ -193,7 +193,7 @@
 }
 
 .insp-reset-mini:hover {
-    color: #a5f3fc;
+    color: var(--secondary-50);
     border-color: rgba(103, 232, 249, 0.55);
     background: rgba(14, 34, 44, 0.82);
 }
@@ -217,7 +217,7 @@
     border: 1px solid rgba(148, 163, 184, 0.28);
     border-radius: 7px;
     background: rgba(15, 23, 42, 0.88);
-    color: #dbeafe;
+    color: var(--secondary-30);
     font-size: 11px;
 }
 
@@ -273,7 +273,7 @@
     top: 50%;
     transform: translateY(-50%);
     border-radius: 50%;
-    background: #ffffff;
+    background: var(--text);
     border: 1px solid rgba(8, 12, 24, 0.85);
     padding: 0;
     cursor: ew-resize;
@@ -290,13 +290,13 @@
 }
 
 .clip-keyframe-dot:hover {
-    background: #fffaf0;
+    background: var(--warn-bg);
     box-shadow: 0 0 8px rgba(255, 255, 255, 0.45);
 }
 
 .clip-keyframe-dot.selected {
-    background: #67e8f9;
-    border-color: #0e7490;
+    background: var(--success);
+    border-color: var(--secondary-60);
     box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.45);
 }
 
@@ -327,7 +327,7 @@
 
 .volume-curve-line {
     fill: none;
-    stroke: #67e8f9;
+    stroke: var(--success);
     stroke-width: 1.6;
     vector-effect: non-scaling-stroke;
     filter: drop-shadow(0 0 4px rgba(103, 232, 249, 0.35));
@@ -335,7 +335,7 @@
 }
 
 .volume-curve-dot {
-    fill: #67e8f9;
+    fill: var(--success);
     stroke: rgba(7, 10, 22, 0.9);
     stroke-width: 1.4;
     cursor: grab;
@@ -345,8 +345,8 @@
 
 .volume-curve-dot:hover,
 .volume-curve-dot.selected {
-    fill: #cffafe;
-    stroke: #0891b2;
+    fill: var(--success-30);
+    stroke: var(--secondary-70);
 }
 
 .volume-curve-dot:active {
