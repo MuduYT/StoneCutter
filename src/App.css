@@ -28,9 +28,9 @@ body,
     --accent-glow: rgba(139, 92, 246, 0.45);
     --video-color: #7c3aed;
     --audio-color: #06b6d4;
-    --warn: #f59e0b;
-    --danger: #ef4444;
-    --playhead: #f97316; /* updated from #ef4444 to match new orange accent */
+    --warn: var(--warn);
+    --danger: var(--danger);
+    --playhead: var(--playhead); /* updated from var(--danger) to match new orange accent */
     --gap: 12px;
     --timeline-height: 320px;
     --top-offset: calc(var(--timeline-height) + var(--gap) * 2);
@@ -85,7 +85,7 @@ button {
     font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
     pointer-events: none;
     z-index: 12;
-    box-shadow: 0 2px 8px rgba(239, 68, 68, 0.5);
+    box-shadow: 0 2px 8px var(--orange-glow);
     white-space: nowrap;
 }
 .scrub-tooltip::after {
@@ -301,7 +301,7 @@ button {
 
 /* Soft red glow on the playhead line for visibility */
 .playhead-line {
-    box-shadow: 0 0 6px 1px rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 6px 1px var(--orange-glow-strong);
 }
 
 /* Animated shimmer on active gap playback highlight */
@@ -497,9 +497,9 @@ button {
 }
 
 .track-header-row.video .track-type-label {
-    background: rgba(249, 115, 22, 0.18);
+    background: var(--orange-bg);
     color: var(--orange-accent);
-    border: 1px solid rgba(249, 115, 22, 0.3);
+    border: 1px solid var(--orange-border);
 }
 
 .track-header-row.audio .track-type-label {
@@ -550,14 +550,14 @@ button {
     border-color: var(--orange-accent);
     box-shadow:
         0 0 0 1px var(--orange-accent),
-        0 4px 14px rgba(249, 115, 22, 0.3);
+        0 4px 14px var(--orange-bg);
 }
 
 .clip.selected {
     outline-color: var(--orange-accent);
     box-shadow:
-        0 0 0 1px rgba(249, 115, 22, 0.7),
-        0 4px 16px rgba(249, 115, 22, 0.3);
+        0 0 0 1px var(--orange-accent),
+        0 4px 16px var(--orange-bg);
 }
 
 .clip.selected.active {
@@ -612,12 +612,12 @@ button {
 
 /* Orange accent for playhead in reference */
 .playhead-handle {
-    background: linear-gradient(180deg, var(--orange-accent), #ea580c);
+    background: linear-gradient(180deg, var(--orange-accent), var(--playhead-dark));
     box-shadow: 0 2px 6px var(--orange-glow);
 }
 
 .playhead-handle::after {
-    border-color: #ea580c transparent transparent transparent;
+    border-color: var(--playhead-dark) transparent transparent transparent;
 }
 
 .playhead-handle:hover {
@@ -631,7 +631,7 @@ button {
 
 .playhead-line {
     background: var(--orange-accent);
-    box-shadow: 0 0 6px 1px rgba(249, 115, 22, 0.6);
+    box-shadow: 0 0 6px 1px var(--orange-glow-strong);
 }
 
 /* Scrub tooltip in orange */

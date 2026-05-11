@@ -1,5 +1,12 @@
 # StoneCutter Update Log
 
+## 2026-05-12 - Export- und Projekt-Sicherheitsfixes
+
+### Fixes
+- Projektwechsel nach "Speichern und schliessen" bricht jetzt ab, wenn Speichern fehlschlaegt; ungesicherte Aenderungen werden nicht mehr durch den Reset verdeckt.
+- Export respektiert ausgeblendete Spuren und blockiert sichtbare Text-Clips mit klarer Meldung, statt einen kaputten oder unvollstaendigen Export zu starten.
+- Medien-Loeschen ueber das Sidebar-Kontextmenue funktioniert auch ohne Click-Event und wirft keinen `stopPropagation`-Fehler mehr.
+
 ## 2026-05-11 - Timeline-Lock, Text-Fonts und Auswahlgrenzen
 
 ### Fixes
