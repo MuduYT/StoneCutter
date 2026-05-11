@@ -1,5 +1,23 @@
 # StoneCutter Update Log
 
+## 2026-05-11 - Timeline-Lock, Text-Fonts und Auswahlgrenzen
+
+### Fixes
+- Gesperrte Spuren blockieren Canvas-Transform, Inline-Textbearbeitung und Inspector-Aenderungen fuer betroffene Clips.
+- Timeline-Marquee-Auswahl nutzt Track-Hoehen/-Bounds, damit Clips ausserhalb des Rechtecks nicht versehentlich selektiert werden.
+- Neue Text-Clips starten ohne sichtbaren Schatten und nutzen eine Font-Auswahl mit CSS-Fallbacks.
+
+## 2026-05-11 - Text-Editing und Keyframe-Interpolation
+
+### Features
+- Preview: Text-Clips koennen per Doppelklick direkt im Canvas bearbeitet werden; Enter bestaetigt, Escape bricht ab, Klick ausserhalb bestaetigt.
+- Keyframes: Interpolation um `ease-in`, `ease-out`, `ease-in-out` und `hold` erweitert, inklusive Inspector-Auswahl fuer selektierte Keyframes.
+- Text-Clips: Keyframes fuer Transform sowie Typografie-/Appearance-Werte (`fontSize`, Tracking, Line Spacing, Shadow, Background) aktiviert.
+
+### Stability
+- Projekt-/Engine-Normalisierung bleibt abwaertskompatibel; neue Text-Style-Werte werden nur gespeichert, wenn sie vorhanden sind.
+- Tests fuer Easing und animierte Text-Styles ergaenzt; Test, Build und Lint laufen gruen.
+
 ## 2026-05-08 - Engine Contract: Text-Clip-Datenmodell vorbereitet
 
 ### Refactor

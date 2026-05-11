@@ -6,13 +6,33 @@
 export const PROJECT_FPS = 30;
 export const FRAME_EPSILON = 1e-6;
 
-export const KEYFRAME_INTERPOLATIONS = ["linear"];
+export const KEYFRAME_INTERPOLATIONS = [
+  "linear",
+  "ease-in",
+  "ease-out",
+  "ease-in-out",
+  "hold",
+];
+
+export const EASING_FUNCTIONS = {
+  linear: (u) => u,
+  "ease-in": (u) => u * u * u,
+  "ease-out": (u) => 1 - Math.pow(1 - u, 3),
+  "ease-in-out": (u) =>
+    u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2,
+  hold: () => 0,
+};
+
+export const normalizeInterpolation = (interpolation) =>
+  KEYFRAME_INTERPOLATIONS.includes(interpolation) ? interpolation : "linear";
 
 export const KEYFRAME_GROUPS = {
   transform: { id: "transform", label: "Transform" },
   color: { id: "color", label: "Color" },
   speed: { id: "speed", label: "Speed" },
   audio: { id: "audio", label: "Audio" },
+  typography: { id: "typography", label: "Typography" },
+  appearance: { id: "appearance", label: "Appearance" },
 };
 
 // Single source of truth for which numeric clip properties can be animated and
@@ -35,11 +55,26 @@ export const ANIMATABLE_VIDEO_PROPERTIES = [
   // Audio properties (stored as raw clip values: volume 0–2, pan –100–100)
   { key: "volume", group: "audio", default: 1, min: 0, max: 2 },
   { key: "pan", group: "audio", default: 0, min: -100, max: 100 },
+  { key: "fontSize", group: "typography", default: 48, min: 8, max: 240 },
+  { key: "letterSpacing", group: "typography", default: 0, min: -10, max: 50 },
+  { key: "lineHeight", group: "typography", default: 1.15, min: 0.5, max: 3 },
+  { key: "shadowOpacity", group: "appearance", default: 0, min: 0, max: 100 },
+  { key: "shadowBlur", group: "appearance", default: 10, min: 0, max: 50 },
+  { key: "bgOpacity", group: "appearance", default: 0, min: 0, max: 100 },
 ];
 
 const ANIMATABLE_BY_KEY = new Map(
   ANIMATABLE_VIDEO_PROPERTIES.map((property) => [property.key, property]),
 );
+
+const TEXT_STYLE_PROPERTY_KEYS = new Set([
+  "fontSize",
+  "letterSpacing",
+  "lineHeight",
+  "shadowOpacity",
+  "shadowBlur",
+  "bgOpacity",
+]);
 
 export const getAnimatableProperty = (key) => ANIMATABLE_BY_KEY.get(key) || null;
 
@@ -101,7 +136,10 @@ export const sampleProperty = (track, time, fallback) => {
     if (t >= left.time && t <= right.time) {
       const span = right.time - left.time;
       if (span < FRAME_EPSILON) return right.value;
-      const u = (t - left.time) / span;
+      const rawU = (t - left.time) / span;
+      const interpolation = normalizeInterpolation(right.interpolation);
+      const easeFn = EASING_FUNCTIONS[interpolation] || EASING_FUNCTIONS.linear;
+      const u = easeFn(rawU);
       return lerp(left.value, right.value, u);
     }
   }
@@ -158,6 +196,26 @@ export const resolveAnimatedClip = (clip, timelineTime) => {
         next.scale = uniform;
         touched = true;
       }
+    }
+  }
+  if (map && clip.kind === "text") {
+    const contentStyle = { ...(clip.content?.style || {}) };
+    let styleTouched = false;
+    const textKeys = ["fontSize", "letterSpacing", "lineHeight", "shadowOpacity", "shadowBlur", "bgOpacity"];
+    for (const key of textKeys) {
+      const track = map[key];
+      if (!Array.isArray(track) || track.length === 0) continue;
+      const prop = getAnimatableProperty(key);
+      const fallback = contentStyle[key] ?? prop?.default ?? 0;
+      const sampled = sampleProperty(track, timelineTime, fallback);
+      if (sampled !== fallback) {
+        contentStyle[key] = sampled;
+        styleTouched = true;
+      }
+    }
+    if (styleTouched) {
+      next.content = { ...(clip.content || {}), text: clip.content?.text || clip.name || "Text", style: contentStyle };
+      touched = true;
     }
   }
   return touched ? next : clip;
@@ -238,7 +296,10 @@ export const setClipPropertyTrack = (clip, propertyKey, nextTrack) => {
 
 export const sampleClipProperty = (clip, propertyKey, time) => {
   const property = getAnimatableProperty(propertyKey);
-  const fallback = clip?.[propertyKey] ?? property?.default ?? 0;
+  const fallback =
+    clip?.kind === "text" && TEXT_STYLE_PROPERTY_KEYS.has(propertyKey)
+      ? clip?.content?.style?.[propertyKey] ?? property?.default ?? 0
+      : clip?.[propertyKey] ?? property?.default ?? 0;
   const track = getClipPropertyTrack(clip, propertyKey);
   if (track.length === 0) return fallback;
   return sampleProperty(track, time, fallback);
@@ -389,7 +450,11 @@ export const getMergedKeyframeMarkers = (clip, fps = PROJECT_FPS) => {
         bucket.properties.push(property.key);
       }
       if (!bucket.ids.some((entry) => entry.id === kf.id)) {
-        bucket.ids.push({ propertyKey: property.key, id: kf.id });
+        bucket.ids.push({
+          propertyKey: property.key,
+          id: kf.id,
+          interpolation: normalizeInterpolation(kf.interpolation),
+        });
       }
       buckets.set(time, bucket);
     }
@@ -413,9 +478,7 @@ export const sanitizeKeyframeMap = (input) => {
       const value = finiteOr(kf?.value, NaN);
       if (!Number.isFinite(time) || !Number.isFinite(value)) continue;
       const clamped = Math.max(property.min, Math.min(property.max, value));
-      const interpolation = KEYFRAME_INTERPOLATIONS.includes(kf?.interpolation)
-        ? kf.interpolation
-        : "linear";
+      const interpolation = normalizeInterpolation(kf?.interpolation);
       cleaned.push({
         id: typeof kf?.id === "string" && kf.id ? kf.id : createKeyframeId(),
         time: Math.max(0, time),

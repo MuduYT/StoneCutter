@@ -3,6 +3,8 @@ import {
   buildThumbnailItems,
   buildWaveformBars,
 } from "../lib/timelineRender.js";
+import { DEFAULT_TIMELINE_RULER_HEIGHT } from "../lib/timeline.js";
+import { buildSeparatedLayout } from "../lib/timelineLayout.js";
 import { ClipKeyframes } from "./timeline/ClipKeyframes.jsx";
 import { VolumeCurve } from "./timeline/VolumeCurve.jsx";
 
@@ -44,6 +46,7 @@ export const Timeline = ({
   handleClipContextMenu,
   handleTrimMouseDown,
   handleUpdateTrack,
+  handleTrackResizeMouseDown,
   marqueeBox,
   snapIndicatorTime,
   setEditingTrackId,
@@ -67,12 +70,15 @@ export const Timeline = ({
   }, [clips]);
   const clipsByTrack = visibleClipsByTrack || allClipsByTrack;
 
-  const tracksHeight = useMemo(() => {
-    return tracks.reduce(
-      (sum, t) => sum + (t.height || DEFAULT_TRACK_HEIGHT),
-      0,
-    );
-  }, [tracks, DEFAULT_TRACK_HEIGHT]);
+  const layout = useMemo(
+    () => buildSeparatedLayout(tracks, DEFAULT_TRACK_HEIGHT),
+    [tracks, DEFAULT_TRACK_HEIGHT],
+  );
+  const { videoTracksLayout, audioTracksLayout, dividerY, dividerHeight, totalTracksHeight } = layout;
+  const allTracksLayout = useMemo(
+    () => [...videoTracksLayout, ...audioTracksLayout],
+    [videoTracksLayout, audioTracksLayout],
+  );
 
   return (
     <div className="timeline-tracks">
@@ -83,13 +89,25 @@ export const Timeline = ({
           {dragOver && (
             <div
               className={`track-header-row drop-target-below ${dropTargetTrackId === "__above__" ? "active" : ""}`}
+              style={{ flexShrink: 0 }}
             >
               <span>
                 {dropZoneTrackMode === "audio" ? "+ Audio-Spur" : "+ Video-Spur"}
               </span>
             </div>
           )}
-          {tracks.map((track) => {
+          <div style={{ position: "relative", height: `${totalTracksHeight}px`, flexShrink: 0 }}>
+            <div
+              className="track-section-divider track-header-divider"
+              style={{
+                position: "absolute",
+                top: `${dividerY}px`,
+                left: 0,
+                right: 0,
+                height: `${dividerHeight}px`,
+              }}
+            />
+          {allTracksLayout.map(({ track, height, top }) => {
             const sameTypeTracks = tracks.filter(t => t.type === track.type);
             const typeIndex = sameTypeTracks.indexOf(track) + 1;
             const typeLabel = `${track.type === "video" ? "V" : "A"}${typeIndex}`;
@@ -98,7 +116,11 @@ export const Timeline = ({
                 key={track.id}
                 className={`track-header-row ${track.type === "video" ? "video" : "audio"} ${track.hidden ? "hidden" : ""} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""}`}
                 style={{
-                  height: `${track.height || DEFAULT_TRACK_HEIGHT}px`,
+                  position: "absolute",
+                  top: `${top}px`,
+                  left: 0,
+                  right: 0,
+                  height: `${height}px`,
                 }}
               >
                 <div className="track-header-left">
@@ -134,6 +156,14 @@ export const Timeline = ({
                     </span>
                   )}
                 </div>
+                <div
+                  className="track-resize-handle"
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    handleTrackResizeMouseDown(e, track.id, height);
+                  }}
+                  title="Spurhöhe ziehen"
+                />
                 <div className="track-header-controls">
                   <button
                     className={`track-btn visibility ${track.hidden ? "hidden" : ""}`}
@@ -179,34 +209,39 @@ export const Timeline = ({
               </div>
             );
           })}
-          {/* Drop target below tracks */}
-          {dragOver && (
-            <div
-              className={`track-header-row drop-target-below ${dropTargetTrackId === "__below__" ? "active" : ""}`}
-            >
-              <span>
-                {dragOver
-                  ? dropZoneTrackMode === "audio"
-                    ? "+ Audio-Spur"
-                    : "+ Video-Spur"
-                  : "+ Neue Spur"}
-              </span>
-            </div>
-          )}
+            {/* Drop target below tracks */}
+            {dragOver && (
+              <div
+                className={`track-header-row drop-target-below ${dropTargetTrackId === "__below__" ? "active" : ""}`}
+                style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
+              >
+                <span>
+                  {dragOver
+                    ? dropZoneTrackMode === "audio"
+                      ? "+ Audio-Spur"
+                      : "+ Video-Spur"
+                    : "+ Neue Spur"}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div
-        className="tracks-content"
+        className={`tracks-content${interaction?.type === "middle-pan" ? " panning" : ""}`}
         ref={setTracksContentRef}
         onMouseDown={handleTracksMouseDown}
+        onAuxClick={(e) => {
+          if (e.button === 1) e.preventDefault();
+        }}
         onScroll={handleTracksScroll}
       >
         <div
           className="tracks-inner"
           style={{
             width: `${totalWidth}px`,
-            minHeight: `${30 + tracksHeight + 60}px`,
+            height: `${DEFAULT_TIMELINE_RULER_HEIGHT + totalTracksHeight}px`,
           }}
         >
           {/* Time ruler */}
@@ -272,17 +307,33 @@ export const Timeline = ({
             />
           )}
 
+          {/* Video/Audio section divider lane */}
+          <div
+            className="track-section-divider track-lane-divider"
+            style={{
+              position: "absolute",
+              top: `${DEFAULT_TIMELINE_RULER_HEIGHT + dividerY}px`,
+              left: 0,
+              right: 0,
+              height: `${dividerHeight}px`,
+            }}
+          />
+
           {/* Track lanes */}
-          {tracks.map((track) => (
+          {allTracksLayout.map(({ track, height, top }) => (
             <div
               key={track.id}
               className={`track-lane ${track.type} ${track.hidden ? "hidden" : ""} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""} ${track.locked ? "locked" : ""}`}
               style={{
-                height: `${track.height || DEFAULT_TRACK_HEIGHT}px`,
+                position: "absolute",
+                top: `${DEFAULT_TIMELINE_RULER_HEIGHT + top}px`,
+                left: 0,
+                right: 0,
+                height: `${height}px`,
               }}
               data-track-id={track.id}
             >
-              {!track.hidden && (clipsByTrack.get(track.id) || []).map((clip) => {
+              {(clipsByTrack.get(track.id) || []).map((clip) => {
                 const dur = clip.outPoint - clip.inPoint;
                 const left = clip.startTime * pxPerSec;
                 const width = Math.max(20, dur * pxPerSec);
@@ -294,11 +345,9 @@ export const Timeline = ({
                 return (
                   <div
                     key={clip.id}
-                    className={`clip ${isVideo ? "video-clip" : "audio-clip"} ${isText ? "text-clip" : ""} ${activeClipId === clip.id ? "active" : ""} ${selectedClipIds.has(clip.id) ? "selected" : ""} ${draggingIds?.has(clip.id) ? "dragging" : ""} ${track.locked ? "track-locked" : ""} ${clip.linkGroupId ? "linked" : ""}`}
+                    className={`clip ${isVideo ? "video-clip" : "audio-clip"} ${isText ? "text-clip" : ""} ${activeClipId === clip.id ? "active" : ""} ${selectedClipIds.has(clip.id) ? "selected" : ""} ${draggingIds?.has(clip.id) ? "dragging" : ""} ${track.locked ? "track-locked" : ""} ${track.hidden ? "hidden-track" : ""} ${clip.linkGroupId ? "linked" : ""}`}
                     style={{ left: `${left}px`, width: `${width}px` }}
-                    onMouseDown={(e) =>
-                      !track.locked && handleClipMouseDown(e, clip)
-                    }
+                    onMouseDown={(e) => handleClipMouseDown(e, clip)}
                     onContextMenu={(e) => handleClipContextMenu(e, clip)}
                     title={`${clip.name}\nIn: ${formatTime(clip.inPoint)} · Out: ${formatTime(clip.outPoint)} · Dauer: ${formatTime(dur)}${clip.linkGroupId ? "\nVerknüpft mit Video/Audio-Partner" : ""}`}
                   >
@@ -313,10 +362,10 @@ export const Timeline = ({
                     )}
                     <div
                       className={`trim-handle left ${trimmedLeft ? "trimmed" : ""}`}
-                      onMouseDown={(e) =>
-                        !track.locked &&
-                        handleTrimMouseDown(e, clip, "left")
-                      }
+                      onMouseDown={(e) => {
+                        if (track.locked) return;
+                        handleTrimMouseDown(e, clip, "left");
+                      }}
                       title="Links trimmen"
                     />
                     {isText ? (
@@ -426,6 +475,7 @@ export const Timeline = ({
                           onBeginVolumeKeyframeDrag={onBeginVolumeKeyframeDrag}
                           onAddVolumeKeyframe={onAddVolumeKeyframe}
                           onBeginVolumeLineDrag={(event, targetClip, segment) => {
+                            if (track.locked) return;
                             event.stopPropagation();
                             const shellEl = event.currentTarget
                               .closest(".clip")
@@ -498,6 +548,7 @@ export const Timeline = ({
                         left: `${Math.max(0, Math.min(width - 12, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width))}px`,
                       }}
                       onMouseDown={(e) => {
+                        if (track.locked) return;
                         e.stopPropagation();
                         fadeDragRef.current = {
                           clipId: clip.id,
@@ -518,6 +569,7 @@ export const Timeline = ({
                         right: `${Math.max(0, Math.min(width - 12, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width))}px`,
                       }}
                       onMouseDown={(e) => {
+                        if (track.locked) return;
                         e.stopPropagation();
                         fadeDragRef.current = {
                           clipId: clip.id,
@@ -534,10 +586,10 @@ export const Timeline = ({
                     />
                     <div
                       className={`trim-handle right ${trimmedRight ? "trimmed" : ""}`}
-                      onMouseDown={(e) =>
-                        !track.locked &&
-                        handleTrimMouseDown(e, clip, "right")
-                      }
+                      onMouseDown={(e) => {
+                        if (track.locked) return;
+                        handleTrimMouseDown(e, clip, "right");
+                      }}
                       title="Rechts trimmen"
                     />
                     {isVideo && (

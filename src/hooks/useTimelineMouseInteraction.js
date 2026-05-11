@@ -14,6 +14,10 @@ import {
   expandWithLinkedPartners,
   applyGroupTrimLeft,
   applyGroupTrimRight,
+  getMarqueeSelectedClipIds,
+  getMiddlePanScroll,
+  isTimelineTrimHotspot,
+  isClipTrackLocked,
 } from "../lib/timeline.js";
 import { getTopVisibleTimelineClip } from "../lib/playback.js";
 import { FOCUS_TIMELINE } from "../lib/sourceMonitor.js";
@@ -274,6 +278,22 @@ export function useTimelineMouseInteraction({
   };
 
   const handleTracksMouseDown = (e) => {
+    if (e.button === 1) {
+      e.preventDefault();
+      e.stopPropagation();
+      const scrollStartLeft = tracksContentRef.current?.scrollLeft ?? 0;
+      const scrollStartTop = tracksContentRef.current?.scrollTop ?? 0;
+      const i = {
+        type: "middle-pan",
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        scrollStartLeft,
+        scrollStartTop,
+      };
+      interactionRef.current = i;
+      setInteraction(i);
+      return;
+    }
     const clipUnderPointer = Array.from(
       tracksContentRef.current?.querySelectorAll(".clip") || [],
     ).some((node) => {
@@ -308,6 +328,8 @@ export function useTimelineMouseInteraction({
     }
     const gap = findGapAtTime(t, clips);
     const rect = tracksContentRef.current?.getBoundingClientRect();
+    const rulerEl = tracksContentRef.current?.querySelector(".time-ruler");
+    const rulerHeight = rulerEl ? rulerEl.getBoundingClientRect().height : 30;
     const startY = rect
       ? e.clientY - rect.top + (tracksContentRef.current.scrollTop || 0)
       : 0;
@@ -318,6 +340,7 @@ export function useTimelineMouseInteraction({
       startClientX: e.clientX,
       startClientY: e.clientY,
       pendingGap: gap,
+      rulerHeight,
       additive: e.shiftKey || e.ctrlKey || e.metaKey,
       initialSelection: new Set(selectedClipIds),
     };
@@ -347,6 +370,20 @@ export function useTimelineMouseInteraction({
     if (playbackModeRef.current === "source") stopPlayback();
     const additive = e.shiftKey || e.ctrlKey || e.metaKey;
     setSelectedGap(null);
+
+    if (isClipTrackLocked(clip, tracks)) {
+      if (additive) {
+        const next = new Set(selectedClipIds);
+        if (next.has(clip.id)) next.delete(clip.id);
+        else next.add(clip.id);
+        setSelectedClipIds(next);
+      } else {
+        setSelectedClipIds(new Set([clip.id]));
+      }
+      setActiveClipId(clip.id);
+      setActiveId(getClipMediaId(clip));
+      return;
+    }
 
     if (e.altKey) {
       const idsToClone =
@@ -443,11 +480,26 @@ export function useTimelineMouseInteraction({
   const handleTrimMouseDown = (e, clip, side) => {
     e.stopPropagation();
     e.preventDefault();
+    const clipRect = e.currentTarget.closest(".clip")?.getBoundingClientRect();
+    if (
+      !isTimelineTrimHotspot({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        clipRect,
+        side,
+      })
+    ) {
+      return;
+    }
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
     setActiveClipId(clip.id);
     setActiveId(getClipMediaId(clip));
+    if (isClipTrackLocked(clip, tracks)) {
+      setSelectedClipIds(new Set([clip.id]));
+      return;
+    }
     const media = videos.find((v) => v.id === clip.videoId) || null;
     const x = getXInTracks(e.clientX);
     const i = {
@@ -469,13 +521,14 @@ export function useTimelineMouseInteraction({
       e.preventDefault();
       setEditorFocus(FOCUS_TIMELINE);
       setSourceMonitorId(null);
-      stopPlayback();
-      const rect = timelinePreviewRef.current?.getBoundingClientRect();
-      if (!rect) return;
       const selected = expandWithLinkedPartners(clips, [clip.id]);
       setSelectedClipIds(selected);
       setActiveClipId(clip.id);
       setActiveId(getClipMediaId(clip));
+      if (isClipTrackLocked(clip, tracks)) return;
+      stopPlayback();
+      const rect = timelinePreviewRef.current?.getBoundingClientRect();
+      if (!rect) return;
       const previewCenterX = rect.left + rect.width / 2;
       const previewCenterY = rect.top + rect.height / 2;
       const centerX = previewCenterX + (clip.positionX ?? 0);
@@ -507,6 +560,7 @@ export function useTimelineMouseInteraction({
     },
     [
       clips,
+      tracks,
       stopPlayback,
       setEditorFocus,
       setSourceMonitorId,
@@ -548,6 +602,29 @@ export function useTimelineMouseInteraction({
       const x = getXInTracks(ev.clientX);
       const it = interactionRef.current;
       if (!it) return;
+      if (it.type === "middle-pan") {
+        ev.preventDefault();
+        if (tracksContentRef.current) {
+          const nextScroll = getMiddlePanScroll({
+            startClientX: it.startClientX,
+            startClientY: it.startClientY,
+            scrollStartLeft: it.scrollStartLeft,
+            scrollStartTop: it.scrollStartTop,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+            maxScrollLeft:
+              tracksContentRef.current.scrollWidth -
+              tracksContentRef.current.clientWidth,
+            maxScrollTop:
+              tracksContentRef.current.scrollHeight -
+              tracksContentRef.current.clientHeight,
+          });
+          tracksContentRef.current.scrollLeft = nextScroll.left;
+          tracksContentRef.current.scrollTop = nextScroll.top;
+        }
+        return;
+      }
+
       const effSnap = snapEnabled && !ev.shiftKey;
       const tcEl = tracksContentRef.current;
       if (tcEl) {
@@ -585,23 +662,22 @@ export function useTimelineMouseInteraction({
         const y1 = Math.min(it.startY, curY),
           y2 = Math.max(it.startY, curY);
         setMarqueeBox({ x1, y1, x2, y2 });
-        const tStart = x1 / pxPerSec,
-          tEnd = x2 / pxPerSec;
-        const hits = new Set(
-          it.additive ? Array.from(it.initialSelection) : [],
-        );
-        for (const c of clips) {
-          const cS = c.startTime,
-            cE = c.startTime + (c.outPoint - c.inPoint);
-          if (cE > tStart + 1e-3 && cS < tEnd - 1e-3) hits.add(c.id);
-        }
+        const hits = getMarqueeSelectedClipIds({
+          clips,
+          tracks,
+          pxPerSec,
+          rect: { x1, y1, x2, y2 },
+          additive: it.additive,
+          initialSelection: it.initialSelection,
+          trackTopOffset: it.rulerHeight ?? 30,
+        });
         setSelectedClipIds(hits);
         return;
       }
 
       if (it.type === "preview-transform") {
         const orig = it.originalClip;
-        if (!orig) return;
+        if (!orig || isClipTrackLocked(orig, tracks)) return;
         const rect = it.previewRect || { width: 1, height: 1 };
         const dx = ev.clientX - it.startClientX;
         const dy = ev.clientY - it.startClientY;
@@ -1191,7 +1267,7 @@ export function useTimelineMouseInteraction({
       document.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interaction, clips, timelineTime, activeClipId, pxPerSec, snapEnabled]);
+  }, [interaction, clips, tracks, timelineTime, activeClipId, pxPerSec, snapEnabled]);
 
   const handleClipContextMenu = (e, clip) => {
     e.preventDefault();

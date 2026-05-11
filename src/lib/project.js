@@ -101,6 +101,21 @@ const normalizeTextClipContent = (content) => {
   if (fontFamily) style.fontFamily = fontFamily;
   if (fontWeight) style.fontWeight = fontWeight;
   if (align && TEXT_ALIGN_VALUES.has(align)) style.align = align;
+  if (Object.prototype.hasOwnProperty.call(safeStyle, "letterSpacing")) {
+    style.letterSpacing = clampNumber(safeStyle.letterSpacing, 0, -10, 50);
+  }
+  if (Object.prototype.hasOwnProperty.call(safeStyle, "lineHeight")) {
+    style.lineHeight = clampNumber(safeStyle.lineHeight, 1.15, 0.5, 3);
+  }
+  if (Object.prototype.hasOwnProperty.call(safeStyle, "shadowOpacity")) {
+    style.shadowOpacity = clampNumber(safeStyle.shadowOpacity, 0, 0, 100);
+  }
+  if (Object.prototype.hasOwnProperty.call(safeStyle, "shadowBlur")) {
+    style.shadowBlur = clampNumber(safeStyle.shadowBlur, 10, 0, 50);
+  }
+  if (Object.prototype.hasOwnProperty.call(safeStyle, "bgOpacity")) {
+    style.bgOpacity = clampNumber(safeStyle.bgOpacity, 0, 0, 100);
+  }
   return {
     text: safeString(safeContent.text),
     style,

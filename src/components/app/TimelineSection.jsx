@@ -67,6 +67,7 @@ export function TimelineSection({
   handleClipContextMenu,
   handleTrimMouseDown,
   handleUpdateTrack,
+  handleTrackResizeMouseDown,
   marqueeBox,
   snapIndicatorTime,
   formatTime,
@@ -235,6 +236,7 @@ export function TimelineSection({
         handleClipContextMenu={handleClipContextMenu}
         handleTrimMouseDown={handleTrimMouseDown}
         handleUpdateTrack={handleUpdateTrack}
+        handleTrackResizeMouseDown={handleTrackResizeMouseDown}
         marqueeBox={marqueeBox}
         snapIndicatorTime={snapIndicatorTime}
         setEditingTrackId={setEditingTrackId}

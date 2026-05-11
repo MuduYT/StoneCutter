@@ -1,6 +1,13 @@
+import { shiftKeyframeMap } from './keyframes.js'
+
 export const SNAP_THRESHOLD_PX = 8
 export const MOVE_THRESHOLD_PX = 3
 export const MIN_CLIP_DURATION = 0.05
+export const DEFAULT_TIMELINE_RULER_HEIGHT = 30
+export const TIMELINE_DIVIDER_HEIGHT = 8
+export const CLIP_VERTICAL_INSET = 4
+export const TRIM_HOTSPOT_WIDTH = 14
+export const TRIM_HOTSPOT_HEIGHT = 22
 
 export const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']
 export const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']
@@ -14,6 +21,162 @@ export const clipDuration = (clip) => {
 }
 
 export const clipEnd = (clip) => clip.startTime + clipDuration(clip)
+
+export const isClipTrackLocked = (clip, tracks = []) => {
+  if (!clip) return false
+  const track = tracks instanceof Map
+    ? tracks.get(clip.trackId)
+    : (tracks || []).find((item) => item?.id === clip.trackId)
+  return Boolean(track?.locked)
+}
+
+export const getTrackHeight = (track, defaultTrackHeight = 80) => {
+  const height = Number(track?.height)
+  return Number.isFinite(height) && height > 0 ? height : defaultTrackHeight
+}
+
+export const buildTrackVerticalBounds = (tracks = [], defaultTrackHeight = 80, trackTopOffset = 30) => {
+  const bounds = new Map()
+  const videoTracks = (tracks || []).filter((t) => t.type === 'video')
+  const audioTracks = (tracks || []).filter((t) => t.type === 'audio')
+
+  let top = trackTopOffset
+  for (const track of videoTracks) {
+    const height = getTrackHeight(track, defaultTrackHeight)
+    bounds.set(track.id, { top, bottom: top + height, height })
+    top += height
+  }
+  top += TIMELINE_DIVIDER_HEIGHT
+  for (const track of audioTracks) {
+    const height = getTrackHeight(track, defaultTrackHeight)
+    bounds.set(track.id, { top, bottom: top + height, height })
+    top += height
+  }
+  return bounds
+}
+
+export const buildTrackLayoutRows = (tracks = [], defaultTrackHeight = 80) =>
+  (tracks || []).map((track) => ({ track, height: getTrackHeight(track, defaultTrackHeight) }))
+
+export const getTimelineClipVisualBounds = (trackBounds, clip, inset = CLIP_VERTICAL_INSET) => {
+  const bounds = trackBounds.get(clip?.trackId)
+  if (!bounds) return null
+  const safeInset = Math.max(0, Math.min(bounds.height / 2, Number(inset) || 0))
+  return {
+    top: bounds.top + safeInset,
+    bottom: bounds.bottom - safeInset,
+    height: Math.max(0, bounds.height - safeInset * 2),
+  }
+}
+
+export const getMarqueeSelectedClipIds = ({
+  clips = [],
+  tracks = [],
+  pxPerSec = 1,
+  rect,
+  additive = false,
+  initialSelection = [],
+  defaultTrackHeight = 80,
+  trackTopOffset = 30,
+}) => {
+  const x1 = Math.min(rect?.x1 ?? 0, rect?.x2 ?? 0)
+  const x2 = Math.max(rect?.x1 ?? 0, rect?.x2 ?? 0)
+  const y1 = Math.min(rect?.y1 ?? 0, rect?.y2 ?? 0)
+  const y2 = Math.max(rect?.y1 ?? 0, rect?.y2 ?? 0)
+  const hits = new Set(additive ? Array.from(initialSelection || []) : [])
+  const trackBounds = buildTrackVerticalBounds(tracks, defaultTrackHeight, trackTopOffset)
+  const pixelsPerSecond = Number(pxPerSec) > 0 ? Number(pxPerSec) : 1
+  for (const clip of clips || []) {
+    const bounds = getTimelineClipVisualBounds(trackBounds, clip)
+    if (!bounds) continue
+    const clipX1 = (Number(clip.startTime) || 0) * pixelsPerSecond
+    const clipX2 = ((Number(clip.startTime) || 0) + clipDuration(clip)) * pixelsPerSecond
+    if (clipX2 > x1 + 1e-3 && clipX1 < x2 - 1e-3 && bounds.bottom > y1 + 1e-3 && bounds.top < y2 - 1e-3) {
+      hits.add(clip.id)
+    }
+  }
+  return hits
+}
+
+export const getMiddlePanScroll = ({
+  startClientX = 0,
+  startClientY = 0,
+  scrollStartLeft = 0,
+  scrollStartTop = 0,
+  clientX = 0,
+  clientY = 0,
+  maxScrollLeft = Number.MAX_SAFE_INTEGER,
+  maxScrollTop = Number.MAX_SAFE_INTEGER,
+}) => ({
+  left: Math.max(0, Math.min(maxScrollLeft, scrollStartLeft - (clientX - startClientX))),
+  top: Math.max(0, Math.min(maxScrollTop, scrollStartTop - (clientY - startClientY))),
+})
+
+export const isTimelineTrimHotspot = ({
+  clientX,
+  clientY,
+  clipRect,
+  side,
+  width = TRIM_HOTSPOT_WIDTH,
+  height = TRIM_HOTSPOT_HEIGHT,
+}) => {
+  if (!clipRect || side !== 'left' && side !== 'right') return false
+  const rectWidth = clipRect.width ?? (clipRect.right - clipRect.left)
+  const rectHeight = clipRect.height ?? (clipRect.bottom - clipRect.top)
+  const hotspotWidth = Math.max(8, Math.min(Number(width) || TRIM_HOTSPOT_WIDTH, rectWidth))
+  const hotspotHeight = Math.max(10, Math.min(Number(height) || TRIM_HOTSPOT_HEIGHT, rectHeight))
+  const withinY = clientY >= clipRect.top && clientY <= clipRect.top + hotspotHeight
+  if (!withinY) return false
+  if (side === 'left') return clientX >= clipRect.left && clientX <= clipRect.left + hotspotWidth
+  return clientX <= clipRect.right && clientX >= clipRect.right - hotspotWidth
+}
+
+export const duplicateClipsAfterSelection = ({ clips = [], clipIds = [], makeId }) => {
+  const ids = clipIds instanceof Set ? [...clipIds] : Array.isArray(clipIds) ? clipIds : [clipIds]
+  const selectedSet = new Set(ids.filter(Boolean))
+  const selected = clips
+    .filter((clip) => selectedSet.has(clip.id))
+    .sort((a, b) => a.startTime - b.startTime || clipEnd(a) - clipEnd(b))
+  if (selected.length === 0 || typeof makeId !== 'function') {
+    return { duplicatedClips: [], duplicatedClipIds: [], idMap: new Map() }
+  }
+
+  const groupStart = Math.min(...selected.map((clip) => clip.startTime))
+  const groupEnd = Math.max(...selected.map((clip) => clipEnd(clip)))
+  let delta = Math.max(MIN_CLIP_DURATION, groupEnd - groupStart)
+  const blockers = clips.filter((clip) => !selectedSet.has(clip.id))
+
+  for (let guard = 0; guard < 1000; guard += 1) {
+    let shift = 0
+    for (const clip of selected) {
+      const nextStart = clip.startTime + delta
+      const nextEnd = nextStart + clipDuration(clip)
+      for (const blocker of blockers) {
+        if (blocker.trackId !== clip.trackId) continue
+        const blockerStart = blocker.startTime
+        const blockerEnd = clipEnd(blocker)
+        if (nextEnd > blockerStart + TIMELINE_EPSILON && nextStart < blockerEnd - TIMELINE_EPSILON) {
+          shift = Math.max(shift, blockerEnd - nextStart)
+        }
+      }
+    }
+    if (shift <= TIMELINE_EPSILON) break
+    delta += shift
+  }
+
+  const idMap = new Map()
+  const duplicatedClips = selected.map((clip) => {
+    const id = makeId()
+    idMap.set(clip.id, id)
+    return {
+      ...clip,
+      id,
+      startTime: clip.startTime + delta,
+      keyframes: shiftKeyframeMap(clip.keyframes, delta),
+    }
+  })
+  return { duplicatedClips, duplicatedClipIds: duplicatedClips.map((clip) => clip.id), idMap, delta }
+}
 
 let _linkCounter = 0
 export const nextLinkGroupId = () => `lg-${++_linkCounter}`
@@ -432,6 +595,14 @@ export const applyGroupTrimRight = (clips, primaryId, { outPoint }) => {
     const clampedOut = Math.max(c.inPoint + MIN_CLIP_DURATION, Math.min(c.sourceDuration || outPoint, outPoint))
     return { ...c, outPoint: clampedOut }
   })
+}
+
+/** Assign a shared linkGroupId to every clip whose id is in `clipIds`. Pure. */
+export const linkClipGroup = (clips, clipIds, groupIdFactory = nextLinkGroupId) => {
+  const ids = clipIds instanceof Set ? clipIds : new Set(clipIds || [])
+  if (ids.size < 2) return clips
+  const groupId = groupIdFactory()
+  return clips.map((c) => (ids.has(c.id) ? { ...c, linkGroupId: groupId } : c))
 }
 
 /** Remove linkGroupId from all clips in the group of `primaryId`. Pure. */

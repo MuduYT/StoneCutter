@@ -37,13 +37,17 @@ export function AppOverlays({
   onUpdateClip,
   onToggleKeyframe,
   onToggleGroupKeyframe,
+  onUpdateKeyframeInterpolation,
   onJumpToKeyframeTime,
+  selectedKeyframe,
   splitAtPlayhead,
   handleContextMenuDuplicate,
   restoreTrim,
   handleContextMenuUnlink,
+  handleContextMenuLink,
   handleContextMenuDelete,
   setContextMenu,
+  selectedClipIds,
   Icon,
 }) {
   return (
@@ -291,7 +295,9 @@ export function AppOverlays({
           onUpdateClip={onUpdateClip}
           onToggleKeyframe={onToggleKeyframe}
           onToggleGroupKeyframe={onToggleGroupKeyframe}
+          onUpdateKeyframeInterpolation={onUpdateKeyframeInterpolation}
           onJumpToKeyframeTime={onJumpToKeyframeTime}
+          selectedKeyframe={selectedKeyframe}
           selectedClipCount={selectedClipCount}
           timelineTime={timelineTime}
           tracksById={tracksById}
@@ -346,12 +352,21 @@ export function AppOverlays({
               >
                 <Icon.Undo /> Trim zuruecksetzen
               </button>
+              {selectedClipIds && selectedClipIds.size >= 2 && !clip.linkGroupId && (
+                <button
+                  className="cm-item"
+                  onClick={() => handleContextMenuLink(selectedClipIds)}
+                >
+                  ⛓ Clips verknüpfen{" "}
+                  <span className="cm-shortcut">Strg+Shift+L</span>
+                </button>
+              )}
               {clip.linkGroupId && (
                 <button
                   className="cm-item"
                   onClick={() => handleContextMenuUnlink(clip.id)}
                 >
-                  Link aufheben{" "}
+                  Verknüpfung lösen{" "}
                   <span className="cm-shortcut">Strg+Shift+L</span>
                 </button>
               )}

@@ -120,6 +120,35 @@ test("text clips round-trip with normalized content while legacy clips become me
   assert.equal("content" in hydrated.clips[1], false);
 });
 
+test("text clips preserve custom CSS font-family values", () => {
+  const state = createEmptyProjectState("Custom Font");
+  state.clips = [
+    {
+      id: "text-custom-font",
+      name: "Title",
+      inPoint: 0,
+      outPoint: 4,
+      startTime: 0,
+      trackMode: "video",
+      kind: "text",
+      content: {
+        text: "Hello",
+        style: {
+          fontSize: 48,
+          color: "#ffffff",
+          fontFamily: "Brand Font, Arial, sans-serif",
+        },
+      },
+    },
+  ];
+
+  const doc = buildProjectDocument(state);
+  const hydrated = hydrateProjectState(doc);
+
+  assert.equal(doc.timeline.clips[0].content.style.fontFamily, "Brand Font, Arial, sans-serif");
+  assert.equal(hydrated.clips[0].content.style.fontFamily, "Brand Font, Arial, sans-serif");
+});
+
 test("project documents serialize and hydrate back to the same document shape", () => {
   const state = createEmptyProjectState("Round Trip");
   state.videos = [

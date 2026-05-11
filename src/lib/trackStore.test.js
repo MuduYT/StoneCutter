@@ -2,10 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   DEFAULT_TRACK_HEIGHT,
+  TRACK_DROP_ABOVE,
+  TRACK_DROP_BELOW,
   applyTrackMovePlan,
   addTrack,
   createDefaultTracks,
   createAutoTrackForMove,
+  findPreferredVideoTrackForDrop,
   getCollisionFreeTrackForClip,
   getCompatibleTrackMoveTarget,
   getTrackIdAtTimelineY,
@@ -27,32 +30,36 @@ test('adds video tracks before audio tracks and audio tracks at the end', () => 
 })
 
 test('maps timeline Y coordinates to tracks and auto-track drop zones', () => {
+  // Separated layout: v1→top 0-80 | divider 80-88 | a1→88-168
+  // relativeY = clientY - containerTop(100) + scrollTop(0) - rulerHeight(30) = clientY - 130
   const tracks = [
-    { id: 'track-v1', height: 80 },
-    { id: 'track-a1', height: 80 },
+    { id: 'track-v1', type: 'video', height: 80 },
+    { id: 'track-a1', type: 'audio', height: 80 },
   ]
   const base = { containerTop: 100, scrollTop: 0, rulerHeight: 30, tracks }
 
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 125 }), '__above__')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 130 }), '__above__')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 170 }), 'track-v1')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 230 }), 'track-a1')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 291 }), '__below__')
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 125 }), '__above__')  // relativeY=-5
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 130 }), '__above__')  // relativeY=0 < 18
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 170 }), 'track-v1')   // relativeY=40 in v1
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 230 }), 'track-a1')   // relativeY=100 in a1
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 299 }), '__below__')  // relativeY=169 > a1 end(168)
 })
 
 test('maps timeline Y coordinates correctly while vertically scrolled', () => {
+  // Separated layout: v1→0-80 | divider 80-88 | a1→88-168 | a2→168-248
+  // relativeY = clientY - containerTop(100) + scrollTop(40) - rulerHeight(30) = clientY - 90
   const tracks = [
-    { id: 'track-v1', height: 80 },
-    { id: 'track-a1', height: 80 },
-    { id: 'track-a2', height: 80 },
+    { id: 'track-v1', type: 'video', height: 80 },
+    { id: 'track-a1', type: 'audio', height: 80 },
+    { id: 'track-a2', type: 'audio', height: 80 },
   ]
   const base = { containerTop: 100, scrollTop: 40, rulerHeight: 30, tracks }
 
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 100 }), '__above__')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 110 }), 'track-v1')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 170 }), 'track-a1')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 250 }), 'track-a2')
-  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 335 }), '__below__')
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 100 }), '__above__')  // relativeY=10 < 18
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 110 }), 'track-v1')   // relativeY=20 in v1
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 178 }), 'track-a1')   // relativeY=88 first of a1
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 258 }), 'track-a2')   // relativeY=168 first of a2
+  assert.equal(getTrackIdAtTimelineY({ ...base, clientY: 340 }), '__below__')  // relativeY=250 > a2 end(248)
 })
 
 test('shifts track ids only within the same track type', () => {
@@ -296,4 +303,35 @@ test('plans a new same-type track when every linked partner target track is occu
   })
 
   assert.deepEqual(placement, { trackId: null, autoTrack: { type: 'audio', edge: 'end' } })
+})
+
+test('findPreferredVideoTrackForDrop returns first unlocked video track for below/null targets', () => {
+  const tracks = [
+    { id: 'v1', type: 'video', locked: false },
+    { id: 'v2', type: 'video', locked: false },
+    { id: 'a1', type: 'audio', locked: false },
+  ]
+  assert.equal(findPreferredVideoTrackForDrop(tracks, null)?.id, 'v1')
+  assert.equal(findPreferredVideoTrackForDrop(tracks, TRACK_DROP_BELOW)?.id, 'v1')
+})
+
+test('findPreferredVideoTrackForDrop returns null for TRACK_DROP_ABOVE', () => {
+  const tracks = [
+    { id: 'v1', type: 'video', locked: false },
+  ]
+  assert.equal(findPreferredVideoTrackForDrop(tracks, TRACK_DROP_ABOVE), null)
+})
+
+test('findPreferredVideoTrackForDrop skips locked tracks and returns null when none available', () => {
+  const locked = [
+    { id: 'v1', type: 'video', locked: true },
+    { id: 'a1', type: 'audio', locked: false },
+  ]
+  assert.equal(findPreferredVideoTrackForDrop(locked, null), null)
+
+  const mixed = [
+    { id: 'v1', type: 'video', locked: true },
+    { id: 'v2', type: 'video', locked: false },
+  ]
+  assert.equal(findPreferredVideoTrackForDrop(mixed, null)?.id, 'v2')
 })

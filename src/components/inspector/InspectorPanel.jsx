@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect } from "react";
 import {
   InspectorCollapsible,
   InspectorDragger,
@@ -6,6 +7,7 @@ import { KeyframeStopwatch } from "./KeyframeStopwatch.jsx";
 import {
   getClipPropertyTrack,
   hasKeyframeAt,
+  KEYFRAME_INTERPOLATIONS,
   sampleClipProperty,
 } from "../../lib/keyframes.js";
 
@@ -38,6 +40,39 @@ function InspectorTabs({ inspectorTab, onTabChange }) {
   );
 }
 
+const TEXT_FONT_OPTIONS = [
+  ["Arial", "Arial, Helvetica, sans-serif"],
+  ["Helvetica", "Helvetica, Arial, sans-serif"],
+  ["Verdana", "Verdana, Geneva, sans-serif"],
+  ["Tahoma", "Tahoma, Geneva, sans-serif"],
+  ["Trebuchet MS", "'Trebuchet MS', Arial, sans-serif"],
+  ["Segoe UI", "'Segoe UI', Arial, sans-serif"],
+  ["Inter", "Inter, 'Segoe UI', Arial, sans-serif"],
+  ["Roboto", "Roboto, Arial, sans-serif"],
+  ["Open Sans", "'Open Sans', Arial, sans-serif"],
+  ["Montserrat", "Montserrat, Arial, sans-serif"],
+  ["Poppins", "Poppins, Arial, sans-serif"],
+  ["Lato", "Lato, Arial, sans-serif"],
+  ["Source Sans Pro", "'Source Sans Pro', Arial, sans-serif"],
+  ["Noto Sans", "'Noto Sans', Arial, sans-serif"],
+  ["Times New Roman", "'Times New Roman', Times, serif"],
+  ["Georgia", "Georgia, 'Times New Roman', serif"],
+  ["Garamond", "Garamond, Georgia, serif"],
+  ["Cambria", "Cambria, Georgia, serif"],
+  ["Baskerville", "Baskerville, Georgia, serif"],
+  ["Courier New", "'Courier New', Courier, monospace"],
+  ["Consolas", "Consolas, 'Courier New', monospace"],
+  ["Monaco", "Monaco, Consolas, monospace"],
+  ["Fira Code", "'Fira Code', Consolas, monospace"],
+  ["Impact", "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif"],
+  ["Arial Black", "'Arial Black', Arial, sans-serif"],
+  ["Bebas Neue", "'Bebas Neue', Impact, sans-serif"],
+  ["Oswald", "Oswald, Arial, sans-serif"],
+  ["Playfair Display", "'Playfair Display', Georgia, serif"],
+  ["Merriweather", "Merriweather, Georgia, serif"],
+  ["Comic Sans MS", "'Comic Sans MS', 'Comic Sans', cursive"],
+].map(([label, value]) => ({ label, value }));
+
 const KEYFRAMABLE_KEYS = new Set([
   "positionX",
   "positionY",
@@ -53,7 +88,79 @@ const KEYFRAMABLE_KEYS = new Set([
   "speed",
   "volume",
   "pan",
+  "fontSize",
+  "letterSpacing",
+  "lineHeight",
+  "shadowOpacity",
+  "shadowBlur",
+  "bgOpacity",
 ]);
+
+function FontPreviewSelect({ value, options, disabled, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const selected = options.find((o) => o.value === value) || { label: value, value };
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  return (
+    <div
+      ref={ref}
+      className={`font-preview-select inspector-field${disabled ? " disabled" : ""}`}
+      style={{ position: "relative", cursor: disabled ? "not-allowed" : "pointer", userSelect: "none" }}
+    >
+      <div
+        className="font-preview-trigger"
+        style={{ fontFamily: selected.value, padding: "2px 4px", display: "flex", alignItems: "center", justifyContent: "space-between" }}
+        onClick={() => { if (!disabled) setOpen((v) => !v); }}
+      >
+        <span>{selected.label}</span>
+        <span style={{ fontSize: 9, opacity: 0.6, marginLeft: 4 }}>▾</span>
+      </div>
+      {open && (
+        <div
+          className="font-preview-dropdown"
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            zIndex: 999,
+            background: "var(--bg-elevated, #1c1638)",
+            border: "1px solid var(--border-strong, rgba(124,58,237,0.4))",
+            borderRadius: 6,
+            maxHeight: 240,
+            overflowY: "auto",
+          }}
+        >
+          {options.map((opt) => (
+            <div
+              key={opt.value}
+              className={`font-preview-option${opt.value === value ? " selected" : ""}`}
+              style={{
+                fontFamily: opt.value,
+                padding: "6px 10px",
+                cursor: "pointer",
+                background: opt.value === value ? "var(--bg-hover, #2a1f4a)" : "transparent",
+                fontSize: 13,
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(opt.value);
+                setOpen(false);
+              }}
+            >
+              {opt.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const groupHasAnyKeyframe = (clip, groupKeys, time) => {
   if (!clip) return false;
@@ -76,7 +183,9 @@ export function InspectorPanel({
   onUpdateClip,
   onToggleKeyframe,
   onToggleGroupKeyframe,
+  onUpdateKeyframeInterpolation,
   onJumpToKeyframeTime,
+  selectedKeyframe,
   selectedClipCount = 1,
   timelineTime = 0,
   tracksById,
@@ -106,7 +215,10 @@ export function InspectorPanel({
 
   const isMulti = selectedClipCount > 1;
   const isTextClip = activeClip?.kind === "text";
-  const keyframesDisabled = isTextClip;
+  const inspectorLocked = [activeClip, vidClip, audClip]
+    .filter(Boolean)
+    .some((clip) => Boolean(tracksById.get(clip.trackId)?.locked));
+  const keyframesDisabled = isMulti || inspectorLocked;
 
   // Sampled values for video clip (live-update as the playhead moves).
   const vidValue = (key) =>
@@ -118,7 +230,6 @@ export function InspectorPanel({
 
   const renderStopwatch = (clip, key) => {
     if (!clip || !KEYFRAMABLE_KEYS.has(key)) return null;
-    if (clip.kind === "text") return null;
     const track = getClipPropertyTrack(clip, key);
     const active = hasKeyframeAt(track, timelineTime);
     return (
@@ -139,7 +250,6 @@ export function InspectorPanel({
 
   const renderGroupStopwatch = (clip, groupId, groupKeys) => {
     if (!clip) return null;
-    if (clip.kind === "text") return null;
     const active = groupHasAnyKeyframe(clip, groupKeys, timelineTime);
     return (
       <KeyframeStopwatch
@@ -160,9 +270,11 @@ export function InspectorPanel({
       type="button"
       className="insp-reset-mini"
       title={title}
+      disabled={inspectorLocked}
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (inspectorLocked) return;
         onClick?.();
       }}
     >
@@ -191,12 +303,19 @@ export function InspectorPanel({
     }
     return [...frames.values()].sort((a, b) => a - b);
   };
-  const keyframeTimes = collectKeyframeTimes(vidClip, audClip);
+  const keyframeTimes = collectKeyframeTimes(vidClip, audClip, isTextClip ? activeClip : null);
+  const selectedKeyframeTrack =
+    selectedKeyframe?.clipId === activeClipId
+      ? getClipPropertyTrack(activeClip, selectedKeyframe.propertyKey)
+      : [];
+  const selectedKeyframeItem =
+    selectedKeyframeTrack.find((kf) => kf.id === selectedKeyframe?.kfId) || null;
   const scaleLocked = vidClip ? vidClip.scaleLocked !== false : true;
   const scaleBase = vidValue("scale") ?? 100;
   const scaleXValue = vidValue("scaleX") ?? scaleBase;
   const scaleYValue = vidValue("scaleY") ?? scaleBase;
   const updateScalePair = (nextScaleX, nextScaleY, nextLocked = scaleLocked) => {
+    if (inspectorLocked) return;
     const nextScale = Math.round((Number(nextScaleX) + Number(nextScaleY)) / 2);
     onUpdateClip?.(vidClip.id, {
       scaleX: nextScaleX,
@@ -220,7 +339,14 @@ export function InspectorPanel({
     onJumpToKeyframeTime?.(next);
   };
   const textStyle = activeClip?.content?.style || {};
+  const currentFontFamily = textStyle.fontFamily || "Inter, 'Segoe UI', Arial, sans-serif";
+  const fontOptions = TEXT_FONT_OPTIONS.some((option) => option.value === currentFontFamily)
+    ? TEXT_FONT_OPTIONS
+    : [{ label: "Custom (" + currentFontFamily + ")", value: currentFontFamily }, ...TEXT_FONT_OPTIONS];
+  const textValue = (key, fallback) =>
+    isTextClip ? sampleClipProperty(activeClip, key, timelineTime) ?? fallback : fallback;
   const updateTextContent = (text) => {
+    if (inspectorLocked) return;
     onUpdateClip?.(activeClip.id, {
       name: text || "Text",
       content: {
@@ -231,6 +357,7 @@ export function InspectorPanel({
     });
   };
   const updateTextStyle = (patch) => {
+    if (inspectorLocked) return;
     onUpdateClip?.(activeClip.id, {
       content: {
         ...(activeClip.content || {}),
@@ -238,9 +365,11 @@ export function InspectorPanel({
         style: {
           fontSize: 48,
           color: "#ffffff",
-          fontFamily: "Inter",
+          fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
           fontWeight: "600",
           align: "center",
+          shadowOpacity: 0,
+          shadowBlur: 0,
           ...textStyle,
           ...patch,
         },
@@ -265,12 +394,34 @@ export function InspectorPanel({
           )}
         </div>
         <div className="inspector-kf-nav">
+          {selectedKeyframeItem && (
+            <select
+              className="inspector-keyframe-interpolation"
+              value={selectedKeyframeItem.interpolation || "linear"}
+              title="Keyframe-Interpolation"
+              disabled={inspectorLocked}
+              onChange={(event) =>
+                onUpdateKeyframeInterpolation?.(
+                  selectedKeyframe.clipId,
+                  selectedKeyframe.propertyKey,
+                  selectedKeyframe.kfId,
+                  event.target.value,
+                )
+              }
+            >
+              {KEYFRAME_INTERPOLATIONS.map((mode) => (
+                <option key={mode} value={mode}>
+                  {mode}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             className="insp-reset-mini"
             title="Vorheriger Keyframe"
             onClick={() => jumpToKeyframe(-1)}
-            disabled={keyframeTimes.length === 0}
+            disabled={keyframeTimes.length === 0 || inspectorLocked}
           >
             <Icon.StepBack />
           </button>
@@ -279,7 +430,7 @@ export function InspectorPanel({
             className="insp-reset-mini"
             title="Naechster Keyframe"
             onClick={() => jumpToKeyframe(1)}
-            disabled={keyframeTimes.length === 0}
+            disabled={keyframeTimes.length === 0 || inspectorLocked}
           >
             <Icon.StepFwd />
           </button>
@@ -289,6 +440,9 @@ export function InspectorPanel({
         </div>
       </div>
       <div className="inspector-body">
+        {inspectorLocked && (
+          <div className="inspector-locked-banner">Spur gesperrt - Bearbeitung deaktiviert</div>
+        )}
         {inspectorTab !== "inspector" ? (
           <InspectorPlaceholder inspectorTab={inspectorTab} />
         ) : (
@@ -302,16 +456,42 @@ export function InspectorPanel({
                     type="text"
                     value={activeClip.content?.text ?? activeClip.name ?? "Text"}
                     onChange={(event) => updateTextContent(event.target.value)}
+                    disabled={inspectorLocked}
                   />
                 </div>
                 <InspectorDragger
                   label="Font Size"
-                  value={Number(textStyle.fontSize) || 48}
+                  disabled={inspectorLocked}
+                  value={textValue("fontSize", 48)}
                   onChange={(value) => updateTextStyle({ fontSize: value })}
                   min={8}
                   max={240}
                   step={1}
                   unit="px"
+                  stopwatch={renderStopwatch(activeClip, "fontSize")}
+                />
+                <InspectorDragger
+                  label="Tracking"
+                  disabled={inspectorLocked}
+                  value={textValue("letterSpacing", 0)}
+                  onChange={(value) => updateTextStyle({ letterSpacing: value })}
+                  min={-10}
+                  max={50}
+                  step={0.5}
+                  unit="px"
+                  decimals={1}
+                  stopwatch={renderStopwatch(activeClip, "letterSpacing")}
+                />
+                <InspectorDragger
+                  label="Line Spacing"
+                  disabled={inspectorLocked}
+                  value={textValue("lineHeight", 1.15)}
+                  onChange={(value) => updateTextStyle({ lineHeight: value })}
+                  min={0.5}
+                  max={3}
+                  step={0.05}
+                  decimals={2}
+                  stopwatch={renderStopwatch(activeClip, "lineHeight")}
                 />
                 <div className="idf-row">
                   <span className="idf-label">Color</span>
@@ -322,17 +502,51 @@ export function InspectorPanel({
                     onChange={(event) =>
                       updateTextStyle({ color: event.target.value })
                     }
+                    disabled={inspectorLocked}
                   />
                 </div>
+                <div className="inspector-divider" />
+                <div className="inspector-section-subtitle">Appearance</div>
+                <InspectorDragger
+                  label="Shadow Opacity"
+                  disabled={inspectorLocked}
+                  value={textValue("shadowOpacity", 0)}
+                  onChange={(value) => updateTextStyle({ shadowOpacity: value })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  unit="%"
+                  stopwatch={renderStopwatch(activeClip, "shadowOpacity")}
+                />
+                <InspectorDragger
+                  label="Shadow Blur"
+                  disabled={inspectorLocked}
+                  value={textValue("shadowBlur", 0)}
+                  onChange={(value) => updateTextStyle({ shadowBlur: value })}
+                  min={0}
+                  max={50}
+                  step={1}
+                  unit="px"
+                  stopwatch={renderStopwatch(activeClip, "shadowBlur")}
+                />
+                <InspectorDragger
+                  label="Background"
+                  disabled={inspectorLocked}
+                  value={textValue("bgOpacity", 0)}
+                  onChange={(value) => updateTextStyle({ bgOpacity: value })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  unit="%"
+                  stopwatch={renderStopwatch(activeClip, "bgOpacity")}
+                />
                 <div className="idf-row">
-                  <span className="idf-label">Font</span>
-                  <input
-                    className="inspector-field"
-                    type="text"
-                    value={textStyle.fontFamily || "Inter"}
-                    onChange={(event) =>
-                      updateTextStyle({ fontFamily: event.target.value })
-                    }
+                  <span className="idf-label">Schrift</span>
+                  <FontPreviewSelect
+                    value={currentFontFamily}
+                    options={fontOptions}
+                    disabled={inspectorLocked}
+                    onChange={(value) => updateTextStyle({ fontFamily: value })}
                   />
                 </div>
                 <div className="idf-row">
@@ -343,6 +557,7 @@ export function InspectorPanel({
                     onChange={(event) =>
                       updateTextStyle({ fontWeight: event.target.value })
                     }
+                    disabled={inspectorLocked}
                   >
                     <option value="400">Regular</option>
                     <option value="500">Medium</option>
@@ -359,6 +574,7 @@ export function InspectorPanel({
                     onChange={(event) =>
                       updateTextStyle({ align: event.target.value })
                     }
+                    disabled={inspectorLocked}
                   >
                     <option value="left">Left</option>
                     <option value="center">Center</option>
@@ -448,7 +664,7 @@ export function InspectorPanel({
                   unit="%"
                   dragResistance={1.1}
                   stopwatch={renderStopwatch(vidClip, "scaleY")}
-                  disabled={scaleLocked}
+                  disabled={inspectorLocked || scaleLocked}
                   resetButton={renderResetButton("Scale Y zuruecksetzen", () =>
                     updateScalePair(scaleLocked ? 100 : scaleXValue, 100),
                   )}

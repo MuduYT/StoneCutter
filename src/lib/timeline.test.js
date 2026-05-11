@@ -13,7 +13,9 @@ import {
   expandWithLinkedPartners,
   findGapAtTime,
   findTimelineSpaceAtTime,
+  getMarqueeSelectedClipIds,
   getLinkedClipIds,
+  isClipTrackLocked,
   getMediaType,
   isAudioOnlyMedia,
   maxEndForTrimRight,
@@ -365,4 +367,55 @@ test('applyGroupSplit splits every linked clip at the same timeline time', () =>
   // right halves share a new linkGroupId
   assert.equal(vRight.linkGroupId, aRight.linkGroupId)
   assert.notEqual(vRight.linkGroupId, 'lg-1')
+})
+
+
+test('identifies clips on locked tracks for interaction guards', () => {
+  const tracks = [
+    { id: 'v1', type: 'video', locked: true, height: 80 },
+    { id: 'v2', type: 'video', locked: false, height: 80 },
+  ]
+  assert.equal(isClipTrackLocked({ id: 'a', trackId: 'v1' }, tracks), true)
+  assert.equal(isClipTrackLocked({ id: 'b', trackId: 'v2' }, tracks), false)
+  assert.equal(isClipTrackLocked({ id: 'c', trackId: 'missing' }, tracks), false)
+})
+
+test('marquee selection respects track vertical bounds and track heights', () => {
+  const tracks = [
+    { id: 'v1', type: 'video', height: 100 },
+    { id: 'v2', type: 'video', height: 40 },
+    { id: 'a1', type: 'audio', height: 120 },
+  ]
+  const clips = [
+    clip('top', 1, 2, { trackId: 'v1' }),
+    clip('middle', 1, 2, { trackId: 'v2' }),
+    clip('bottom', 1, 2, { trackId: 'a1' }),
+  ]
+  const selected = getMarqueeSelectedClipIds({
+    clips,
+    tracks,
+    pxPerSec: 50,
+    rect: { x1: 40, x2: 180, y1: 132, y2: 168 },
+    trackTopOffset: 30,
+  })
+  assert.deepEqual([...selected], ['middle'])
+})
+
+test('marquee selection ignores clips outside intersecting vertical bounds', () => {
+  const tracks = [
+    { id: 'v1', type: 'video', height: 80 },
+    { id: 'v2', type: 'video', height: 80 },
+  ]
+  const clips = [
+    clip('in-track', 0, 2, { trackId: 'v1' }),
+    clip('other-track', 0, 2, { trackId: 'v2' }),
+  ]
+  const selected = getMarqueeSelectedClipIds({
+    clips,
+    tracks,
+    pxPerSec: 100,
+    rect: { x1: 0, x2: 250, y1: 30, y2: 109 },
+    trackTopOffset: 30,
+  })
+  assert.deepEqual([...selected], ['in-track'])
 })

@@ -15,6 +15,7 @@ import {
   DEFAULT_TRACK_HEIGHT,
   TRACK_DROP_ABOVE,
   TRACK_DROP_BELOW,
+  findPreferredVideoTrackForDrop,
 } from "../lib/trackStore.js";
 import { MediaAssetService } from "../lib/services/MediaAssetService.js";
 
@@ -79,6 +80,11 @@ const createTextClip = ({ id, trackId, startTime }) => ({
       fontFamily: "Inter",
       fontWeight: "600",
       align: "center",
+      letterSpacing: 0,
+      lineHeight: 1.15,
+      shadowOpacity: 0,
+      shadowBlur: 10,
+      bgOpacity: 0,
     },
   },
 });
@@ -279,9 +285,13 @@ export function useTimelineDrop({
             ? tracks.find((t) => t.id === targetTrackId) || null
             : null;
         const start = Math.max(0, dropTime);
+        const previewTrackId =
+          targetTrack?.type === "video"
+            ? targetTrack.id
+            : findPreferredVideoTrackForDrop(tracks, targetTrackId)?.id ?? null;
         const textPreview = createTextClip({
           id: "__text_preview__",
-          trackId: targetTrack?.type === "video" ? targetTrack.id : null,
+          trackId: previewTrackId,
           startTime: start,
         });
         setImportDragInfo({
@@ -477,13 +487,18 @@ export function useTimelineDrop({
           dropTargetId === TRACK_DROP_BELOW ||
           !targetTrack
         ) {
-          const created = createTimelineTrack(
-            tracks,
-            "video",
-            getDropEdge(dropTargetId),
-          );
-          targetTrack = created.track;
-          nextTracksForAdd = created.tracks;
+          const preferred = findPreferredVideoTrackForDrop(tracks, dropTargetId);
+          if (preferred) {
+            targetTrack = preferred;
+          } else {
+            const created = createTimelineTrack(
+              tracks,
+              "video",
+              getDropEdge(dropTargetId),
+            );
+            targetTrack = created.track;
+            nextTracksForAdd = created.tracks;
+          }
         }
         const textClipId = nextId("clip");
         const trackClips = clips.filter((clip) => clip.trackId === targetTrack.id);

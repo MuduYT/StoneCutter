@@ -55,6 +55,7 @@ export function useKeyboardShortcuts({
     const onKey = (e) => {
       const tag = (e.target?.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.target?.isContentEditable) return;
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
@@ -219,6 +220,12 @@ export function useKeyboardShortcuts({
         setSelectedClipIds(new Set());
         setSelectedGap(null);
         setSelectedKeyframe(null);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        if (clips.length > 0) {
+          setSelectedClipIds(new Set(clips.map((c) => c.id)));
+          setActiveClipId(clips[clips.length - 1].id);
+        }
       } else if (
         (e.ctrlKey || e.metaKey) &&
         e.key.toLowerCase() === "z" &&

@@ -112,9 +112,11 @@ const DEFAULT_TEXT_CLIP_CONTENT = {
   style: {
     fontSize: 48,
     color: "#ffffff",
-    fontFamily: "Inter",
+    fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
     fontWeight: "600",
     align: "center",
+    shadowOpacity: 0,
+    shadowBlur: 0,
   },
 }
 
@@ -141,6 +143,20 @@ const normalizeTextContent = (content) => {
   }
   if (align && TEXT_ALIGN_VALUES.has(align)) {
     out.style.align = align
+  }
+  const numericStyle = [
+    ["letterSpacing", 0, -10, 50],
+    ["lineHeight", 1.15, 0.5, 3],
+    ["shadowOpacity", 0, 0, 100],
+    ["shadowBlur", 10, 0, 50],
+    ["bgOpacity", 0, 0, 100],
+  ]
+  for (const [key, fallback, min, max] of numericStyle) {
+    if (!Object.prototype.hasOwnProperty.call(safeStyle, key)) continue
+    const value = Number(safeStyle[key])
+    out.style[key] = Number.isFinite(value)
+      ? Math.max(min, Math.min(max, value))
+      : fallback
   }
   return out
 }

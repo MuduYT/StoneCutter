@@ -2,7 +2,7 @@ export type EngineId = string;
 
 export type EngineTrackType = "video" | "audio";
 export type EngineTrackMode = "video" | "audio" | "av";
-export type EngineInterpolation = "linear";
+export type EngineInterpolation = "linear" | "ease-in" | "ease-out" | "ease-in-out" | "hold";
 export type EngineClipKind = "media" | "text";
 export type EngineTextAlign = "left" | "center" | "right";
 
@@ -31,6 +31,11 @@ export interface EngineTextClipStyle {
   fontFamily?: string;
   fontWeight?: string;
   align?: EngineTextAlign;
+  letterSpacing?: number;
+  lineHeight?: number;
+  shadowOpacity?: number;
+  shadowBlur?: number;
+  bgOpacity?: number;
 }
 
 export interface EngineTextClipContent {
@@ -256,4 +261,3 @@ export interface EngineApplyResult {
   events: EngineEvent[];
   commandId?: string;
 }
-

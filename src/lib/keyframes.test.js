@@ -62,6 +62,17 @@ test("sampleProperty linearly interpolates between bracketing keyframes", () => 
   assert.equal(sampleProperty(track, 2.5, -1), 75);
 });
 
+test("sampleProperty supports easing and hold interpolation modes", () => {
+  const easeIn = [buildKeyframe(0, 0), { ...buildKeyframe(1, 100), interpolation: "ease-in" }];
+  const easeOut = [buildKeyframe(0, 0), { ...buildKeyframe(1, 100), interpolation: "ease-out" }];
+  const easeInOut = [buildKeyframe(0, 0), { ...buildKeyframe(1, 100), interpolation: "ease-in-out" }];
+  const hold = [buildKeyframe(0, 0), { ...buildKeyframe(1, 100), interpolation: "hold" }];
+  assert.equal(sampleProperty(easeIn, 0.5, -1), 12.5);
+  assert.equal(sampleProperty(easeOut, 0.5, -1), 87.5);
+  assert.equal(sampleProperty(easeInOut, 0.5, -1), 50);
+  assert.equal(sampleProperty(hold, 0.5, -1), 0);
+});
+
 test("addOrUpdateKeyframe inserts and replaces in-place at the same frame", () => {
   let track = addOrUpdateKeyframe([], { time: 1, value: 10 });
   track = addOrUpdateKeyframe(track, { time: 0, value: 0 });
@@ -128,6 +139,20 @@ test("resolveAnimatedClip swaps animated values in a shallow clone", () => {
   assert.notEqual(sampled, clip);
   assert.equal(sampled.positionX, 50);
   assert.equal(sampled.opacity, 100);
+});
+
+test("resolveAnimatedClip samples text style keyframes into content.style", () => {
+  const clip = {
+    id: "text-1",
+    kind: "text",
+    content: { text: "Hallo", style: { fontSize: 48 } },
+    keyframes: {
+      fontSize: [buildKeyframe(0, 48), buildKeyframe(1, 96)],
+    },
+  };
+  const sampled = resolveAnimatedClip(clip, 0.5);
+  assert.equal(sampled.content.style.fontSize, 72);
+  assert.equal(sampled.content.text, "Hallo");
 });
 
 test("resolveAnimatedClip is a no-op when the clip has no keyframes", () => {

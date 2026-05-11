@@ -37,6 +37,7 @@ export function PlayerStage({
   perfStats,
   previewTargetClipId,
   onPreviewClipMouseDown,
+  onPreviewTextEditCommit,
   interaction,
   previewSnapGuides,
   timelinePreviewRef,
@@ -44,11 +45,17 @@ export function PlayerStage({
   formatTC,
   Icon,
   timelineVisualRefs,
+  tracksById,
 }) {
   const [previewChromeHover, setPreviewChromeHover] = useState(false);
+  const [editingTextClipId, setEditingTextClipId] = useState(null);
+  const [editingTextValue, setEditingTextValue] = useState("");
+  const editingTextRef = useRef(null);
+  const editingTextClipIdRef = useRef(null);
   const transformChromeActive =
     previewChromeHover || interaction?.type === "preview-transform";
   const prevQualityRef = useRef(settings.previewQuality);
+  const isPreviewClipLocked = (clip) => Boolean(clip && tracksById?.get?.(clip.trackId)?.locked);
   const getPreviewTransform = (clip) => {
     const scaleBase = clip.scale ?? 100;
     const scaleXValue = clip.scaleX ?? scaleBase;
@@ -67,15 +74,41 @@ export function PlayerStage({
       color: typeof style.color === "string" && style.color ? style.color : "#ffffff",
       fontFamily: typeof style.fontFamily === "string" && style.fontFamily
         ? style.fontFamily
-        : "Inter",
+        : "Inter, 'Segoe UI', Arial, sans-serif",
       fontSize: `${Number.isFinite(fontSize) ? Math.max(1, fontSize) : 48}px`,
       fontWeight: typeof style.fontWeight === "string" && style.fontWeight
         ? style.fontWeight
         : "600",
+      letterSpacing: `${Number.isFinite(Number(style.letterSpacing)) ? Number(style.letterSpacing) : 0}px`,
+      lineHeight: Number.isFinite(Number(style.lineHeight)) ? Number(style.lineHeight) : 1.15,
       textAlign: align,
       justifySelf:
         align === "left" ? "start" : align === "right" ? "end" : "center",
+      textShadow:
+        Number(style.shadowOpacity) > 0
+          ? `0 4px ${Number(style.shadowBlur ?? 10)}px rgba(0,0,0,${Math.min(1, Math.max(0, Number(style.shadowOpacity) / 100))})`
+          : undefined,
+      backgroundColor:
+        Number(style.bgOpacity) > 0
+          ? `rgba(0,0,0,${Math.min(1, Math.max(0, Number(style.bgOpacity) / 100))})`
+          : undefined,
     };
+  };
+  const beginTextEdit = (event, clip) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isPreviewClipLocked(clip)) return;
+    editingTextClipIdRef.current = clip.id;
+    setEditingTextClipId(clip.id);
+    setEditingTextValue(clip.content?.text || clip.name || "Text");
+  };
+  const finishTextEdit = (commit = true) => {
+    const clipId = editingTextClipIdRef.current;
+    if (!clipId) return;
+    const text = editingTextValue.trim() || "Text";
+    editingTextClipIdRef.current = null;
+    setEditingTextClipId(null);
+    if (commit) onPreviewTextEditCommit?.(clipId, text);
   };
   const previewTransformClip =
     isTimelineMonitorActive && previewTargetClipId
@@ -83,6 +116,7 @@ export function PlayerStage({
           .map(({ clip }) => resolveAnimatedClip(clip, timelineTime))
           .find((clip) => clip.id === previewTargetClipId) || null
       : null;
+  const previewTransformLocked = isPreviewClipLocked(previewTransformClip);
   const renderPreviewHandle = (mode, className, title) => (
     <button
       type="button"
@@ -107,6 +141,17 @@ export function PlayerStage({
       });
     }
   }, [settings.previewQuality, timelineVisualRefs]);
+  useEffect(() => {
+    if (!editingTextClipId || !editingTextRef.current) return;
+    const node = editingTextRef.current;
+    node.focus();
+    const selection = window.getSelection?.();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, [editingTextClipId]);
   return (
     <main className={mainContentClassName}>
       <div
@@ -155,12 +200,21 @@ export function PlayerStage({
               ref={timelinePreviewRef}
               onMouseEnter={() => setPreviewChromeHover(true)}
               onMouseLeave={() => setPreviewChromeHover(false)}
+              onMouseDown={(event) => {
+                if (
+                  editingTextClipId &&
+                  !event.target.closest?.(".timeline-preview-text-editor")
+                ) {
+                  finishTextEdit(true);
+                }
+              }}
             >
               <div className="preview-grid-overlay" aria-hidden="true" />
               {timelineVisualLayers.length > 0 ? (
                 timelineVisualLayers.map(({ clip: rawClip, media }, index) => {
                   const clip = resolveAnimatedClip(rawClip, timelineTime);
                   const isPreviewTarget = clip.id === previewTargetClipId;
+                  const isLayerLocked = isPreviewClipLocked(clip);
                   const isTextClip = clip.kind === "text";
                   const mediaType = media?.mediaType || "video";
                   const previewSrc = getPreviewMediaSrc(
@@ -199,7 +253,7 @@ export function PlayerStage({
                   return (
                     <div
                       key={`${clip.id}-${settings.previewQuality}`}
-                      className={`timeline-preview-layer ${isPreviewTarget ? "selected" : ""}`}
+                      className={`timeline-preview-layer ${isPreviewTarget ? "selected" : ""} ${isLayerLocked ? "locked" : ""}`}
                       onMouseDown={
                         onPreviewClipMouseDown
                           ? (event) => onPreviewClipMouseDown(event, clip, "move")
@@ -214,10 +268,44 @@ export function PlayerStage({
                     >
                       {isTextClip ? (
                         <div
-                          className="timeline-preview-text"
+                          ref={editingTextClipId === clip.id ? editingTextRef : null}
+                          className={`timeline-preview-text ${
+                            editingTextClipId === clip.id
+                              ? "timeline-preview-text-editor"
+                              : ""
+                          }`}
+                          contentEditable={editingTextClipId === clip.id && !isLayerLocked}
+                          suppressContentEditableWarning
                           style={getTextClipStyle(clip)}
+                          onDoubleClick={(event) => beginTextEdit(event, clip)}
+                          onMouseDown={(event) => {
+                            if (editingTextClipId === clip.id || event.detail > 1) {
+                              if (event.detail > 1) event.preventDefault();
+                              event.stopPropagation();
+                            }
+                          }}
+                          onInput={(event) =>
+                            setEditingTextValue(event.currentTarget.textContent || "")
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              finishTextEdit(false);
+                            }
+                            if (event.key === "Enter" && !event.shiftKey) {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              finishTextEdit(true);
+                            }
+                          }}
+                          onBlur={() => {
+                            if (editingTextClipId === clip.id) finishTextEdit(true);
+                          }}
                         >
-                          {clip.content?.text || clip.name || "Text"}
+                          {editingTextClipId === clip.id
+                            ? editingTextValue
+                            : clip.content?.text || clip.name || "Text"}
                         </div>
                       ) : mediaType === "image" ? (
                           <img
@@ -247,7 +335,8 @@ export function PlayerStage({
                   <p>Keine Videoebene am Playhead</p>
                 </div>
               )}
-              {previewTransformClip && onPreviewClipMouseDown && (
+              {previewTransformClip && !previewTransformLocked && onPreviewClipMouseDown && !editingTextClipId &&
+                interaction?.type !== "move" && interaction?.type !== "trim-left" && interaction?.type !== "trim-right" && (
                 <div
                   className={`timeline-preview-transform-overlay ${
                     transformChromeActive ? "is-active" : ""

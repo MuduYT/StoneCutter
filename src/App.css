@@ -846,3 +846,17 @@ button {
     right: 8px;
 }
 
+
+.inspector-locked-banner {
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 184, 77, 0.35);
+  border-radius: 8px;
+  color: #ffd38a;
+  background: rgba(255, 184, 77, 0.1);
+  font-size: 12px;
+}
+
+.timeline-preview-layer.locked {
+  cursor: not-allowed;
+}

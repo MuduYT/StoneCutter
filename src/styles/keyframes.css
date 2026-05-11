@@ -211,6 +211,16 @@
     margin-right: 6px;
 }
 
+.inspector-keyframe-interpolation {
+    height: 24px;
+    max-width: 96px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 7px;
+    background: rgba(15, 23, 42, 0.88);
+    color: #dbeafe;
+    font-size: 11px;
+}
+
 .insp-reset-mini::before,
 .inspector-kf-nav .insp-reset-mini:first-child::before,
 .inspector-kf-nav .insp-reset-mini:last-child::before {
@@ -342,6 +352,5 @@
 .volume-curve-dot:active {
     cursor: grabbing;
 }
-
 
 

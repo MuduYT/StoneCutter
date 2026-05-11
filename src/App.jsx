@@ -20,6 +20,7 @@ import { TimelineSection } from "./components/app/TimelineSection.jsx";
 import { AppOverlays } from "./components/app/AppOverlays.jsx";
 import {
   MIN_CLIP_DURATION,
+  DEFAULT_TIMELINE_RULER_HEIGHT,
   normalizeSourceSelection,
   detectInsertPoint,
   applyRippleInsert,
@@ -28,7 +29,9 @@ import {
   resolveOverlaps,
   expandWithLinkedPartners,
   unlinkClipGroup,
+  isClipTrackLocked,
 } from "./lib/timeline.js";
+import { buildSeparatedLayout } from "./lib/timelineLayout.js";
 import {
   nextTrackId,
   createDefaultTracks,
@@ -39,6 +42,8 @@ import {
   planTrackMove,
   applyTrackMovePlan,
   DEFAULT_TRACK_HEIGHT,
+  MIN_TRACK_HEIGHT,
+  MAX_TRACK_HEIGHT,
 } from "./lib/trackStore.js";
 import { filterAndSortMedia } from "./lib/mediaBin.js";
 import {
@@ -158,6 +163,7 @@ function App() {
   const clipboardRef = useRef([]); // copied clips (with relative startTimes)
   const volumeLineDragRef = useRef(null); // { clipId, startY, startVolume, trackHeight }
   const fadeDragRef = useRef(null); // { clipId, side:'in'|'out', startX, startFade, dur, pxPerSec }
+  const trackResizeDragRef = useRef(null); // { trackId, startY, startHeight }
   const [volTooltip, setVolTooltip] = useState(null); // { x, y, vol } — shown while dragging vol line
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -799,6 +805,12 @@ function App() {
     setTracks((prev) => updateTrackInList(prev, trackId, changes));
   }, []);
 
+  const handleTrackResizeMouseDown = useCallback((e, trackId, currentHeight) => {
+    e.preventDefault();
+    e.stopPropagation();
+    trackResizeDragRef.current = { trackId, startY: e.clientY, startHeight: currentHeight };
+  }, []);
+
   // --- multi-track helpers ---
   const getTrackAtClientY = useCallback(
     (clientY) => {
@@ -1348,6 +1360,7 @@ const {
     handleContextMenuDuplicate,
     handleContextMenuDelete,
     handleContextMenuUnlink,
+    handleContextMenuLink,
   } = useClipActions({
     clips,
     snapEnabled,
@@ -1478,6 +1491,25 @@ const {
     };
   }, [dispatchClipUpdateProps, pushHistory]);
 
+  // Track height resize drag
+  useEffect(() => {
+    const onMove = (ev) => {
+      const d = trackResizeDragRef.current;
+      if (!d) return;
+      document.body.style.cursor = "ns-resize";
+      const dy = ev.clientY - d.startY;
+      const next = Math.max(MIN_TRACK_HEIGHT, Math.min(MAX_TRACK_HEIGHT, d.startHeight + dy));
+      setTracks((prev) => prev.map((t) => t.id === d.trackId ? { ...t, height: next } : t));
+    };
+    const onUp = () => { trackResizeDragRef.current = null; document.body.style.cursor = ""; };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
   // Fade handle drag (DaVinci Resolve style)
   useEffect(() => {
     const onFadeMove = (e) => {
@@ -1548,26 +1580,17 @@ const {
 
   const getAutoTrackZoneTop = useCallback(
     (type, edge) => {
-      let top = 30;
-      let firstTypeTop = null;
-      let lastTypeBottom = null;
-      let firstAudioTop = null;
-
-      for (const track of tracks) {
-        const height = track.height || DEFAULT_TRACK_HEIGHT;
-        if (track.type === "audio" && firstAudioTop == null)
-          firstAudioTop = top;
-        if (track.type === type) {
-          if (firstTypeTop == null) firstTypeTop = top;
-          lastTypeBottom = top + height;
-        }
-        top += height;
+      const { videoTracksLayout, audioTracksLayout, dividerY, dividerHeight } =
+        buildSeparatedLayout(tracks, DEFAULT_TRACK_HEIGHT);
+      const trackList =
+        type === "video" ? videoTracksLayout : audioTracksLayout;
+      if (trackList.length === 0) {
+        if (type === "video") return DEFAULT_TIMELINE_RULER_HEIGHT;
+        return DEFAULT_TIMELINE_RULER_HEIGHT + dividerY + dividerHeight;
       }
-
-      if (edge === "start" && firstTypeTop != null) return firstTypeTop;
-      if (edge === "end" && lastTypeBottom != null) return lastTypeBottom;
-      if (type === "video") return firstAudioTop ?? top;
-      return top;
+      if (edge === "start") return DEFAULT_TIMELINE_RULER_HEIGHT + trackList[0].top;
+      const last = trackList[trackList.length - 1];
+      return DEFAULT_TIMELINE_RULER_HEIGHT + last.top + last.height;
     },
     [tracks],
   );
@@ -1611,14 +1634,23 @@ const {
   const updateInspectorClip = useCallback(
     (clipId, patch) => {
       const currentClip = clips.find((clip) => clip.id === clipId);
-      if (!currentClip) return;
+      if (!currentClip || isClipTrackLocked(currentClip, tracks)) return;
       scheduleInspectorHistoryCommit();
+      const textStylePatch =
+        currentClip.kind === "text" && patch.content?.style
+          ? patch.content.style
+          : null;
       const hasKeyframeCoupledUpdate =
         Object.prototype.hasOwnProperty.call(patch, "keyframes") ||
         Object.keys(patch).some((key) => {
           if (!isAnimatableProperty(key)) return false;
           return getClipPropertyTrack(currentClip, key).length > 0;
-        });
+        }) ||
+        (textStylePatch &&
+          Object.keys(textStylePatch).some((key) => {
+            if (!isAnimatableProperty(key)) return false;
+            return getClipPropertyTrack(currentClip, key).length > 0;
+          }));
       if (!hasKeyframeCoupledUpdate) {
         dispatchClipUpdateProps(clipId, patch);
         return;
@@ -1631,11 +1663,12 @@ const {
           // Auto-keyframe: if a changed property already has a keyframe track,
           // insert/update a keyframe at the current playhead position with the new value.
           let kfMap = next.keyframes ? { ...next.keyframes } : null;
-          for (const key of Object.keys(patch)) {
+          const animatablePatch = { ...patch, ...(textStylePatch || {}) };
+          for (const key of Object.keys(animatablePatch)) {
             if (!isAnimatableProperty(key)) continue;
             const track = getClipPropertyTrack(clip, key);
             if (track.length === 0) continue;
-            const newTrack = addOrUpdateKeyframe(track, { time: kfTime, value: patch[key] });
+            const newTrack = addOrUpdateKeyframe(track, { time: kfTime, value: animatablePatch[key] });
             if (!kfMap) kfMap = {};
             kfMap = { ...kfMap, [key]: newTrack };
           }
@@ -1643,7 +1676,7 @@ const {
         }),
       );
     },
-    [clips, dispatchClipUpdateProps, scheduleInspectorHistoryCommit],
+    [clips, dispatchClipUpdateProps, scheduleInspectorHistoryCommit, tracks],
   );
   useEffect(() => {
     return () => window.clearTimeout(inspectorEditTimerRef.current);
@@ -1653,6 +1686,41 @@ const {
   const isLinked = inspectorIsLinked;
   const displayName = inspectorDisplayName;
   const updClip = updateInspectorClip;
+  const commitPreviewTextEdit = useCallback(
+    (clipId, text) => {
+      const clip = clips.find((item) => item.id === clipId);
+      if (!clip || clip.kind !== "text") return;
+      updateInspectorClip(clipId, {
+        name: text || "Text",
+        content: {
+          ...(clip.content || {}),
+          text: text || "Text",
+          style: clip.content?.style || {},
+        },
+      });
+    },
+    [clips, updateInspectorClip],
+  );
+  const updateKeyframeInterpolation = useCallback(
+    (clipId, propertyKey, keyframeId, interpolation) => {
+      if (!clipId || !propertyKey || !keyframeId) return;
+      scheduleInspectorHistoryCommit();
+      setClips((prev) =>
+        prev.map((clip) => {
+          if (clip.id !== clipId) return clip;
+          const track = getClipPropertyTrack(clip, propertyKey);
+          const nextTrack = track.map((kf) =>
+            kf.id === keyframeId ? { ...kf, interpolation } : kf,
+          );
+          return {
+            ...clip,
+            keyframes: setClipPropertyTrack(clip, propertyKey, nextTrack),
+          };
+        }),
+      );
+    },
+    [scheduleInspectorHistoryCommit, setClips],
+  );
 
   const {
     toggleKeyframeAtPlayhead,
@@ -1698,7 +1766,7 @@ const {
     { id: "transitions", label: "Trans.", icon: NavIcon.Transitions },
     { id: "elements", label: "Elements", icon: NavIcon.Elements },
   ];
-  const mainContentClassName = `main-content ${editorFocus === FOCUS_SOURCE ? "focus-source" : ""} ${activeClipId ? "has-inspector" : ""}`;
+  const mainContentClassName = `main-content ${editorFocus === FOCUS_SOURCE ? "focus-source" : ""} ${editorFocus === FOCUS_TIMELINE ? "has-inspector" : ""}`;
 
   if (showProjectStart) {
     return (
@@ -1845,9 +1913,11 @@ const {
         setSettings={setSettings}
         perfStats={perfStats}
         timelineVisualRefs={timelineVisualRefs}
+        tracksById={tracksById}
         activeClipId={activeClipId}
         previewTargetClipId={vidClip?.id || activeClipId}
         onPreviewClipMouseDown={handlePreviewClipMouseDown}
+        onPreviewTextEditCommit={commitPreviewTextEdit}
         interaction={interaction}
         previewSnapGuides={previewSnapGuides}
         timelinePreviewRef={timelinePreviewRef}
@@ -1922,6 +1992,7 @@ const {
         handleClipContextMenu={handleClipContextMenu}
         handleTrimMouseDown={handleTrimMouseDown}
         handleUpdateTrack={handleUpdateTrack}
+        handleTrackResizeMouseDown={handleTrackResizeMouseDown}
         marqueeBox={marqueeBox}
         snapIndicatorTime={snapIndicatorTime}
         formatTime={formatTime}
@@ -1982,6 +2053,7 @@ const {
         clips={clips}
         timelineTime={timelineTime}
         selectedClipCount={selectedClipIds.size}
+        selectedClipIds={selectedClipIds}
         setShowExport={setShowExport}
         setExportStatus={setExportStatus}
         setExportQuality={setExportQuality}
@@ -1993,11 +2065,14 @@ const {
         onUpdateClip={updClip}
         onToggleKeyframe={toggleKeyframeAtPlayhead}
         onToggleGroupKeyframe={toggleGroupKeyframeAtPlayhead}
+        onUpdateKeyframeInterpolation={updateKeyframeInterpolation}
         onJumpToKeyframeTime={seekToTime}
+        selectedKeyframe={selectedKeyframe}
         splitAtPlayhead={splitAtPlayhead}
         handleContextMenuDuplicate={handleContextMenuDuplicate}
         restoreTrim={restoreTrim}
         handleContextMenuUnlink={handleContextMenuUnlink}
+        handleContextMenuLink={handleContextMenuLink}
         handleContextMenuDelete={handleContextMenuDelete}
         setContextMenu={setContextMenu}
         Icon={Icon}
@@ -2007,5 +2082,3 @@ const {
 }
 
 export default App;
-
-

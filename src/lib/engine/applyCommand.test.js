@@ -41,7 +41,7 @@ test("clip.add normalizes text clip content", () => {
             style: {
               fontSize: "72",
               color: "#ffcc00",
-              fontFamily: "Inter",
+              fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
               fontWeight: "700",
               align: "center",
             },
@@ -56,7 +56,7 @@ test("clip.add normalizes text clip content", () => {
     style: {
       fontSize: 72,
       color: "#ffcc00",
-      fontFamily: "Inter",
+      fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
       fontWeight: "700",
       align: "center",
     },
@@ -95,11 +95,24 @@ test("clip.addText creates the default text clip at the requested timeline time"
     style: {
       fontSize: 48,
       color: "#ffffff",
-      fontFamily: "Inter",
+      fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
       fontWeight: "600",
       align: "center",
+      shadowOpacity: 0,
+      shadowBlur: 0,
     },
   })
+})
+
+test("clip.addText keeps text shadow visually off by default", () => {
+  const result = applyCommand(createInitialEngineState(), {
+    id: "cmd-text-shadow",
+    type: "clip.addText",
+    payload: { timelineTime: 0 },
+  })
+  const style = result.state.timeline.clips[0].content.style
+  assert.equal(style.shadowOpacity, 0)
+  assert.equal(style.shadowBlur, 0)
 })
 
 test("clip.addText falls back to playhead, explicit track and non-negative start", () => {

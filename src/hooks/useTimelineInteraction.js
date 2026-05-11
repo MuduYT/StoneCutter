@@ -15,6 +15,8 @@ import {
   applyGroupTrimLeft,
   applyGroupTrimRight,
   unlinkClipGroup,
+  isTimelineTrimHotspot,
+  isClipTrackLocked,
 } from "../lib/timeline.js";
 import { getTopVisibleTimelineClip } from "../lib/playback.js";
 import { FOCUS_TIMELINE } from "../lib/sourceMonitor.js";
@@ -345,9 +347,24 @@ export function useTimelineInteraction({
   const handleTrimMouseDown = (e, clip, side) => {
     e.stopPropagation();
     e.preventDefault();
+    const clipRect = e.currentTarget.closest(".clip")?.getBoundingClientRect();
+    if (
+      !isTimelineTrimHotspot({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        clipRect,
+        side,
+      })
+    ) {
+      return;
+    }
     setEditorFocus(FOCUS_TIMELINE);
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
+    if (isClipTrackLocked(clip, tracks)) {
+      setSelectedClipIds(new Set([clip.id]));
+      return;
+    }
     setActiveClipId(clip.id);
     setActiveId(clip.videoId);
     const media = videos.find((v) => v.id === clip.videoId) || null;

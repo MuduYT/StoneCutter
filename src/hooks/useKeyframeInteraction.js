@@ -31,7 +31,7 @@ export function useKeyframeInteraction({
         type: "keyframe.toggle",
         payload: {
           clipId,
-          property: propertyKey,
+          propertyKey,
           time,
           value: clip[propertyKey],
         },

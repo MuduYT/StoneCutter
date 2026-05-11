@@ -1,3 +1,5 @@
+import { buildSeparatedLayout } from './timelineLayout.js'
+
 let _seq = 0
 export const nextTrackId = () => `track-${++_seq}`
 
@@ -377,6 +379,17 @@ export function applyTrackMovePlan(stateOrClips, maybePlan) {
   }
 }
 
+/**
+ * Find the top unlocked video track to use for a text (or video-only) drop
+ * that lands in an ambiguous area (TRACK_DROP_BELOW, empty area, or null target).
+ * Returns null when a new track must be created instead (TRACK_DROP_ABOVE or no
+ * suitable video track exists).
+ */
+export function findPreferredVideoTrackForDrop(tracks, dropTargetId) {
+  if (dropTargetId === TRACK_DROP_ABOVE) return null
+  return tracks.find((t) => t.type === 'video' && !t.locked) || null
+}
+
 export function getTrackIdAtTimelineY({
   clientY,
   containerTop,
@@ -387,14 +400,16 @@ export function getTrackIdAtTimelineY({
   const relativeY = clientY - containerTop + scrollTop - rulerHeight
   if (relativeY < 0) return TRACK_DROP_ABOVE
 
-  let accumulated = 0
-  const trackList = tracks || []
-  for (let index = 0; index < trackList.length; index += 1) {
-    const track = trackList[index]
-    const height = track.height || DEFAULT_TRACK_HEIGHT
-    if (index === 0 && relativeY < Math.min(18, height / 3)) return TRACK_DROP_ABOVE
-    if (relativeY < accumulated + height) return track.id
-    accumulated += height
+  const layout = buildSeparatedLayout(tracks || [], DEFAULT_TRACK_HEIGHT)
+  const allTracks = [...layout.videoTracksLayout, ...layout.audioTracksLayout]
+
+  if (allTracks.length === 0) return TRACK_DROP_BELOW
+
+  const firstEntry = allTracks[0]
+  if (relativeY < firstEntry.top + Math.min(18, firstEntry.height / 3)) return TRACK_DROP_ABOVE
+
+  for (const { track, top, height } of allTracks) {
+    if (relativeY < top + height) return track.id
   }
   return TRACK_DROP_BELOW
 }

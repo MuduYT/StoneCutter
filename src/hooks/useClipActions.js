@@ -1,10 +1,11 @@
 import { useCallback } from "react";
 import {
   MIN_CLIP_DURATION,
-  constrainMoveStart,
+  duplicateClipsAfterSelection,
   resolveOverlaps,
   expandWithLinkedPartners,
   unlinkClipGroup,
+  linkClipGroup,
 } from "../lib/timeline.js";
 import { nextId } from "../lib/utils.js";
 
@@ -25,20 +26,35 @@ export function useClipActions({
 }) {
   const duplicateClip = useCallback(
     (clipId) => {
-      const clip = clips.find((c) => c.id === clipId);
-      if (!clip) return;
-      const dur = clip.outPoint - clip.inPoint;
-      const newId = nextId("clip");
-      let newStart = clip.startTime + dur;
-      if (snapEnabled) newStart = constrainMoveStart(newStart, dur, clips);
-      const newClip = { ...clip, id: newId, startTime: newStart };
-      let next = [...clips, newClip];
-      if (!snapEnabled)
-        next = resolveOverlaps(next, newId, () => nextId("clip"));
-      commitClips(next);
-      setActiveClipId(newId);
+      const targetIds =
+        selectedClipIds.size > 0 && (!clipId || selectedClipIds.has(clipId))
+          ? selectedClipIds
+          : new Set([clipId]);
+      const { duplicatedClips, duplicatedClipIds, idMap } =
+        duplicateClipsAfterSelection({
+          clips,
+          clipIds: targetIds,
+          makeId: () => nextId("clip"),
+        });
+      if (duplicatedClips.length === 0) return;
+      pushHistory(createHistorySnapshot());
+      dispatchEngineCommand({
+        type: "clip.add",
+        payload: { clips: duplicatedClips, ripple: false },
+      });
+      const nextSelection = new Set(duplicatedClipIds);
+      setSelectedClipIds(nextSelection);
+      setActiveClipId(idMap.get(clipId) || duplicatedClipIds[0] || null);
     },
-    [clips, commitClips, setActiveClipId, snapEnabled],
+    [
+      clips,
+      createHistorySnapshot,
+      dispatchEngineCommand,
+      pushHistory,
+      selectedClipIds,
+      setActiveClipId,
+      setSelectedClipIds,
+    ],
   );
 
   const restoreTrim = useCallback(
@@ -217,6 +233,17 @@ export function useClipActions({
     [clips, commitClips, setContextMenu, setProjectStatus],
   );
 
+  const handleContextMenuLink = useCallback(
+    (clipIds) => {
+      const ids = clipIds instanceof Set ? clipIds : new Set(clipIds || []);
+      if (ids.size < 2) return;
+      commitClips(linkClipGroup(clips, ids));
+      setContextMenu(null);
+      setProjectStatus({ ok: true, msg: "Clips verkn\u00fcpft." });
+    },
+    [clips, commitClips, setContextMenu, setProjectStatus],
+  );
+
   return {
     duplicateClip,
     restoreTrim,
@@ -224,5 +251,6 @@ export function useClipActions({
     handleContextMenuDuplicate,
     handleContextMenuDelete,
     handleContextMenuUnlink,
+    handleContextMenuLink,
   };
 }
