@@ -1,6 +1,7 @@
 import { resolveAnimatedClip } from "../../lib/keyframes.js";
 import { getPreviewMediaSrc } from "../../lib/proxyGenerator.js";
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
+import { AudioWaveformView } from "../ui/AudioWaveformView.jsx";
 
 export function PlayerStage({
   mainContentClassName,
@@ -15,7 +16,9 @@ export function PlayerStage({
   activeVideo,
   activeSourceSelection,
   previewTime,
+  peaksMap,
   videoRef,
+  sourceAudioRef,
   playbackModeRef,
   playingClipIdRef,
   imagePlaybackRef,
@@ -27,6 +30,8 @@ export function PlayerStage({
   setTimelineAudioRef,
   handleLoadedMetadata,
   handlePreviewTimeUpdate,
+  seekSourcePreviewTo,
+  updateSourceRange,
   beginSourcePreviewSeek,
   beginSourceTimelineDrag,
   setSourcePointAtPreviewTime,
@@ -70,6 +75,11 @@ export function PlayerStage({
     const align = ["left", "center", "right"].includes(style.align)
       ? style.align
       : "center";
+    const outlineWidth = Number(style.outlineWidth);
+    const outlineColor =
+      typeof style.outlineColor === "string" && style.outlineColor
+        ? style.outlineColor
+        : "#000000";
     return {
       color: typeof style.color === "string" && style.color ? style.color : "#ffffff",
       fontFamily: typeof style.fontFamily === "string" && style.fontFamily
@@ -79,11 +89,21 @@ export function PlayerStage({
       fontWeight: typeof style.fontWeight === "string" && style.fontWeight
         ? style.fontWeight
         : "600",
+      fontStyle: typeof style.fontStyle === "string" && style.fontStyle
+        ? style.fontStyle
+        : "normal",
+      textDecoration: typeof style.textDecoration === "string" && style.textDecoration
+        ? style.textDecoration
+        : "none",
       letterSpacing: `${Number.isFinite(Number(style.letterSpacing)) ? Number(style.letterSpacing) : 0}px`,
       lineHeight: Number.isFinite(Number(style.lineHeight)) ? Number(style.lineHeight) : 1.15,
       textAlign: align,
       justifySelf:
         align === "left" ? "start" : align === "right" ? "end" : "center",
+      WebkitTextStroke:
+        Number.isFinite(outlineWidth) && outlineWidth > 0
+          ? `${outlineWidth}px ${outlineColor}`
+          : undefined,
       textShadow:
         Number(style.shadowOpacity) > 0
           ? `0 4px ${Number(style.shadowBlur ?? 10)}px rgba(0,0,0,${Math.min(1, Math.max(0, Number(style.shadowOpacity) / 100))})`
@@ -134,9 +154,9 @@ export function PlayerStage({
       prevQualityRef.current = settings.previewQuality;
       timelineVisualRefs.current.forEach((node) => {
         if (node) {
-          const currentTime = node.currentTime;
+          const currentTime = Number.isFinite(node.currentTime) ? node.currentTime : 0;
           node.load();
-          node.currentTime = currentTime;
+          try { node.currentTime = currentTime; } catch { /* ignored */ }
         }
       });
     }
@@ -152,6 +172,31 @@ export function PlayerStage({
     selection?.removeAllRanges();
     selection?.addRange(range);
   }, [editingTextClipId]);
+
+  const audioRefCallbacksRef = useRef(new Map());
+
+  const getTimelineAudioRefCallback = useCallback((clipId, trackId) => {
+    const key = `${clipId}:${trackId}`;
+    if (!audioRefCallbacksRef.current.has(key)) {
+      audioRefCallbacksRef.current.set(
+        key,
+        (node) => setTimelineAudioRef(clipId, trackId)(node)
+      );
+    }
+    return audioRefCallbacksRef.current.get(key);
+  }, [setTimelineAudioRef]);
+
+  useEffect(() => {
+    const activeKeys = new Set(
+      timelineAudioLayers.map(({ clip }) => `${clip.id}:${clip.trackId}`)
+    );
+    const allKeys = new Set(audioRefCallbacksRef.current.keys());
+    for (const key of allKeys) {
+      if (!activeKeys.has(key)) {
+        audioRefCallbacksRef.current.delete(key);
+      }
+    }
+  }, [timelineAudioLayers]);
   return (
     <main className={mainContentClassName}>
       <div
@@ -380,10 +425,11 @@ export function PlayerStage({
               <div className="timeline-audio-bus" aria-hidden="true">
                 {timelineAudioLayers.map(({ clip, media }) => (
                   <audio
-                    key={clip.id}
-                    ref={setTimelineAudioRef(clip.id)}
+                    key={`${clip.id}:${clip.trackId}`}
+                    ref={getTimelineAudioRefCallback(clip.id, clip.trackId)}
                     src={media?.src || clip.src}
                     preload="auto"
+                    crossOrigin="anonymous"
                   />
                 ))}
               </div>
@@ -396,7 +442,39 @@ export function PlayerStage({
               alt={activeVideo?.name}
               draggable={false}
             />
-          ) : videoSrc ? (
+          ) : videoSrc && activeVideo?.mediaType === "audio" && isSourceMonitorActive ? (
+            <div className="audio-source-preview">
+              <span className="audio-source-preview-label">Audio Source Monitor</span>
+              <div className="audio-source-preview-canvas-wrap">
+                <AudioWaveformView
+                  peaks={peaksMap?.[activeVideo.id]}
+                  duration={activeSourceSelection?.duration}
+                  inPoint={activeSourceSelection?.inPoint ?? 0}
+                  outPoint={activeSourceSelection?.outPoint ?? activeSourceSelection?.duration ?? 0}
+                  currentTime={previewTime}
+                  isLoading={peaksMap?.[activeVideo.id] === null}
+                  onSeek={seekSourcePreviewTo}
+                  onInDrag={(t) => updateSourceRange(activeVideo.id, { inPoint: t })}
+                  onOutDrag={(t) => updateSourceRange(activeVideo.id, { outPoint: t })}
+                />
+              </div>
+              <audio
+                ref={sourceAudioRef}
+                key={videoSrc}
+                src={videoSrc}
+                preload="auto"
+                onPlay={handleSourceVideoPlay || (() => setIsPlaying(true))}
+                onPause={() => {
+                  if (!imagePlaybackRef.current && !timelinePlaybackRef.current) {
+                    setIsPlaying(false);
+                  }
+                }}
+                onLoadedMetadata={handleLoadedMetadata}
+                onTimeUpdate={handlePreviewTimeUpdate}
+                style={{ display: "none" }}
+              />
+            </div>
+          ) : videoSrc && activeVideo?.mediaType !== "audio" ? (
             <video
               ref={videoRef}
               key={videoSrc}
@@ -423,7 +501,7 @@ export function PlayerStage({
               <p className="hint">Auswaehlen - Ziehen auf die Timeline</p>
             </div>
           )}
-          {isSourceMonitorActive && (
+          {isSourceMonitorActive && activeSourceSelection?.duration > 0 && (
             <div className="preview-player-bar">
               <span className="preview-player-time">{formatTC(previewTime)}</span>
               <div className="preview-player-progress" aria-hidden="true">
@@ -464,7 +542,7 @@ export function PlayerStage({
           )
         )}
 
-        {isSourceMonitorActive && (
+        {isSourceMonitorActive && activeSourceSelection?.duration > 0 && activeVideo && (
           <div className="source-trim-panel">
             <div className="source-trim-header">
               <span>Source In/Out</span>
@@ -491,10 +569,20 @@ export function PlayerStage({
               </div>
             </div>
             <div
-              className="source-preview-timeline"
+              className={`source-preview-timeline${activeVideo?.mediaType === "audio" ? " has-waveform" : ""}`}
               onMouseDown={beginSourcePreviewSeek}
               title="Vorschauposition setzen; In/Out-Handles ziehen"
             >
+              {activeVideo?.mediaType === "audio" && (
+                <AudioWaveformView
+                  peaks={peaksMap?.[activeVideo.id]}
+                  duration={activeSourceSelection?.duration}
+                  inPoint={activeSourceSelection?.inPoint ?? 0}
+                  outPoint={activeSourceSelection?.outPoint ?? activeSourceSelection?.duration ?? 0}
+                  currentTime={previewTime}
+                  isLoading={peaksMap?.[activeVideo.id] === null}
+                />
+              )}
               <div
                 className="source-preview-window"
                 style={{
@@ -548,7 +636,7 @@ export function PlayerStage({
                 }
               >
                 <Icon.VideoTrack />{" "}
-                {activeVideo.mediaType === "image" ? "Bild" : "Video + Audio"}
+                {activeVideo.mediaType === "image" ? "Bild" : activeVideo.mediaType === "audio" ? "Audio" : "Video + Audio"}
               </button>
               {activeVideo.mediaType === "video" && (
                 <button

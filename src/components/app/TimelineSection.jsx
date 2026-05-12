@@ -25,6 +25,8 @@ export function TimelineSection({
   trackMoveTargetIds,
   trackMovePreview,
   thumbsMap,
+  videos,
+  videoDurations,
   peaksMap,
   editingTrackId,
   dragOver,
@@ -64,6 +66,7 @@ export function TimelineSection({
   handleTracksScroll,
   handlePlayheadMouseDown,
   handleClipMouseDown,
+  handleCrossfadeMouseDown,
   handleClipContextMenu,
   handleTrimMouseDown,
   handleUpdateTrack,
@@ -214,6 +217,8 @@ export function TimelineSection({
         trackMoveTargetIds={trackMoveTargetIds}
         trackMovePreview={trackMovePreview}
         thumbsMap={thumbsMap}
+        videos={videos}
+        videoDurations={videoDurations}
         peaksMap={peaksMap}
         editingTrackId={editingTrackId}
         dragOver={dragOver}
@@ -233,6 +238,7 @@ export function TimelineSection({
         handleTracksScroll={handleTracksScroll}
         handlePlayheadMouseDown={handlePlayheadMouseDown}
         handleClipMouseDown={handleClipMouseDown}
+        handleCrossfadeMouseDown={handleCrossfadeMouseDown}
         handleClipContextMenu={handleClipContextMenu}
         handleTrimMouseDown={handleTrimMouseDown}
         handleUpdateTrack={handleUpdateTrack}

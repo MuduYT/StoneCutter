@@ -78,6 +78,7 @@ export interface Track {
   locked: boolean;
   muted: boolean;
   solo: boolean;
+  gain?: number;
 }
 
 export interface Settings {

@@ -1,38 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MediaPanel } from "../MediaPanel.jsx";
 import { AudioPanel } from "./AudioPanel.jsx";
+import { MediaAssetService } from "../../lib/services/MediaAssetService.js";
+import { useMediaManagement } from "../../hooks/useMediaManagement.js";
 
 export function Sidebar({
   sidebarTab,
   sidebarItems,
   editorFocus,
   focusSource,
-  videos,
-  visibleVideos,
-  activeId,
-  thumbsMap,
-  videoDurations,
-  mediaSearch,
-  mediaTypeFilter,
-  mediaSort,
-  handleImport,
-  handleDragStart,
-  handleDragEnd,
-  handleSelectMedia,
-  handleDoubleClickMedia,
-  handleRemoveMedia,
-  handleFileChange,
-  isImportableMediaFile,
   onSidebarTabChange,
-  onMediaSearchChange,
-  onMediaTypeFilterChange,
-  onMediaSortChange,
-  folders,
-  selectedFolderId,
-  setSelectedFolderId,
-  handleCreateFolder,
-  handleDeleteFolder,
-  handleMoveMediaToFolder,
   audioItems,
   audioFolders,
   isTauri,
@@ -42,11 +19,42 @@ export function Sidebar({
   createAudioFolder,
   deleteAudioFolder,
   moveAudioToFolder,
+  updateAudioSourceRange,
   onAudioDragStart,
   Icon,
   formatTime,
 }) {
   const [mediaContextMenu, setMediaContextMenu] = useState(null); // { x, y, mediaId }
+  const {
+    videos,
+    mediaSearch,
+    setMediaSearch,
+    mediaTypeFilter,
+    setMediaTypeFilter,
+    mediaSort,
+    setMediaSort,
+    handleImport,
+    handleDragEnd,
+    handleRemoveMedia,
+    regenerateProxy,
+    clearProxy,
+    handleFileChange,
+    isImportableMediaFile,
+    folders,
+    selectedFolderId,
+    setSelectedFolderId,
+    selectedMediaIds,
+    handleCreateFolder,
+    handleDeleteFolder,
+    handleMoveMediaToFolder,
+    replaceMedia,
+    relinkMedia,
+  } = useMediaManagement();
+
+  const getDraggedMediaId = (e) =>
+    e.dataTransfer.getData("application/x-stonecutter-media-id") ||
+    e.dataTransfer.getData("text/plain") ||
+    e.dataTransfer.getData("text");
 
   const handleMediaContextMenu = (e, mediaId) => {
     e.preventDefault();
@@ -55,12 +63,84 @@ export function Sidebar({
   };
 
   const closeMediaContextMenu = () => setMediaContextMenu(null);
+  const contextMedia = mediaContextMenu
+    ? videos.find((video) => video.id === mediaContextMenu.mediaId)
+    : null;
+  const contextProxyQualities =
+    contextMedia?.mediaType === "video"
+      ? [
+          ...new Set([
+            ...Object.keys(contextMedia.previewProxies || {}),
+            ...(contextMedia.proxyQuality && contextMedia.proxySrc
+              ? [contextMedia.proxyQuality]
+              : []),
+          ]),
+        ]
+      : [];
+  const contextProxyQuality =
+    contextMedia?.proxyQuality && contextProxyQualities.includes(contextMedia.proxyQuality)
+      ? contextMedia.proxyQuality
+      : contextProxyQualities[0];
+  const showProxyActions =
+    isTauri &&
+    contextMedia?.mediaType === "video" &&
+    Boolean(contextProxyQuality);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!selectedMediaIds || selectedMediaIds.size === 0) return;
+      const target = e.target;
+      const tagName = target?.tagName?.toLowerCase?.();
+      if (tagName === "input" || tagName === "textarea" || target?.isContentEditable) return;
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      e.preventDefault();
+      const count = selectedMediaIds.size;
+      const label = count === 1 ? "1 ausgewähltes Medium" : `${count} ausgewählte Medien`;
+      if (confirm(`${label} wirklich entfernen?`)) {
+        handleRemoveMedia(new Set(selectedMediaIds));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleRemoveMedia, selectedMediaIds]);
+
+  useEffect(() => {
+    if (!selectedFolderId) return;
+    const folderExists = folders?.some((folder) => folder.id === selectedFolderId);
+    if (!folderExists) {
+      setSelectedFolderId(null);
+    }
+  }, [folders, selectedFolderId, setSelectedFolderId]);
 
   const handleMoveToFolder = (folderId) => {
     if (mediaContextMenu) {
       handleMoveMediaToFolder(mediaContextMenu.mediaId, folderId);
       closeMediaContextMenu();
     }
+  };
+
+  const handleReplaceMedia = async () => {
+    if (!isTauri || !contextMedia) return;
+    const selected = await MediaAssetService.openReplacementDialog(contextMedia.mediaType);
+    if (!selected || Array.isArray(selected)) return;
+    await replaceMedia?.(contextMedia.id, selected);
+    closeMediaContextMenu();
+  };
+
+  const handleRelinkMedia = async () => {
+    if (!isTauri || !contextMedia) return;
+    const selected = await MediaAssetService.openDirectoryDialog();
+    if (!selected || Array.isArray(selected)) return;
+    await relinkMedia?.(contextMedia.id, selected);
+    closeMediaContextMenu();
+  };
+
+  const handleFolderDrop = (e, folderId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const mediaId = getDraggedMediaId(e);
+    if (!mediaId) return;
+    handleMoveMediaToFolder(mediaId, folderId);
   };
 
   const handleTextDragStart = (event) => {
@@ -113,27 +193,39 @@ export function Sidebar({
 
             {folders && folders.length > 0 && (
               <div className="folder-nav">
-                <button
-                  className={`folder-chip ${!selectedFolderId ? "active" : ""}`}
-                  onClick={() => setSelectedFolderId(null)}
-                >
-                  Alle
-                </button>
-                {folders.map((f) => (
+                <div className="folder-chip-row">
                   <button
-                    key={f.id}
-                    className={`folder-chip ${selectedFolderId === f.id ? "active" : ""}`}
-                    onClick={() =>
-                      setSelectedFolderId(f.id === selectedFolderId ? null : f.id)
-                    }
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      handleDeleteFolder(f.id);
-                    }}
-                    title={`${f.name} (Rechtsklick zum Löschen)`}
+                    className={`folder-chip ${!selectedFolderId ? "active" : ""}`}
+                    onClick={() => setSelectedFolderId(null)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => handleFolderDrop(e, null)}
+                    title="Alle Medien anzeigen oder hierher ziehen, um den Ordner zu entfernen"
                   >
-                    <Icon.Folder /> {f.name}
+                    Alle
                   </button>
+                </div>
+                {folders.map((f) => (
+                  <div key={f.id} className="folder-chip-row">
+                    <button
+                      className={`folder-chip ${selectedFolderId === f.id ? "active" : ""}`}
+                      onClick={() =>
+                        setSelectedFolderId(f.id === selectedFolderId ? null : f.id)
+                      }
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => handleFolderDrop(e, f.id)}
+                      title={`${f.name} - hierher ziehen zum Verschieben`}
+                    >
+                      <Icon.Folder /> {f.name}
+                    </button>
+                    <button
+                      className="folder-chip-delete"
+                      onClick={() => handleDeleteFolder(f.id)}
+                      title={`${f.name} loeschen`}
+                      aria-label={`${f.name} loeschen`}
+                    >
+                      <Icon.Trash />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -142,14 +234,14 @@ export function Sidebar({
               <input
                 className="media-search-input"
                 value={mediaSearch}
-                onChange={(e) => onMediaSearchChange(e.target.value)}
+                onChange={(e) => setMediaSearch(e.target.value)}
                 placeholder="Medien suchen..."
                 aria-label="Medien suchen"
               />
               <div className="media-filter-row">
                 <select
                   value={mediaTypeFilter}
-                  onChange={(e) => onMediaTypeFilterChange(e.target.value)}
+                  onChange={(e) => setMediaTypeFilter(e.target.value)}
                   aria-label="Medientyp filtern"
                 >
                   <option value="all">Alle Typen</option>
@@ -159,7 +251,7 @@ export function Sidebar({
                 </select>
                 <select
                   value={mediaSort}
-                  onChange={(e) => onMediaSortChange(e.target.value)}
+                  onChange={(e) => setMediaSort(e.target.value)}
                   aria-label="Mediathek sortieren"
                 >
                   <option value="importedAt">Neueste</option>
@@ -188,19 +280,7 @@ export function Sidebar({
               }}
             >
               <MediaPanel
-                videos={videos}
-                visibleVideos={visibleVideos}
-                activeId={activeId}
-                thumbsMap={thumbsMap}
-                videoDurations={videoDurations}
-                handleDragStart={handleDragStart}
-                handleDragEnd={handleDragEnd}
-                handleSelectMedia={handleSelectMedia}
-                handleDoubleClickMedia={handleDoubleClickMedia}
-                handleRemoveMedia={handleRemoveMedia}
-                handleFileChange={handleFileChange}
-                isImportableMediaFile={isImportableMediaFile}
-                onMediaContextMenu={folders && folders.length > 0 ? handleMediaContextMenu : undefined}
+                onMediaContextMenu={handleMediaContextMenu}
                 Icon={Icon}
                 formatTime={formatTime}
               />
@@ -216,6 +296,53 @@ export function Sidebar({
                 }}
                 onMouseLeave={closeMediaContextMenu}
               >
+                {selectedMediaIds && selectedMediaIds.size > 1 && (
+                  <div className="context-menu-label">
+                    {selectedMediaIds.size} Medien ausgewählt
+                  </div>
+                )}
+                {showProxyActions && (
+                  <>
+                    <div className="context-menu-label">Proxy</div>
+                    <button
+                      className="context-menu-item"
+                      onClick={() => {
+                        regenerateProxy?.(mediaContextMenu.mediaId, contextProxyQuality);
+                        closeMediaContextMenu();
+                      }}
+                    >
+                      Regenerate Proxy
+                    </button>
+                    <button
+                      className="context-menu-item danger"
+                      onClick={() => {
+                        clearProxy?.(mediaContextMenu.mediaId, contextProxyQuality);
+                        closeMediaContextMenu();
+                      }}
+                    >
+                      Delete Proxy
+                    </button>
+                    <div className="context-menu-divider" />
+                  </>
+                )}
+                {isTauri && contextMedia && (
+                  <>
+                    <div className="context-menu-label">Media</div>
+                    <button
+                      className="context-menu-item"
+                      onClick={handleReplaceMedia}
+                    >
+                      Datei ersetzen...
+                    </button>
+                    <button
+                      className="context-menu-item"
+                      onClick={handleRelinkMedia}
+                    >
+                      Neu verknuepfen...
+                    </button>
+                    <div className="context-menu-divider" />
+                  </>
+                )}
                 {folders && folders.length > 0 && (
                   <>
                     <div className="context-menu-label">In Ordner verschieben</div>
@@ -233,6 +360,20 @@ export function Sidebar({
                       onClick={() => handleMoveToFolder(null)}
                     >
                       Aus Ordner entfernen
+                    </button>
+                    <div className="context-menu-divider" />
+                  </>
+                )}
+                {selectedMediaIds && selectedMediaIds.size > 1 && (
+                  <>
+                    <button
+                      className="context-menu-item"
+                      onClick={() => {
+                        handleRemoveMedia(new Set(selectedMediaIds));
+                        closeMediaContextMenu();
+                      }}
+                    >
+                      Ausgewählte entfernen
                     </button>
                     <div className="context-menu-divider" />
                   </>
@@ -260,9 +401,11 @@ export function Sidebar({
             createAudioFolder={createAudioFolder}
             deleteAudioFolder={deleteAudioFolder}
             moveAudioToFolder={moveAudioToFolder}
+            updateAudioSourceRange={updateAudioSourceRange}
             onAudioDragStart={onAudioDragStart}
             onDragEnd={handleDragEnd}
             Icon={Icon}
+            formatTime={formatTime}
           />
         ) : sidebarTab === "text" ? (
           <>

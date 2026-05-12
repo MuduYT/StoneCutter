@@ -678,15 +678,32 @@
 }
 
 /* Thumbnail strip across video clips */
+.clip-thumb-strip,
 .video-thumb-strip {
     position: absolute;
     inset: 0;
     display: flex;
+    width: 100%;
+    height: 100%;
     z-index: 0;
     pointer-events: none;
     overflow: hidden;
     border-radius: inherit;
 }
+.clip-thumb,
+.video-thumb-strip.loading {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    border-radius: inherit;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: rgba(15, 23, 42, 0.72);
+}
+.clip-thumb.loading,
 .video-thumb-strip.loading {
     background: linear-gradient(
         90deg,
@@ -705,6 +722,7 @@
         background-position: -100% 0;
     }
 }
+.clip-thumb-segment,
 .video-thumb {
     flex: 1 1 0;
     min-width: 0;
@@ -718,6 +736,53 @@
 }
 .video-thumb.empty {
     background: rgba(0, 0, 0, 0.15);
+}
+.clip-thumb-placeholder-icon {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 18px;
+    height: 18px;
+    transform: translate(-50%, -50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.62);
+}
+.clip-thumb-placeholder-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.crossfade-handle {
+    position: absolute;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.95);
+    border-radius: 50%;
+    background: #fff;
+    box-shadow:
+        0 0 0 2px rgba(6, 182, 212, 0.28),
+        0 0 12px rgba(255, 255, 255, 0.65);
+    cursor: ew-resize;
+    opacity: 0;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 8;
+}
+
+.audio-clip:hover .crossfade-handle,
+.audio-clip.active .crossfade-handle,
+.crossfade-handle:focus-visible {
+    opacity: 0.9;
+}
+
+.crossfade-handle:hover,
+.crossfade-handle:focus-visible {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.18);
 }
 
 /* Make text overlay readable on top of thumbnails */

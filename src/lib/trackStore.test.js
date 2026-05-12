@@ -1,4 +1,3 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   DEFAULT_TRACK_HEIGHT,
@@ -226,6 +225,7 @@ test('creates standalone auto-track objects for move previews', () => {
     height: DEFAULT_TRACK_HEIGHT,
     muted: false,
     solo: false,
+    gain: 1,
   })
 })
 

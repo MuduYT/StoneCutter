@@ -57,6 +57,8 @@ export function useAudioLibrary({ isTauri }) {
           category,
           importedAt: new Date().toISOString(),
           folderId: folderId || null,
+          inPoint: null,
+          outPoint: null,
         }));
         setAudioItems((prev) => [...prev, ...newItems]);
         return newItems;
@@ -77,6 +79,8 @@ export function useAudioLibrary({ isTauri }) {
       category,
       importedAt: new Date().toISOString(),
       folderId: folderId || null,
+      inPoint: null,
+      outPoint: null,
     }));
     setAudioItems((prev) => [...prev, ...newItems]);
     return newItems;
@@ -114,6 +118,16 @@ export function useAudioLibrary({ isTauri }) {
     );
   }, []);
 
+  const updateAudioSourceRange = useCallback((itemId, inPoint, outPoint) => {
+    setAudioItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? { ...item, inPoint: inPoint ?? null, outPoint: outPoint ?? null }
+          : item,
+      ),
+    );
+  }, []);
+
   return {
     audioItems,
     audioFolders,
@@ -123,5 +137,6 @@ export function useAudioLibrary({ isTauri }) {
     createAudioFolder,
     deleteAudioFolder,
     moveAudioToFolder,
+    updateAudioSourceRange,
   };
 }

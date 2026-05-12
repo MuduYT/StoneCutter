@@ -91,6 +91,7 @@ const buildSegmentForClip = ({ clip, media, track, trackIndex, hasAudio }) => {
     has_video: hasVideo,
     has_audio: hasAudio,
     volume: clampNumber(clip.volume, 1, 0, 2),
+    track_gain: clampNumber(track?.gain, 1, 0, 2),
     fade_in: clampNumber(clip.fadeIn, 0, 0, duration),
     fade_out: clampNumber(clip.fadeOut, 0, 0, duration),
     position_x: clampNumber(clip.positionX, 0, -10000, 10000),

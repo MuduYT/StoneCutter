@@ -1,5 +1,35 @@
 # StoneCutter Update Log
 
+## 2026-05-12 - Media Bin Virtualisierung
+
+### Performance
+- Media Bin rendert sichtbare Medien jetzt ueber einen leichten Virtual-List-Hook statt alle Elemente gleichzeitig in den DOM zu schreiben.
+- Drag-and-drop, Kontextmenue und Auswahl-Interaktionen bleiben auf den virtuellen Rows erhalten.
+
+## 2026-05-12 - Media Context Phase 1
+
+### Refactor
+- Neuer `MediaContext` mit `MediaProvider`; `Sidebar` und `MediaPanel` lesen Media-Bin-Daten und Handler jetzt ueber `useMediaManagement()` statt ueber lange Prop-Ketten.
+- Die bestehende Media-Controller-Logik bleibt als kompatibler Controller-Hook erhalten, damit Timeline-/Playback-Abhaengigkeiten nicht mit dem Context-Extract vermischt werden.
+
+## 2026-05-12 - Mixer Panel
+
+### Features
+- Inspector: Neuer Mixer-Tab mit Channel-Strips fuer Audio-Spuren, inklusive Mute, Solo, Lock, Gain-Fader und einfachem Peak-Meter.
+- Playback: Audio-Clip-Lautstaerke beruecksichtigt jetzt zusaetzlich `track.gain` pro Audio-Spur.
+
+### Project
+- Audio-Tracks speichern und normalisieren `gain` mit Default `1`.
+
+## 2026-05-12 - Timeline Audio Crossfades
+
+### Features
+- Timeline: Audio-Clips zeigen an nahen oder ueberlappenden Nachbar-Clips einen Crossfade-Handle; Drag setzt `fadeOut` links und `fadeIn` rechts gemeinsam.
+- Playback: Audio-Fades nutzen Constant-Power-Kurven (`sin`/`cos`) fuer weichere Fade-In/Fade-Out- und Crossfade-Uebergaenge.
+
+### UI
+- Audio-Fade-Overlays erhalten eine farbige Crossfade-Anmutung und der neue Handle erscheint als kleiner leuchtender Punkt am Clip-Uebergang.
+
 ## 2026-05-12 - Export- und Projekt-Sicherheitsfixes
 
 ### Fixes

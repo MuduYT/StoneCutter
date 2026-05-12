@@ -12,7 +12,7 @@ export const TRACK_DROP_BELOW = '__below__'
 export function createDefaultTracks() {
   return [
     { id: 'track-v1', type: 'video', name: 'Video 1', locked: false, height: DEFAULT_TRACK_HEIGHT },
-    { id: 'track-a1', type: 'audio', name: 'Audio 1', muted: false, solo: false, locked: false, height: DEFAULT_TRACK_HEIGHT },
+    { id: 'track-a1', type: 'audio', name: 'Audio 1', muted: false, solo: false, locked: false, height: DEFAULT_TRACK_HEIGHT, gain: 1 },
   ]
 }
 
@@ -20,7 +20,7 @@ export function addTrack(tracks, type) {
   const count = tracks.filter((t) => t.type === type).length + 1
   const name = type === 'video' ? `Video ${count}` : `Audio ${count}`
   const base = { id: nextTrackId(), type, name, locked: false, height: DEFAULT_TRACK_HEIGHT }
-  if (type === 'audio') { base.muted = false; base.solo = false }
+  if (type === 'audio') { base.muted = false; base.solo = false; base.gain = 1 }
   if (type === 'video') {
     const lastVideoIdx = tracks.reduce((acc, t, i) => (t.type === 'video' ? i : acc), -1)
     const insertAt = lastVideoIdx + 1
@@ -155,6 +155,7 @@ export function createAutoTrackForMove(tracks, type, edge = 'end', options = {})
   if (type === 'audio') {
     track.muted = false
     track.solo = false
+    track.gain = 1
   }
   return track
 }

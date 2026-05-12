@@ -14,6 +14,7 @@ export interface EngineTrack {
   height: number;
   muted?: boolean;
   solo?: boolean;
+  gain?: number;
 }
 
 export interface EngineKeyframe {
@@ -28,6 +29,8 @@ export type EngineKeyframeMap = Record<string, EngineKeyframe[]>;
 export interface EngineTextClipStyle {
   fontSize: number;
   color: string;
+  outlineColor?: string;
+  outlineWidth?: number;
   fontFamily?: string;
   fontWeight?: string;
   align?: EngineTextAlign;

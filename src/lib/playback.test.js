@@ -1,4 +1,3 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MIN_CLIP_DURATION,
@@ -35,14 +34,34 @@ const clip = (id, startTime, inPoint, outPoint) => ({
   outPoint,
 })
 
-test('finds clips at the playhead and stops slightly before clip end', () => {
+test('finds clips at the playhead and stops at exact clip end', () => {
   const clips = [clip('a', 1, 3, 6)]
 
   assert.equal(findClipAtTime(1, clips)?.id, 'a')
   assert.equal(findClipAtTime(3.97, clips)?.id, 'a')
-  assert.equal(findClipAtTime(3.98, clips), null)
+  assert.equal(findClipAtTime(3.98, clips)?.id, 'a')
+  assert.equal(findClipAtTime(3.999, clips)?.id, 'a')
   assert.equal(findClipAtTime(4, clips), null)
+  assert.equal(findClipAtTime(4.001, clips), null)
   assert.deepEqual(findClipsAtTime(1, clips).map((item) => item.id), ['a'])
+})
+
+test('handles direct cuts without overlap between adjacent clips', () => {
+  const clips = [clip('a', 0, 0, 4), clip('b', 4, 0, 4)]
+
+  // Before cut point, only clip A should be active
+  assert.equal(findClipAtTime(3.99, clips)?.id, 'a')
+  assert.equal(findClipAtTime(3.999, clips)?.id, 'a')
+  
+  // At exact cut point, only clip B should be active (clip A ended)
+  assert.equal(findClipAtTime(4, clips)?.id, 'b')
+  
+  // After cut point, only clip B should be active
+  assert.equal(findClipAtTime(4.01, clips)?.id, 'b')
+  
+  // No overlap: at 3.99 only clip A, at 4.0 only clip B
+  assert.deepEqual(findClipsAtTime(3.99, clips).map((item) => item.id), ['a'])
+  assert.deepEqual(findClipsAtTime(4, clips).map((item) => item.id), ['b'])
 })
 
 test('prefers video clips over aligned audio-only clips for timeline playback targets', () => {
@@ -346,7 +365,7 @@ test('builds bounded thumbnail items from trimmed source ranges', () => {
     sourceDuration: 100,
   })
 
-  assert.equal(items.length, 80)
+  assert.equal(items.length, 200)
   assert.equal(items[0].url, 'thumb-100')
   assert.equal(items.at(-1).sourceIndex < 400, true)
 })

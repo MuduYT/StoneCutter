@@ -7,6 +7,12 @@ import { DEFAULT_TIMELINE_RULER_HEIGHT } from "../lib/timeline.js";
 import { buildSeparatedLayout } from "../lib/timelineLayout.js";
 import { ClipKeyframes } from "./timeline/ClipKeyframes.jsx";
 import { VolumeCurve } from "./timeline/VolumeCurve.jsx";
+import {
+  FADE_IN_POLYGON,
+  FADE_IN_POLYLINE,
+  FADE_OUT_POLYGON,
+  FADE_OUT_POLYLINE,
+} from "../lib/fadeCurves.js";
 
 export const Timeline = ({
   tracks,
@@ -517,8 +523,8 @@ export const Timeline = ({
                           preserveAspectRatio="none"
                           viewBox="0 0 100 100"
                         >
-                          <polygon points="0,100 100,0 100,100" className="fade-poly" />
-                          <polyline points="0,100 100,0" className="fade-envelope-line" />
+                          <polygon points={FADE_IN_POLYGON} className="fade-poly" />
+                          <polyline points={FADE_IN_POLYLINE} className="fade-envelope-line" />
                           <circle cx="100" cy="0" r="4" className="fade-envelope-point" />
                         </svg>
                       </div>
@@ -535,8 +541,8 @@ export const Timeline = ({
                           preserveAspectRatio="none"
                           viewBox="0 0 100 100"
                         >
-                          <polygon points="0,0 0,100 100,100" className="fade-poly" />
-                          <polyline points="0,0 100,100" className="fade-envelope-line" />
+                          <polygon points={FADE_OUT_POLYGON} className="fade-poly" />
+                          <polyline points={FADE_OUT_POLYLINE} className="fade-envelope-line" />
                           <circle cx="0" cy="0" r="4" className="fade-envelope-point" />
                         </svg>
                       </div>

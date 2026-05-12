@@ -1,5 +1,14 @@
 import { useCallback } from "react";
 
+const safeClone = (value) => {
+  try {
+    return structuredClone(value);
+  } catch (e) {
+    console.warn("structuredClone failed, falling back to shallow copy:", e.message);
+    return { ...value };
+  }
+};
+
 export function useHistory({
   clips,
   tracks,
@@ -18,8 +27,8 @@ export function useHistory({
 
   const createHistorySnapshot = useCallback(
     (clipState = clips, trackState = tracks) => ({
-      clips: clipState.map((c) => ({ ...c })),
-      tracks: trackState.map((t) => ({ ...t })),
+      clips: clipState.map((c) => safeClone(c)),
+      tracks: trackState.map((t) => safeClone(t)),
     }),
     [clips, tracks],
   );
@@ -27,11 +36,14 @@ export function useHistory({
   const normalizeHistorySnapshot = useCallback(
     (snapshot) =>
       Array.isArray(snapshot)
-        ? { clips: snapshot.map((c) => ({ ...c })), tracks: null }
+        ? {
+            clips: snapshot.map((c) => safeClone(c)),
+            tracks: null,
+          }
         : {
-            clips: (snapshot?.clips || []).map((c) => ({ ...c })),
+            clips: (snapshot?.clips || []).map((c) => safeClone(c)),
             tracks: snapshot?.tracks
-              ? snapshot.tracks.map((t) => ({ ...t }))
+              ? snapshot.tracks.map((t) => safeClone(t))
               : null,
           },
     [],

@@ -10,12 +10,13 @@ import {
   KEYFRAME_INTERPOLATIONS,
   sampleClipProperty,
 } from "../../lib/keyframes.js";
+import { MixerPanel } from "../app/MixerPanel.jsx";
 
 function InspectorPlaceholder({ inspectorTab }) {
   return (
     <div className="inspector-placeholder">
       <p className="inspector-placeholder-title">
-        {inspectorTab === "effects" ? "Effects" : "History"}
+        {inspectorTab === "effects" ? "Effects" : inspectorTab === "mixer" ? "Mixer" : "History"}
       </p>
       <p className="inspector-placeholder-hint">
         Hier wird diese Funktion verfuegbar sein.
@@ -27,7 +28,7 @@ function InspectorPlaceholder({ inspectorTab }) {
 function InspectorTabs({ inspectorTab, onTabChange }) {
   return (
     <div className="inspector-tabs">
-      {["Inspector", "Effects", "History"].map((tab) => (
+      {["Inspector", "Mixer", "Effects", "History"].map((tab) => (
         <button
           key={tab}
           className={`inspector-tab ${inspectorTab === tab.toLowerCase() ? "active" : ""}`}
@@ -91,6 +92,7 @@ const KEYFRAMABLE_KEYS = new Set([
   "fontSize",
   "letterSpacing",
   "lineHeight",
+  "outlineWidth",
   "shadowOpacity",
   "shadowBlur",
   "bgOpacity",
@@ -188,15 +190,52 @@ export function InspectorPanel({
   selectedKeyframe,
   selectedClipCount = 1,
   timelineTime = 0,
+  tracks = [],
+  clips = [],
+  volume = 1,
+  muted = false,
   tracksById,
   vidClip,
+  onUpdateTrack,
+  onSetVolume,
+  onSetMuted,
+  getAudioNode,
+  getTrackPeak,
   Icon,
 }) {
+  const previousFontWeightRef = useRef(new Map());
+  useEffect(() => {
+    if (!activeClipId || !activeClip) return;
+    const style = activeClip.content?.style || {};
+    const weight = typeof style.fontWeight === "string" && style.fontWeight ? style.fontWeight : "600";
+    if (weight !== "700") {
+      previousFontWeightRef.current.set(activeClipId, weight);
+    }
+  }, [activeClipId, activeClip]);
+
+  const renderMixer = () => (
+    <MixerPanel
+      tracks={tracks}
+      clips={clips}
+      timelineTime={timelineTime}
+      volume={volume}
+      muted={muted}
+      onUpdateTrack={onUpdateTrack}
+      onSetVolume={onSetVolume}
+      onSetMuted={onSetMuted}
+      getAudioNode={getAudioNode}
+      getTrackPeak={getTrackPeak}
+      Icon={Icon}
+    />
+  );
+
   if (!activeClipId) {
     return (
       <div className="inspector-panel">
         <InspectorTabs inspectorTab={inspectorTab} onTabChange={onTabChange} />
-        {inspectorTab === "inspector" ? (
+        {inspectorTab === "mixer" ? (
+          renderMixer()
+        ) : inspectorTab === "inspector" ? (
           <div className="inspector-empty">Kein Clip ausgewaehlt</div>
         ) : (
           <InspectorPlaceholder inspectorTab={inspectorTab} />
@@ -340,9 +379,15 @@ export function InspectorPanel({
   };
   const textStyle = activeClip?.content?.style || {};
   const currentFontFamily = textStyle.fontFamily || "Inter, 'Segoe UI', Arial, sans-serif";
+  const currentFontWeight = typeof textStyle.fontWeight === "string" && textStyle.fontWeight
+    ? textStyle.fontWeight
+    : "600";
+  const currentFontStyle = textStyle.fontStyle || "normal";
+  const currentTextDecoration = textStyle.textDecoration || "none";
   const fontOptions = TEXT_FONT_OPTIONS.some((option) => option.value === currentFontFamily)
     ? TEXT_FONT_OPTIONS
     : [{ label: "Custom (" + currentFontFamily + ")", value: currentFontFamily }, ...TEXT_FONT_OPTIONS];
+
   const textValue = (key, fallback) =>
     isTextClip ? sampleClipProperty(activeClip, key, timelineTime) ?? fallback : fallback;
   const updateTextContent = (text) => {
@@ -367,13 +412,39 @@ export function InspectorPanel({
           color: "#ffffff",
           fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
           fontWeight: "600",
+          fontStyle: "normal",
+          textDecoration: "none",
           align: "center",
+          outlineColor: "#000000",
+          outlineWidth: 0,
           shadowOpacity: 0,
           shadowBlur: 0,
           ...textStyle,
           ...patch,
         },
       },
+    });
+  };
+  const setBold = (nextBold) => {
+    if (inspectorLocked) return;
+    if (nextBold) {
+      if (currentFontWeight !== "700") {
+        previousFontWeightRef.current.set(activeClipId, currentFontWeight);
+      }
+      updateTextStyle({ fontWeight: "700" });
+      return;
+    }
+    const restoreWeight = previousFontWeightRef.current.get(activeClipId) || "600";
+    updateTextStyle({ fontWeight: restoreWeight });
+  };
+  const toggleItalic = () => {
+    if (inspectorLocked) return;
+    updateTextStyle({ fontStyle: currentFontStyle === "italic" ? "normal" : "italic" });
+  };
+  const toggleUnderline = () => {
+    if (inspectorLocked) return;
+    updateTextStyle({
+      textDecoration: currentTextDecoration === "underline" ? "none" : "underline",
     });
   };
 
@@ -443,7 +514,9 @@ export function InspectorPanel({
         {inspectorLocked && (
           <div className="inspector-locked-banner">Spur gesperrt - Bearbeitung deaktiviert</div>
         )}
-        {inspectorTab !== "inspector" ? (
+        {inspectorTab === "mixer" ? (
+          renderMixer()
+        ) : inspectorTab !== "inspector" ? (
           <InspectorPlaceholder inspectorTab={inspectorTab} />
         ) : (
           <>
@@ -458,6 +531,53 @@ export function InspectorPanel({
                     onChange={(event) => updateTextContent(event.target.value)}
                     disabled={inspectorLocked}
                   />
+                </div>
+                <div className="idf-row">
+                  <span className="idf-label">Schrift</span>
+                  <FontPreviewSelect
+                    value={currentFontFamily}
+                    options={fontOptions}
+                    disabled={inspectorLocked}
+                    onChange={(value) => updateTextStyle({ fontFamily: value })}
+                  />
+                </div>
+                <div className="idf-row">
+                  <span className="idf-label">Style</span>
+                  <div className="insp-flip-group">
+                    <button
+                      type="button"
+                      className={`insp-flip-btn ${currentFontWeight === "700" ? "active" : ""}`}
+                      onClick={() => setBold(currentFontWeight !== "700")}
+                      disabled={inspectorLocked}
+                      title="Bold"
+                      aria-pressed={currentFontWeight === "700"}
+                      style={{ fontWeight: 700 }}
+                    >
+                      B
+                    </button>
+                    <button
+                      type="button"
+                      className={`insp-flip-btn ${currentFontStyle === "italic" ? "active" : ""}`}
+                      onClick={toggleItalic}
+                      disabled={inspectorLocked}
+                      title="Italic"
+                      aria-pressed={currentFontStyle === "italic"}
+                      style={{ fontStyle: "italic" }}
+                    >
+                      I
+                    </button>
+                    <button
+                      type="button"
+                      className={`insp-flip-btn ${currentTextDecoration === "underline" ? "active" : ""}`}
+                      onClick={toggleUnderline}
+                      disabled={inspectorLocked}
+                      title="Underline"
+                      aria-pressed={currentTextDecoration === "underline"}
+                      style={{ textDecoration: "underline" }}
+                    >
+                      U
+                    </button>
+                  </div>
                 </div>
                 <InspectorDragger
                   label="Font Size"
@@ -508,6 +628,30 @@ export function InspectorPanel({
                 <div className="inspector-divider" />
                 <div className="inspector-section-subtitle">Appearance</div>
                 <InspectorDragger
+                  label="Outline Width"
+                  disabled={inspectorLocked}
+                  value={textValue("outlineWidth", 0)}
+                  onChange={(value) => updateTextStyle({ outlineWidth: value })}
+                  min={0}
+                  max={20}
+                  step={0.5}
+                  unit="px"
+                  decimals={1}
+                  stopwatch={renderStopwatch(activeClip, "outlineWidth")}
+                />
+                <div className="idf-row">
+                  <span className="idf-label">Outline Color</span>
+                  <input
+                    className="inspector-field"
+                    type="color"
+                    value={textStyle.outlineColor || "#000000"}
+                    onChange={(event) =>
+                      updateTextStyle({ outlineColor: event.target.value })
+                    }
+                    disabled={inspectorLocked}
+                  />
+                </div>
+                <InspectorDragger
                   label="Shadow Opacity"
                   disabled={inspectorLocked}
                   value={textValue("shadowOpacity", 0)}
@@ -541,19 +685,10 @@ export function InspectorPanel({
                   stopwatch={renderStopwatch(activeClip, "bgOpacity")}
                 />
                 <div className="idf-row">
-                  <span className="idf-label">Schrift</span>
-                  <FontPreviewSelect
-                    value={currentFontFamily}
-                    options={fontOptions}
-                    disabled={inspectorLocked}
-                    onChange={(value) => updateTextStyle({ fontFamily: value })}
-                  />
-                </div>
-                <div className="idf-row">
                   <span className="idf-label">Weight</span>
                   <select
                     className="inspector-field"
-                    value={textStyle.fontWeight || "600"}
+                    value={currentFontWeight}
                     onChange={(event) =>
                       updateTextStyle({ fontWeight: event.target.value })
                     }

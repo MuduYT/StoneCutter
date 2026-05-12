@@ -1,4 +1,3 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   clampSourceRange,
@@ -13,6 +12,12 @@ test('shows source monitor only for the explicitly selected video media item', (
   assert.equal(isSourceMonitorVisible({ media: { id: 'v1', mediaType: 'video' }, sourceMonitorId: 'v1' }), true)
   assert.equal(isSourceMonitorVisible({ media: { id: 'v1', mediaType: 'image' }, sourceMonitorId: 'v1' }), false)
   assert.equal(isSourceMonitorVisible({ media: { id: 'v1', mediaType: 'video' }, sourceMonitorId: 'v2' }), false)
+})
+
+test('shows source monitor for audio media items when explicitly selected', () => {
+  assert.equal(isSourceMonitorVisible({ media: { id: 'a1', mediaType: 'audio' }, sourceMonitorId: 'a1' }), true)
+  assert.equal(isSourceMonitorVisible({ media: { id: 'a1', mediaType: 'audio' }, sourceMonitorId: 'a2' }), false)
+  assert.equal(isSourceMonitorVisible({ media: { id: 'a1', mediaType: 'audio' }, sourceMonitorId: null }), false)
 })
 
 test('clamps source time and range to duration and minimum clip length', () => {

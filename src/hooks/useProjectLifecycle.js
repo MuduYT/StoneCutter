@@ -59,7 +59,7 @@ export function useProjectLifecycle({
   setSnapEnabled,
   setVolume,
   setMuted,
-  setMediaSelectionId,
+  setSelectedMediaIds,
   setActiveId,
   setSourceMonitorId,
   setEditorFocus,
@@ -170,7 +170,7 @@ export function useProjectLifecycle({
       setVolume(state.ui.volume);
       setMuted(state.ui.muted);
       const initialMediaId = state.videos[0]?.id || null;
-      setMediaSelectionId(initialMediaId);
+      setSelectedMediaIds(initialMediaId ? new Set([initialMediaId]) : new Set());
       setActiveId(initialMediaId);
       setSourceMonitorId(null);
       setEditorFocus(focusSource);
@@ -200,7 +200,7 @@ export function useProjectLifecycle({
       setEditorFocus,
       setHistorySizes,
       setIsProjectDirty,
-      setMediaSelectionId,
+      setSelectedMediaIds,
       setMuted,
       setPeaksMap,
       setPxPerSec,
@@ -317,7 +317,7 @@ export function useProjectLifecycle({
     setClips([]);
     setVideos([]);
     setTracks(createDefaultTracks());
-    setMediaSelectionId(null);
+    setSelectedMediaIds(new Set());
     setActiveId(null);
     setActiveClipId(null);
     setSelectedClipIds(new Set());
@@ -333,7 +333,7 @@ export function useProjectLifecycle({
     setCurrentProject,
     setHistorySizes,
     setIsProjectDirty,
-    setMediaSelectionId,
+    setSelectedMediaIds,
     setSelectedClipIds,
     setSelectedGap,
     setShowProjectStart,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   findClipAtTime,
   getTimelineAudibleClips,
@@ -8,6 +8,27 @@ import {
 } from "../lib/playback.js";
 import { resolveAnimatedClip } from "../lib/keyframes.js";
 
+const getConstantPowerFadeGain = (clip, time) => {
+  const fadeIn = Math.max(0, clip.fadeIn ?? 0);
+  const fadeOut = Math.max(0, clip.fadeOut ?? 0);
+  const clipDuration = Math.max(0.001, clip.outPoint - clip.inPoint);
+  const timeInClip = Math.max(0, time - clip.startTime);
+  const timeToEnd = clipDuration - timeInClip;
+  let gain = 1;
+
+  if (fadeIn > 0 && timeInClip < fadeIn) {
+    const progress = Math.max(0, Math.min(1, timeInClip / fadeIn));
+    gain *= Math.sin((Math.PI / 2) * progress);
+  }
+
+  if (fadeOut > 0 && timeToEnd < fadeOut) {
+    const progress = Math.max(0, Math.min(1, (fadeOut - timeToEnd) / fadeOut));
+    gain *= Math.cos((Math.PI / 2) * progress);
+  }
+
+  return Math.max(0, Math.min(1, gain));
+};
+
 export function usePlaybackController({
   activeClipId,
   activeId,
@@ -15,6 +36,7 @@ export function usePlaybackController({
   clips,
   muted,
   volume,
+  audioScrubbingEnabled = true,
   timelinePlaybackLookups,
   isPlaying,
   timelineTime,
@@ -34,6 +56,8 @@ export function usePlaybackController({
   videoRef,
   timelineVisualRefs,
   timelineAudioRefs,
+  setTimelineAudioClipGain,
+  setTimelineAudioClipMuted,
   pendingSeekRef,
   pendingPlayRef,
   playbackRef,
@@ -62,11 +86,19 @@ export function usePlaybackController({
   timelineStateFps,
   timelineLayerBoundaryEpsilon,
 }) {
+  const scrubAudioRef = useRef({
+    isScrubbing: false,
+    lastScrubTime: 0,
+    lastPlayheadTime: Number.NEGATIVE_INFINITY,
+    clipLastScrubTimes: new Map(),
+    pauseTimers: new Map(),
+  });
+
   const dispatchPlayheadCommand = useCallback(
-    (time) => {
+    (time, options = {}) => {
       dispatchEngineCommand({
         type: "timeline.setPlayhead",
-        payload: { time },
+        payload: { time, force: options.force },
       });
     },
     [dispatchEngineCommand],
@@ -90,15 +122,136 @@ export function usePlaybackController({
     );
   }, []);
 
+  const beginScrubAudio = useCallback(() => {
+    scrubAudioRef.current.isScrubbing = true;
+    scrubAudioRef.current.lastScrubTime = 0;
+    scrubAudioRef.current.lastPlayheadTime = Number.NEGATIVE_INFINITY;
+  }, []);
+
+  const endScrubAudio = () => {
+    scrubAudioRef.current.isScrubbing = false;
+    scrubAudioRef.current.pauseTimers.forEach((timerId) => {
+      window.clearTimeout(timerId);
+    });
+    scrubAudioRef.current.pauseTimers.clear();
+    timelineAudioRefs.current.forEach((node) => {
+      if (node && !node.paused) node.pause();
+    });
+  };
+
+  const triggerScrubAudio = useCallback(
+    (timelineScrubTime) => {
+      if (
+        !audioScrubbingEnabled ||
+        muted ||
+        volume <= 0 ||
+        isPlaying ||
+        playbackModeRef.current === "timeline" ||
+        playbackRef.current.isPlaying ||
+        timelinePlaybackRef.current ||
+        !scrubAudioRef.current.isScrubbing
+      ) {
+        return;
+      }
+
+      const time = Number(timelineScrubTime);
+      if (!Number.isFinite(time)) return;
+      if (Math.abs(time - scrubAudioRef.current.lastPlayheadTime) < 0.05) {
+        return;
+      }
+
+      const nowMs = performance.now();
+      const audioLayers = getTimelineAudibleClips({
+        time,
+        clips,
+        lookups: timelinePlaybackLookups,
+      });
+      if (audioLayers.length === 0) return;
+
+      scrubAudioRef.current.lastScrubTime = nowMs;
+      scrubAudioRef.current.lastPlayheadTime = time;
+
+      for (const { clip: rawClip, track } of audioLayers) {
+        const clip = resolveAnimatedClip(rawClip, time);
+        const node = timelineAudioRefs.current.get(clip.id);
+        if (!node) continue;
+
+        const lastClipScrubTime =
+          scrubAudioRef.current.clipLastScrubTimes.get(clip.id) ??
+          Number.NEGATIVE_INFINITY;
+        if (nowMs - lastClipScrubTime < 150) continue;
+        scrubAudioRef.current.clipLastScrubTimes.set(clip.id, nowMs);
+
+        const sourceTime = getTimelineClipSourceTime(clip, time);
+        const clipVolume = clip.volume ?? 1;
+        const fadeGain = getConstantPowerFadeGain(clip, time);
+        const trackGain = track?.gain ?? 1;
+        const effectiveVolume = Math.max(
+          0,
+          Math.min(2, volume * clipVolume * fadeGain * trackGain),
+        );
+        setTimelineAudioClipGain(clip.id, effectiveVolume);
+        const isMuted = muted || effectiveVolume <= 0 || !!clip.clipMuted;
+        setTimelineAudioClipMuted(clip.id, isMuted);
+        if (isMuted) continue;
+
+        const existingTimer = scrubAudioRef.current.pauseTimers.get(clip.id);
+        if (existingTimer) window.clearTimeout(existingTimer);
+
+        try {
+          node.currentTime = sourceTime;
+          node
+            .play()
+            .catch(() => {
+              // Scrub snippets are opportunistic; browser autoplay/seek races are harmless here.
+            });
+        } catch {
+          continue;
+        }
+
+        const pauseTimer = window.setTimeout(() => {
+          if (!node.paused) node.pause();
+          if (scrubAudioRef.current.pauseTimers.get(clip.id) === pauseTimer) {
+            scrubAudioRef.current.pauseTimers.delete(clip.id);
+          }
+        }, 80);
+        scrubAudioRef.current.pauseTimers.set(clip.id, pauseTimer);
+      }
+    },
+    [
+      audioScrubbingEnabled,
+      clips,
+      getTimelineClipSourceTime,
+      isPlaying,
+      muted,
+      playbackModeRef,
+      playbackRef,
+      timelineAudioRefs,
+      setTimelineAudioClipGain,
+      setTimelineAudioClipMuted,
+      timelinePlaybackLookups,
+      timelinePlaybackRef,
+      volume,
+    ],
+  );
+
   const waitForTimelineMediaSeek = useCallback(
     (node, sourceTime) => {
       if (!node || !Number.isFinite(sourceTime)) return Promise.resolve();
-      const currentTime = Number.isFinite(node.currentTime) ? node.currentTime : 0;
+      // node kann zwischenzeitlich entfernt werden – daher optional chain verwenden
+      const currentTime = Number.isFinite(node?.currentTime) ? node.currentTime : 0;
       if (Math.abs(currentTime - sourceTime) <= 0.01 && !node.seeking) {
         return Promise.resolve();
       }
       const existing = timelineMediaSeekPromisesRef.current.get(node);
-      if (existing) return existing;
+      if (existing) {
+        if (Math.abs(existing.targetTime - sourceTime) > 1e-6) {
+          // Different target time, mark old promise as cancelled and create new one
+          existing.cancelled = true;
+        } else {
+          return existing.promise;
+        }
+      }
       timelineSeekGraceUntilRef.current = Math.max(
         timelineSeekGraceUntilRef.current,
         performance.now() + timelineMediaSeekGraceMs,
@@ -109,30 +262,40 @@ export function usePlaybackController({
         let timeoutId = 0;
         const finish = () => {
           if (done) return;
+          const cached = timelineMediaSeekPromisesRef.current.get(node);
+          if (cached?.cancelled) {
+            // This promise was cancelled due to a newer seek, cleanup and resolve
+            done = true;
+            window.clearTimeout(timeoutId);
+            if (node) node.removeEventListener("seeked", finish);
+            resolve(); // Resolve to avoid pending promise
+            return;
+          }
           done = true;
           window.clearTimeout(timeoutId);
-          node.removeEventListener("seeked", finish);
+          if (node) node.removeEventListener("seeked", finish);
           resolve();
         };
-        node.addEventListener("seeked", finish, { once: true });
+        if (node) node.addEventListener("seeked", finish, { once: true });
         timeoutId = window.setTimeout(finish, timelineMediaSeekTimeoutMs);
-        try {
-          node.currentTime = sourceTime;
-        } catch {
+        if (node) {
+          try { node.currentTime = sourceTime; } catch { finish(); }
+        } else {
           finish();
         }
         if (
+          node &&
           !node.seeking &&
           Math.abs((node.currentTime || 0) - sourceTime) <= 0.01
         ) {
           window.setTimeout(finish, 0);
         }
       }).finally(() => {
-        if (timelineMediaSeekPromisesRef.current.get(node) === promise) {
+        if (timelineMediaSeekPromisesRef.current.get(node)?.promise === promise) {
           timelineMediaSeekPromisesRef.current.delete(node);
         }
       });
-      timelineMediaSeekPromisesRef.current.set(node, promise);
+      timelineMediaSeekPromisesRef.current.set(node, { promise, targetTime: sourceTime, cancelled: false });
       return promise;
     },
     [
@@ -167,29 +330,19 @@ export function usePlaybackController({
         seekPromises.push(waitForTimelineMediaSeek(node, sourceTime));
       }
 
-      for (const { clip } of audioLayers) {
+      for (const { clip, track } of audioLayers) {
         const node = timelineAudioRefs.current.get(clip.id);
         if (!node) continue;
         const sourceTime = getTimelineClipSourceTime(clip, time);
         const clipVolume = clip.volume ?? 1;
-        const clipDurAudio = clip.outPoint - clip.inPoint;
-        const fadeInAudio = clip.fadeIn ?? 0;
-        const fadeOutAudio = clip.fadeOut ?? 0;
-        const timeInClipAudio = Math.max(0, time - clip.startTime);
-        let fadeGain = 1;
-        if (fadeInAudio > 0 && timeInClipAudio < fadeInAudio) {
-          fadeGain = timeInClipAudio / fadeInAudio;
-        }
-        const timeToEndAudio = clipDurAudio - timeInClipAudio;
-        if (fadeOutAudio > 0 && timeToEndAudio < fadeOutAudio) {
-          fadeGain = Math.min(fadeGain, timeToEndAudio / fadeOutAudio);
-        }
+        const fadeGain = getConstantPowerFadeGain(clip, time);
+        const trackGain = track?.gain ?? 1;
         const effectiveVolume = Math.max(
           0,
-          Math.min(2, volume * clipVolume * fadeGain),
+          Math.min(2, volume * clipVolume * fadeGain * trackGain),
         );
-        node.volume = Math.min(1, effectiveVolume);
-        node.muted = muted || effectiveVolume <= 0 || !!clip.clipMuted;
+        setTimelineAudioClipGain(clip.id, effectiveVolume);
+        setTimelineAudioClipMuted(clip.id, muted || effectiveVolume <= 0 || !!clip.clipMuted);
         seekPromises.push(waitForTimelineMediaSeek(node, sourceTime));
       }
       await Promise.all(seekPromises);
@@ -199,6 +352,8 @@ export function usePlaybackController({
       getTimelineClipSourceTime,
       muted,
       timelineAudioRefs,
+      setTimelineAudioClipGain,
+      setTimelineAudioClipMuted,
       timelinePlaybackLookups,
       timelineVisualRefs,
       volume,
@@ -230,7 +385,7 @@ export function usePlaybackController({
       if (target?.videoId) setActiveId(target.videoId);
       timelineTimeRef.current = timelineStart;
       updateTimelinePlayheadPosition(timelineStart);
-      dispatchPlayheadCommand(timelineStart);
+      dispatchPlayheadCommand(timelineStart, { force: true });
       await primeTimelinePlayback(timelineStart);
       if (timelinePlaybackStartTokenRef.current !== startToken) return;
       timelineSeekGraceUntilRef.current = Math.max(
@@ -313,7 +468,7 @@ export function usePlaybackController({
       isPlaying: false,
       timelineTime: timelineTimeRef.current,
     };
-    dispatchPlayheadCommand(timelineTimeRef.current);
+    dispatchPlayheadCommand(timelineTimeRef.current, { force: true });
     setPlaybackMode(null);
     setIsPlaying(false);
   }, [
@@ -421,12 +576,12 @@ export function usePlaybackController({
 
     timelineVisualRefs.current.forEach((node, clipId) => {
       if (!activeVisualIds.has(clipId)) {
-        if (!node.paused) node.pause();
+        if (node && !node.paused) node.pause();
       }
     });
     timelineAudioRefs.current.forEach((node, clipId) => {
       if (!activeAudioIds.has(clipId)) {
-        if (!node.paused) node.pause();
+        if (node && !node.paused) node.pause();
       }
     });
 
@@ -450,7 +605,7 @@ export function usePlaybackController({
             playbackModeRef.current === "timeline" &&
             playbackRef.current.isPlaying &&
             interactionRef.current?.type !== "seek";
-          if (ok) {
+          if (ok && node) {
             node
               .play()
               .catch((err) =>
@@ -471,12 +626,12 @@ export function usePlaybackController({
         node
           .play()
           .catch((err) => console.error("Timeline visual play error:", err));
-      } else if (!node.paused) {
+      } else if (!node.paused && !scrubAudioRef.current.isScrubbing) {
         node.pause();
       }
     }
 
-    for (const { clip: rawAudioClip } of timelineAudioLayers) {
+    for (const { clip: rawAudioClip, track } of timelineAudioLayers) {
       const clip = resolveAnimatedClip(rawAudioClip, timelineTime);
       const node = timelineAudioRefs.current.get(clip.id);
       if (!node) continue;
@@ -486,22 +641,15 @@ export function usePlaybackController({
         ? timelinePlayingAudioDriftTolerance
         : timelinePausedDriftTolerance;
       const clipVolume = clip.volume ?? 1;
-      const clipDurAudio = clip.outPoint - clip.inPoint;
-      const fadeInAudio = clip.fadeIn ?? 0;
-      const fadeOutAudio = clip.fadeOut ?? 0;
-      const timeInClipAudio = Math.max(0, timelineTime - clip.startTime);
-      let fadeGain = 1;
-      if (fadeInAudio > 0 && timeInClipAudio < fadeInAudio)
-        fadeGain = timeInClipAudio / fadeInAudio;
-      const timeToEndAudio = clipDurAudio - timeInClipAudio;
-      if (fadeOutAudio > 0 && timeToEndAudio < fadeOutAudio)
-        fadeGain = Math.min(fadeGain, timeToEndAudio / fadeOutAudio);
+      const fadeGain = getConstantPowerFadeGain(clip, timelineTime);
+      const trackGain = track?.gain ?? 1;
       const effectiveVolume = Math.max(
         0,
-        Math.min(2, volume * clipVolume * fadeGain),
+        Math.min(2, volume * clipVolume * fadeGain * trackGain),
       );
-      node.volume = Math.min(1, effectiveVolume);
-      node.muted = muted || effectiveVolume <= 0 || !!clip.clipMuted;
+      setTimelineAudioClipGain(clip.id, effectiveVolume);
+      const isMuted = muted || effectiveVolume <= 0 || !!clip.clipMuted;
+      setTimelineAudioClipMuted(clip.id, isMuted);
       if (drift > driftTolerance) {
         const seekEpoch = timelineSeekPlayEpochRef.current;
         waitForTimelineMediaSeek(node, sourceTime).then(() => {
@@ -511,9 +659,8 @@ export function usePlaybackController({
             epochOk &&
             playbackModeRef.current === "timeline" &&
             playbackRef.current.isPlaying &&
-            !node.muted &&
             interactionRef.current?.type !== "seek";
-          if (ok) {
+          if (ok && node && !isMuted) {
             node
               .play()
               .catch((err) =>
@@ -528,14 +675,14 @@ export function usePlaybackController({
         playbackModeRef.current === "timeline" &&
         playbackRef.current.isPlaying &&
         !timelineSeekDragActive &&
-        !node.muted &&
+        !isMuted &&
         !node.seeking &&
         performance.now() >= timelineSeekGraceUntilRef.current
       ) {
         node
           .play()
           .catch((err) => console.error("Timeline audio play error:", err));
-      } else if (!node.paused) {
+      } else if (!node.paused && !scrubAudioRef.current.isScrubbing) {
         node.pause();
       }
     }
@@ -552,6 +699,8 @@ export function usePlaybackController({
     interactionRef,
     timelineAudioLayers,
     timelineAudioRefs,
+    setTimelineAudioClipGain,
+    setTimelineAudioClipMuted,
     timelinePausedDriftTolerance,
     timelinePlayingAudioDriftTolerance,
     timelinePlayingVideoDriftTolerance,
@@ -644,7 +793,7 @@ export function usePlaybackController({
         pauseTimelinePreviewMedia();
         timelineTimeRef.current = finalTime;
         updateTimelinePlayheadPosition(finalTime);
-        dispatchPlayheadCommand(finalTime);
+        dispatchPlayheadCommand(finalTime, { force: true });
         setPlaybackMode(null);
         setIsPlaying(false);
         return;
@@ -694,7 +843,8 @@ export function usePlaybackController({
           audioLayers,
           nextBoundary: getNextTimelineLayerBoundary(nextTime, state.clips),
         };
-        dispatchPlayheadCommand(nextTime);
+        // Force sync on layer/clip changes to prevent black frames or audio glitches
+        dispatchPlayheadCommand(nextTime, { force: shouldSyncLayers });
       } else {
         activeTimelineLayersRef.current = {
           ...activeTimelineLayersRef.current,
@@ -740,5 +890,8 @@ export function usePlaybackController({
     startClipPlayback,
     startTimelineGapPlayback,
     pauseTimelinePreviewMedia,
+    beginScrubAudio,
+    triggerScrubAudio,
+    endScrubAudio,
   };
 }

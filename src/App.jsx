@@ -11,6 +11,7 @@ import "./styles/player.css";
 import "./styles/source-monitor.css";
 import "./styles/overlays.css";
 import "./styles/inspector.css";
+import "./styles/audio-waveform.css";
 import "./App.css";
 import { ProjectStartScreen } from "./components/app/ProjectStartScreen.jsx";
 import { TopBar } from "./components/app/TopBar.jsx";
@@ -89,13 +90,15 @@ import { useHistory } from "./hooks/useHistory.js";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.js";
 import { useKeyframeInteraction } from "./hooks/useKeyframeInteraction.js";
 import { useMediaAnalysis } from "./hooks/useMediaAnalysis.js";
-import { useMediaManagement } from "./hooks/useMediaManagement.js";
+import { useMediaManagementController } from "./hooks/useMediaManagement.js";
+import { MediaProvider } from "./contexts/MediaContext.jsx";
 import { usePlaybackController } from "./hooks/usePlaybackController.js";
 import { useProjectLifecycle } from "./hooks/useProjectLifecycle.js";
 import { useTimelineDrop } from "./hooks/useTimelineDrop.js";
 import { useTimelineMouseInteraction } from "./hooks/useTimelineMouseInteraction.js";
 import { buildProjectSnapshot } from "./lib/projectHelpers.js";
 import { useAudioLibrary } from "./hooks/useAudioLibrary.js";
+import { useTimelineAudioGraph } from "./hooks/useTimelineAudioGraph.js";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const isDevMode = import.meta.env.DEV;
@@ -154,6 +157,7 @@ const TIMELINE_PAUSED_DRIFT_TOLERANCE = 0.02;
 
 function App() {
   const videoRef = useRef(null);
+  const sourceAudioRef = useRef(null);
   const timelineVisualRefs = useRef(new Map());
   const timelineAudioRefs = useRef(new Map());
   const fileRef = useRef(null);
@@ -212,7 +216,7 @@ function App() {
   const [mediaSearch, setMediaSearch] = useState("");
   const [mediaTypeFilter, setMediaTypeFilter] = useState("all");
   const [mediaSort, setMediaSort] = useState("importedAt");
-  const [mediaSelectionId, setMediaSelectionId] = useState(null);
+  const [selectedMediaIds, setSelectedMediaIds] = useState(() => new Set());
   const [activeId, setActiveId] = useState(null);
   const [clips, setClips] = useState([]);
   const [activeClipId, setActiveClipId] = useState(null);
@@ -244,13 +248,20 @@ function App() {
   const [marqueeBox, setMarqueeBox] = useState(null); // { x1, y1, x2, y2 } in tracks-content px
   const [importDragInfo, setImportDragInfo] = useState(null); // { videoId, name, dur, insertPoint, mode, simulatedLayout }
   const [trackMovePreview, setTrackMovePreview] = useState(null); // { targetTrackIds, autoTracks } during timeline clip moves
+  const [tracks, setTracks] = useState(() => createDefaultTracks());
+  const {
+    connectAudioElement: connectTimelineAudio,
+    disconnectAudioElement: disconnectTimelineAudio,
+    setClipGain: setTimelineAudioClipGain,
+    setClipMuted: setTimelineAudioClipMuted,
+    getTrackPeak,
+  } = useTimelineAudioGraph({ tracks, masterVolume: volume, masterMuted: muted });
   const draggedVideoIdRef = useRef(null);
   const draggedTrackModeRef = useRef("av"); // "av" = video with audio, "audio" = audio-only
   const draggedUseSourceRangeRef = useRef(false);
   const sourceTrimDragRef = useRef(null);
   const sourceSeekDragRef = useRef(null);
   const [, setDragTooltip] = useState(null); // { x, y, label }
-  const [tracks, setTracks] = useState(() => createDefaultTracks());
   const trackHeadersListRef = useRef(null);
   const setTracksContentRef = useCallback((node) => {
     tracksContentRef.current = node;
@@ -282,18 +293,20 @@ function App() {
             dangerColor: "#ef4444",
             successColor: "#10b981",
             warnColor: "#f59e0b",
+
             ...parsed,
             previewQuality: normalizePreviewQuality(parsed?.previewQuality),
+            audioScrubbing: parsed?.audioScrubbing !== false,
           };
         } catch (e) {
           console.error("Error parsing settings:", e);
-          return { imageDuration: 3, previewQuality: "half", primaryColor: "#8b5cf6", secondaryColor: "#06b6d4" };
+          return { imageDuration: 3, previewQuality: "half", audioScrubbing: true, primaryColor: "#8b5cf6", secondaryColor: "#06b6d4" };
         }
       }
     } catch (e) {
       console.error("Error loading settings:", e);
     }
-      return { imageDuration: 3, previewQuality: "half", primaryColor: "#8b5cf6", secondaryColor: "#06b6d4", tertiaryColor: "#f97316", bgBase: "#0d0a1a", bgPanel: "#15102a", bgElevated: "#1c1638", textColor: null, textMuted: null, dangerColor: "#ef4444", successColor: "#10b981", warnColor: "#f59e0b" };
+      return { imageDuration: 3, previewQuality: "half", audioScrubbing: true, primaryColor: "#8b5cf6", secondaryColor: "#06b6d4", tertiaryColor: "#f97316", bgBase: "#0d0a1a", bgPanel: "#15102a", bgElevated: "#1c1638", textColor: null, textMuted: null, dangerColor: "#ef4444", successColor: "#10b981", warnColor: "#f59e0b" };
   }, []);
 
   const [settings, setSettings] = useState(loadSettings());
@@ -611,18 +624,14 @@ function App() {
         ...prev,
         [videoId]: { inPoint: nextIn, outPoint: nextOut },
       }));
-      if (
-        videoId === activeId &&
-        videoRef.current &&
-        media.mediaType === "video"
-      ) {
-        try {
-          videoRef.current.currentTime =
-            patch.outPoint != null ? nextOut : nextIn;
-        } catch {
-          /* ignored */
+      if (videoId === activeId) {
+        const seekTo = patch.outPoint != null ? nextOut : nextIn;
+        if (media.mediaType === "video" && videoRef.current) {
+          try { videoRef.current.currentTime = seekTo; } catch { /* ignored */ }
+        } else if (media.mediaType === "audio" && sourceAudioRef.current) {
+          try { sourceAudioRef.current.currentTime = seekTo; } catch { /* ignored */ }
         }
-        setPreviewTime(patch.outPoint != null ? nextOut : nextIn);
+        setPreviewTime(seekTo);
       }
     },
     [activeId, getSourceSelection, videos],
@@ -650,25 +659,23 @@ function App() {
 
   const seekSourcePreviewTo = useCallback(
     (time) => {
-      if (
-        !activeVideo ||
-        activeVideo.mediaType !== "video" ||
-        !activeSourceSelection
-      )
-        return;
+      if (!activeVideo || !activeSourceSelection) return;
+      const isAudio = activeVideo.mediaType === "audio";
+      const isVideo = activeVideo.mediaType === "video";
+      if (!isAudio && !isVideo) return;
       setEditorFocus(FOCUS_SOURCE);
       const next = clampSourceTime(time, activeSourceSelection.duration);
       setPreviewTime(next);
-      if (videoRef.current && activeId === activeVideo.id) {
-        try {
-          videoRef.current.currentTime = next;
-        } catch {
-          /* ignored */
+      if (isVideo) {
+        if (videoRef.current && activeId === activeVideo.id) {
+          try { videoRef.current.currentTime = next; } catch { /* ignored */ }
+        } else {
+          setActiveId(activeVideo.id);
+          pendingSeekRef.current = next;
+          pendingPlayRef.current = false;
         }
-      } else {
-        setActiveId(activeVideo.id);
-        pendingSeekRef.current = next;
-        pendingPlayRef.current = false;
+      } else if (isAudio && sourceAudioRef.current) {
+        try { sourceAudioRef.current.currentTime = next; } catch { /* ignored */ }
       }
     },
     [activeId, activeSourceSelection, activeVideo],
@@ -676,12 +683,8 @@ function App() {
 
   const beginSourcePreviewSeek = useCallback(
     (e) => {
-      if (
-        !activeVideo ||
-        activeVideo.mediaType !== "video" ||
-        !activeSourceSelection
-      )
-        return;
+      if (!activeVideo || !activeSourceSelection) return;
+      if (activeVideo.mediaType !== "video" && activeVideo.mediaType !== "audio") return;
       e.preventDefault();
       e.stopPropagation();
       const rect = e.currentTarget.getBoundingClientRect();
@@ -702,12 +705,8 @@ function App() {
 
   const beginSourceTimelineDrag = useCallback(
     (e, edge) => {
-      if (
-        !activeVideo ||
-        !activeSourceSelection ||
-        activeVideo.mediaType !== "video"
-      )
-        return;
+      if (!activeVideo || !activeSourceSelection) return;
+      if (activeVideo.mediaType !== "video" && activeVideo.mediaType !== "audio") return;
       e.preventDefault();
       e.stopPropagation();
       const timelineEl =
@@ -738,12 +737,8 @@ function App() {
 
   const setSourcePointAtPreviewTime = useCallback(
     (edge) => {
-      if (
-        !activeVideo ||
-        activeVideo.mediaType !== "video" ||
-        !activeSourceSelection
-      )
-        return;
+      if (!activeVideo || !activeSourceSelection) return;
+      if (activeVideo.mediaType !== "video" && activeVideo.mediaType !== "audio") return;
       const time = clampSourceTime(previewTime, activeSourceSelection.duration);
       updateSourceRange(activeVideo.id, { [edge]: time });
     },
@@ -905,16 +900,18 @@ function App() {
     setTimelineTime,
     setAspectRatio,
     setPxPerSec,
-    setSnapEnabled,
-    setVolume,
-    setMuted,
-    setMediaSelectionId,
-    setActiveId,
-    setSourceMonitorId,
-    setEditorFocus,
-    setActiveClipId,
-    setSelectedClipIds,
-    setSelectedGap,
+  setSnapEnabled,
+  setVolume,
+  setMuted,
+  selectedMediaIds,
+  setSelectedMediaIds,
+  setActiveId,
+  setSourceMonitorId,
+  setEditorFocus,
+  setActiveClipId,
+  setSelectedClipIds,
+  visibleVideos,
+  setSelectedGap,
     setShowProjectStart,
     setCurrentProject,
     setIsProjectDirty,
@@ -963,8 +960,9 @@ function App() {
   }, [createHistorySnapshot, pushHistory]);
 
   const handleUpdateTrack = useCallback((trackId, changes) => {
+    pushHistory(createHistorySnapshot());
     setTracks((prev) => updateTrackInList(prev, trackId, changes));
-  }, []);
+  }, [createHistorySnapshot, pushHistory]);
 
   const handleTrackResizeMouseDown = useCallback((e, trackId, currentHeight) => {
     e.preventDefault();
@@ -1198,11 +1196,16 @@ function App() {
   );
 
   const setTimelineAudioRef = useCallback(
-    (clipId) => (node) => {
-      if (node) timelineAudioRefs.current.set(clipId, node);
-      else timelineAudioRefs.current.delete(clipId);
+    (clipId, trackId) => (node) => {
+      if (node) {
+        timelineAudioRefs.current.set(clipId, node);
+        connectTimelineAudio(clipId, node, trackId);
+      } else {
+        timelineAudioRefs.current.delete(clipId);
+        disconnectTimelineAudio(clipId);
+      }
     },
-    [],
+    [connectTimelineAudio, disconnectTimelineAudio],
   );
 
 
@@ -1225,18 +1228,21 @@ function App() {
 
   const handlePreviewTimeUpdate = useCallback(
     (e) => {
-      const nextTime = e.currentTarget.currentTime || 0;
+      const nextTime = e.currentTarget?.currentTime ?? 0;
       setPreviewTime(nextTime);
       if (
         playbackModeRef.current === "source" &&
         activeSourceSelection &&
         nextTime >= activeSourceSelection.outPoint - 0.02
       ) {
-        e.currentTarget.pause();
-        try {
-          e.currentTarget.currentTime = activeSourceSelection.outPoint;
-        } catch {
-          /* ignored */
+        e.currentTarget?.pause();
+        const media = e.currentTarget;
+        if (media) {
+          try {
+            media.currentTime = activeSourceSelection.outPoint;
+          } catch {
+            /* ignored */
+          }
         }
         setPreviewTime(activeSourceSelection.outPoint);
         imagePlaybackRef.current = null;
@@ -1249,11 +1255,15 @@ function App() {
   );
 
 
-  // sync volume/mute to video
+  // sync volume/mute to video and source audio
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.volume = volume;
       videoRef.current.muted = muted;
+    }
+    if (sourceAudioRef.current) {
+      sourceAudioRef.current.volume = volume;
+      sourceAudioRef.current.muted = muted;
     }
   }, [volume, muted]);
 
@@ -1276,6 +1286,9 @@ function App() {
     startClipPlayback,
     startTimelineGapPlayback,
     pauseTimelinePreviewMedia,
+    beginScrubAudio,
+    triggerScrubAudio,
+    endScrubAudio,
   } = usePlaybackController({
     activeClipId,
     activeId,
@@ -1283,6 +1296,7 @@ function App() {
     clips,
     muted,
     volume,
+    audioScrubbingEnabled: settings.audioScrubbing !== false,
     timelinePlaybackLookups,
     isPlaying,
     timelineTime,
@@ -1302,6 +1316,8 @@ function App() {
     videoRef,
     timelineVisualRefs,
     timelineAudioRefs,
+    setTimelineAudioClipGain,
+    setTimelineAudioClipMuted,
     pendingSeekRef,
     pendingPlayRef,
     playbackRef,
@@ -1352,7 +1368,7 @@ function App() {
     }
     handleTimelinePlay();
   }, [handleTimelinePlay, isPlaying, stopPlayback]);
-const {
+  const {
   handleImport,
   handleFileChange,
   handleSelectMedia,
@@ -1361,7 +1377,12 @@ const {
   handleDragStart,
   handleDragEnd,
   handleSourceDragStart,
-} = useMediaManagement({
+  regenerateProxy,
+  clearProxy,
+  replaceMedia,
+  relinkMedia,
+  offlineMediaIds,
+} = useMediaManagementController({
   videos,
   setVideos,
   clips,
@@ -1370,11 +1391,12 @@ const {
   setActiveClipId,
   activeId,
   setActiveId,
-  mediaSelectionId,
-  setMediaSelectionId,
+  selectedMediaIds,
+  setSelectedMediaIds,
   sourceMonitorId,
   setSourceMonitorId,
   setSelectedClipIds,
+  visibleVideos,
   setEditorFocus,
   setPreviewTime,
   setIsPlaying,
@@ -1415,6 +1437,7 @@ const {
     createAudioFolder,
     deleteAudioFolder,
     moveAudioToFolder,
+    updateAudioSourceRange,
   } = useAudioLibrary({ isTauri });
 
   const handleAudioLibraryDragStart = useCallback(
@@ -1434,9 +1457,20 @@ const {
         };
         setVideos((prev) => [...prev, mediaEntry]);
       }
-      handleDragStart(e, mediaEntry);
+      // Set source range if audio item has in/out points
+      if (item.inPoint != null || item.outPoint != null) {
+        setSourceRanges((prev) => ({
+          ...prev,
+          [mediaEntry.id]: {
+            inPoint: item.inPoint ?? 0,
+            outPoint: item.outPoint ?? videoDurations[mediaEntry.id] ?? 0,
+          },
+        }));
+      }
+      e.dataTransfer.setData("application/x-stonecutter-audio-library-id", item.id);
+      handleDragStart(e, mediaEntry, "audio", item.inPoint != null || item.outPoint != null);
     },
-    [videos, setVideos, handleDragStart],
+    [videos, setVideos, handleDragStart, setSourceRanges, videoDurations],
   );
 
   // --- Folder management ---
@@ -1469,6 +1503,55 @@ const {
       ),
     );
   }, []);
+
+  const mediaContextValue = useMemo(() => ({
+    videos,
+    setVideos,
+    folders,
+    setFolders,
+    selectedFolderId,
+    setSelectedFolderId,
+    selectedMediaIds,
+    setSelectedMediaIds,
+    mediaSearch,
+    setMediaSearch,
+    mediaTypeFilter,
+    setMediaTypeFilter,
+    mediaSort,
+    setMediaSort,
+    thumbsMap,
+    setThumbsMap,
+    videoDurations,
+    setVideoDurations,
+    offlineMediaIds,
+    activeId,
+    visibleVideos,
+    handleImport,
+    handleFileChange,
+    handleSelectMedia,
+    handleDoubleClickMedia,
+    handleRemoveMedia,
+    handleDragStart,
+    handleDragEnd,
+    handleSourceDragStart,
+    handleCreateFolder,
+    handleDeleteFolder,
+    handleMoveMediaToFolder,
+    regenerateProxy,
+    clearProxy,
+    replaceMedia,
+    relinkMedia,
+    isImportableMediaFile: MediaAssetService.isImportableMediaFile,
+  }), [
+    videos, setVideos, folders, setFolders, selectedFolderId, setSelectedFolderId,
+    selectedMediaIds, setSelectedMediaIds, mediaSearch, setMediaSearch,
+    mediaTypeFilter, setMediaTypeFilter, mediaSort, setMediaSort, thumbsMap, setThumbsMap,
+    videoDurations, setVideoDurations, offlineMediaIds,
+    activeId, visibleVideos, handleImport, handleFileChange, handleSelectMedia,
+    handleDoubleClickMedia, handleRemoveMedia, handleDragStart, handleDragEnd,
+    handleSourceDragStart, handleCreateFolder, handleDeleteFolder,
+    handleMoveMediaToFolder, regenerateProxy, clearProxy, replaceMedia, relinkMedia,
+  ]);
 
     const {
     handleTimelineDragEnter,
@@ -1522,6 +1605,7 @@ const {
     handleTracksMouseDown,
     handlePlayheadMouseDown,
     handleClipMouseDown,
+    handleCrossfadeMouseDown,
     handleTrimMouseDown,
     handlePreviewClipMouseDown,
   } = useTimelineMouseInteraction({
@@ -1567,6 +1651,9 @@ const {
     updateTimelinePlayheadPosition,
     stopPlayback,
     pauseTimelinePreviewMedia,
+    beginScrubAudio,
+    triggerScrubAudio,
+    endScrubAudio,
     pushHistory,
     createHistorySnapshot,
     getMoveTrackPlan,
@@ -1725,6 +1812,11 @@ const {
       document.body.style.cursor = "ns-resize";
       const dy = ev.clientY - d.startY;
       const next = Math.max(MIN_TRACK_HEIGHT, Math.min(MAX_TRACK_HEIGHT, d.startHeight + dy));
+      if (!d.historyPushed) {
+        d.historyBefore = createHistorySnapshot();
+        pushHistory(d.historyBefore);
+        d.historyPushed = true;
+      }
       setTracks((prev) => prev.map((t) => t.id === d.trackId ? { ...t, height: next } : t));
     };
     const onUp = () => { trackResizeDragRef.current = null; document.body.style.cursor = ""; };
@@ -1734,7 +1826,7 @@ const {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, []);
+  }, [createHistorySnapshot, pushHistory]);
 
   // Fade handle drag (DaVinci Resolve style)
   useEffect(() => {
@@ -2077,39 +2169,15 @@ const {
           <button onClick={() => setProjectStatus(null)}>x</button>
         </div>
       )}
+      <MediaProvider value={mediaContextValue}>
       <Sidebar
         sidebarTab={sidebarTab}
         sidebarItems={sidebarItems}
         editorFocus={editorFocus}
         focusSource={FOCUS_SOURCE}
-        videos={videos}
-        visibleVideos={visibleVideos}
-        activeId={mediaSelectionId}
-        thumbsMap={thumbsMap}
-        videoDurations={videoDurations}
-        mediaSearch={mediaSearch}
-        mediaTypeFilter={mediaTypeFilter}
-        mediaSort={mediaSort}
-        handleImport={handleImport}
-        handleDragStart={handleDragStart}
-        handleDragEnd={handleDragEnd}
-        handleSelectMedia={handleSelectMedia}
-        handleDoubleClickMedia={handleDoubleClickMedia}
-        handleRemoveMedia={handleRemoveMedia}
-        handleFileChange={handleFileChange}
-        isImportableMediaFile={MediaAssetService.isImportableMediaFile}
         onSidebarTabChange={setSidebarTab}
-        onMediaSearchChange={setMediaSearch}
-        onMediaTypeFilterChange={setMediaTypeFilter}
-        onMediaSortChange={setMediaSort}
         Icon={Icon}
         formatTime={formatTime}
-        folders={folders}
-        selectedFolderId={selectedFolderId}
-        setSelectedFolderId={setSelectedFolderId}
-        handleCreateFolder={handleCreateFolder}
-        handleDeleteFolder={handleDeleteFolder}
-        handleMoveMediaToFolder={handleMoveMediaToFolder}
         audioItems={audioItems}
         audioFolders={audioFolders}
         isTauri={isTauri}
@@ -2119,8 +2187,10 @@ const {
         createAudioFolder={createAudioFolder}
         deleteAudioFolder={deleteAudioFolder}
         moveAudioToFolder={moveAudioToFolder}
+        updateAudioSourceRange={updateAudioSourceRange}
         onAudioDragStart={handleAudioLibraryDragStart}
       />
+      </MediaProvider>
       <PlayerStage
         mainContentClassName={mainContentClassName}
         aspectRatio={aspectRatio}
@@ -2134,7 +2204,9 @@ const {
         activeVideo={activeVideo}
         activeSourceSelection={activeSourceSelection}
         previewTime={previewTime}
+        peaksMap={peaksMap}
         videoRef={videoRef}
+        sourceAudioRef={sourceAudioRef}
         playbackModeRef={playbackModeRef}
         playingClipIdRef={playingClipIdRef}
         imagePlaybackRef={imagePlaybackRef}
@@ -2146,6 +2218,8 @@ const {
         setTimelineAudioRef={setTimelineAudioRef}
         handleLoadedMetadata={handleLoadedMetadata}
         handlePreviewTimeUpdate={handlePreviewTimeUpdate}
+        seekSourcePreviewTo={seekSourcePreviewTo}
+        updateSourceRange={updateSourceRange}
         beginSourcePreviewSeek={beginSourcePreviewSeek}
         beginSourceTimelineDrag={beginSourceTimelineDrag}
         setSourcePointAtPreviewTime={setSourcePointAtPreviewTime}
@@ -2192,6 +2266,8 @@ const {
         trackMoveTargetIds={trackMoveTargetIds}
         trackMovePreview={trackMovePreview}
         thumbsMap={thumbsMap}
+        videos={videos}
+        videoDurations={videoDurations}
         peaksMap={peaksMap}
         editingTrackId={editingTrackId}
         dragOver={dragOver}
@@ -2231,6 +2307,7 @@ const {
         handleTracksScroll={handleTracksScroll}
         handlePlayheadMouseDown={handlePlayheadMouseDown}
         handleClipMouseDown={handleClipMouseDown}
+        handleCrossfadeMouseDown={handleCrossfadeMouseDown}
         handleClipContextMenu={handleClipContextMenu}
         handleTrimMouseDown={handleTrimMouseDown}
         handleUpdateTrack={handleUpdateTrack}
@@ -2290,10 +2367,13 @@ const {
         inspectorTab={inspectorTab}
         isLinked={isLinked}
         tracksById={tracksById}
+        tracks={tracks}
         vidClip={vidClip}
         contextMenu={contextMenu}
         clips={clips}
         timelineTime={timelineTime}
+        volume={volume}
+        muted={muted}
         selectedClipCount={selectedClipIds.size}
         selectedClipIds={selectedClipIds}
         setShowExport={setShowExport}
@@ -2309,6 +2389,11 @@ const {
         onToggleGroupKeyframe={toggleGroupKeyframeAtPlayhead}
         onUpdateKeyframeInterpolation={updateKeyframeInterpolation}
         onJumpToKeyframeTime={seekToTime}
+        onUpdateTrack={handleUpdateTrack}
+        onSetVolume={setVolume}
+        onSetMuted={setMuted}
+        getAudioNode={(clipId) => timelineAudioRefs.current.get(clipId)}
+        getTrackPeak={getTrackPeak}
         selectedKeyframe={selectedKeyframe}
         splitAtPlayhead={splitAtPlayhead}
         handleContextMenuDuplicate={handleContextMenuDuplicate}

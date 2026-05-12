@@ -1,7 +1,7 @@
 import { clipEnd, MIN_CLIP_DURATION } from './timeline.js'
 
 export const MAX_WAVEFORM_BARS = 240
-export const MAX_THUMBNAIL_ITEMS = 80
+export const MAX_THUMBNAIL_ITEMS = 200
 export const TIMELINE_OVERSCAN_PX = 800
 
 export const getVisibleTimelineRange = ({
@@ -66,12 +66,15 @@ export const buildWaveformBars = ({
   const fadeGainAt = (ratio) => {
     const time = Math.max(0, Math.min(clipDuration, ratio * clipDuration))
     let gain = 1
-    if (fadeInLength > 0 && time < fadeInLength) gain = Math.min(gain, time / fadeInLength)
+    if (fadeInLength > 0 && time < fadeInLength) {
+      gain = Math.min(gain, Math.sin((Math.PI / 2) * (time / fadeInLength)))
+    }
     const timeToEnd = clipDuration - time
     if (fadeOutLength > 0 && timeToEnd < fadeOutLength) {
-      gain = Math.min(gain, timeToEnd / fadeOutLength)
+      gain = Math.min(gain, Math.cos((Math.PI / 2) * ((fadeOutLength - timeToEnd) / fadeOutLength)))
     }
-    return Math.max(0, Math.min(1, gain))
+    const rounded = Math.round(gain * 1e12) / 1e12
+    return Math.max(0, Math.min(1, rounded))
   }
   if (!peaks || peaks.length === 0) {
     return Array.from({ length: count }, (_, index) => ({

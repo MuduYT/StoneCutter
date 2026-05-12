@@ -4,7 +4,11 @@ export const FOCUS_SOURCE = 'source'
 export const FOCUS_TIMELINE = 'timeline'
 
 export function isSourceMonitorVisible({ media, sourceMonitorId }) {
-  return Boolean(media && media.mediaType === 'video' && media.id === sourceMonitorId)
+  return Boolean(
+    media &&
+    (media.mediaType === 'video' || media.mediaType === 'audio') &&
+    media.id === sourceMonitorId
+  )
 }
 
 export function clampSourceTime(time, duration) {

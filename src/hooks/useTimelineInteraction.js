@@ -104,12 +104,13 @@ export function useTimelineInteraction({
 }) {
   // --- seeking ---
   const seekToTime = useCallback(
-    (t) => {
+    (t, options = {}) => {
       t = Math.max(0, t);
       setSourceMonitorId(null);
       setEditorFocus(FOCUS_TIMELINE);
       timelineTimeRef.current = t;
       updateTimelinePlayheadPosition(t);
+      // Force sync during seek operations to ensure UI is immediately updated
       setTimelineTime(t);
       const clip = getTopVisibleTimelineClip({
         time: t,
@@ -1000,6 +1001,10 @@ export function useTimelineInteraction({
         }
       }
       // Resume timeline playback at the scrubbed position, including empty gaps.
+      if (it && it.type === "seek") {
+        // Force sync final position on scrub-end to ensure UI is immediately updated
+        setTimelineTime(timelineTimeRef.current);
+      }
       if (it && it.type === "seek" && it.wasPlaying) {
         const resumeTime = timelineTimeRef.current;
         const resumeClip = getTopVisibleTimelineClip({

@@ -194,6 +194,9 @@ export function useTimelineMouseInteraction({
   updateTimelinePlayheadPosition,
   stopPlayback,
   pauseTimelinePreviewMedia,
+  beginScrubAudio,
+  triggerScrubAudio,
+  endScrubAudio,
   pushHistory,
   createHistorySnapshot,
   getMoveTrackPlan,
@@ -205,16 +208,85 @@ export function useTimelineMouseInteraction({
   startTimelineGapPlayback,
   timelinePlaybackLookups,
 }) {
+  const handleCrossfadeMouseDown = useCallback(
+    (e, leftClip, rightClip) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      if (!leftClip || !rightClip) return;
+      setEditorFocus(FOCUS_TIMELINE);
+      setSourceMonitorId(null);
+      if (playbackModeRef.current === "source") stopPlayback();
+      if (isClipTrackLocked(leftClip, tracks) || isClipTrackLocked(rightClip, tracks)) {
+        return;
+      }
+      const leftDuration = Math.max(
+        MIN_CLIP_DURATION,
+        leftClip.outPoint - leftClip.inPoint,
+      );
+      const rightDuration = Math.max(
+        MIN_CLIP_DURATION,
+        rightClip.outPoint - rightClip.inPoint,
+      );
+      const leftEnd = leftClip.startTime + leftDuration;
+      const gapBetweenClips = rightClip.startTime - leftEnd;
+      const maxDuration = Math.max(
+        0.05,
+        Math.min(
+          leftDuration * 0.5,
+          rightDuration * 0.5,
+          gapBetweenClips + Math.min(leftDuration, rightDuration) * 0.5,
+        ),
+      );
+      const i = {
+        type: "crossfade-drag",
+        leftClipId: leftClip.id,
+        rightClipId: rightClip.id,
+        startClientX: e.clientX,
+        initialFadeOut: leftClip.fadeOut ?? 0,
+        initialFadeIn: rightClip.fadeIn ?? 0,
+        leftDuration,
+        rightDuration,
+        gapBetweenClips,
+        maxDuration,
+        pxPerSec,
+        snapshotBefore: clips.map((c) => ({ ...c })),
+        moved: false,
+      };
+      setSelectedClipIds(new Set([leftClip.id, rightClip.id]));
+      setActiveClipId(leftClip.id);
+      setActiveId(getClipMediaId(leftClip));
+      interactionRef.current = i;
+      setInteraction(i);
+    },
+    [
+      clips,
+      interactionRef,
+      playbackModeRef,
+      pxPerSec,
+      setActiveClipId,
+      setActiveId,
+      setEditorFocus,
+      setInteraction,
+      setSelectedClipIds,
+      setSourceMonitorId,
+      stopPlayback,
+      tracks,
+    ],
+  );
+
   const seekToTime = useCallback(
-    (t) => {
+    (t, options = {}) => {
       t = Math.max(0, t);
       setSourceMonitorId(null);
       setEditorFocus(FOCUS_TIMELINE);
       timelineTimeRef.current = t;
       updateTimelinePlayheadPosition(t);
+      // During scrubbing, use throttled updates (no force) to avoid excessive re-renders
+      // Force sync is only applied when explicitly requested (e.g., on scrub-end)
       dispatchEngineCommand({
         type: "timeline.setPlayhead",
-        payload: { time: t },
+        payload: { time: t, force: options.force },
       });
       const clip = getTopVisibleTimelineClip({
         time: t,
@@ -320,7 +392,9 @@ export function useTimelineMouseInteraction({
     const t = Math.max(0, x / pxPerSec);
     if (e.target.closest(".time-ruler")) {
       const wasPlaying = beginScrub();
+      beginScrubAudio?.();
       seekToTime(t);
+      triggerScrubAudio?.(t);
       const i = { type: "seek", wasPlaying };
       interactionRef.current = i;
       setInteraction(i);
@@ -355,6 +429,7 @@ export function useTimelineMouseInteraction({
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
     const wasPlaying = beginScrub();
+    beginScrubAudio?.();
     const i = { type: "seek", wasPlaying, startX: e.clientX };
     interactionRef.current = i;
     setInteraction(i);
@@ -637,7 +712,33 @@ export function useTimelineMouseInteraction({
       if (it.type === "seek") {
         const t = Math.max(0, x / pxPerSec);
         seekToTime(t);
+        triggerScrubAudio?.(t);
         setScrubTooltip({ x, time: t });
+        return;
+      }
+
+      if (it.type === "crossfade-drag") {
+        ev.preventDefault();
+        const deltaSec =
+          Math.abs(ev.clientX - it.startClientX) /
+          Math.max(0.001, it.pxPerSec || pxPerSec);
+        const crossfadeDuration = Math.max(
+          0.05,
+          Math.min(it.maxDuration, deltaSec),
+        );
+        setClips((prev) =>
+          prev.map((clip) => {
+            if (clip.id === it.leftClipId) {
+              return { ...clip, fadeOut: crossfadeDuration };
+            }
+            if (clip.id === it.rightClipId) {
+              return { ...clip, fadeIn: crossfadeDuration };
+            }
+            return clip;
+          }),
+        );
+        it.moved = true;
+        it.lastCrossfadeDuration = crossfadeDuration;
         return;
       }
 
@@ -1147,6 +1248,13 @@ export function useTimelineMouseInteraction({
         it.snapshotBefore
       ) {
         pushHistory(createHistorySnapshot(it.snapshotBefore, tracks));
+      } else if (
+        it &&
+        it.type === "crossfade-drag" &&
+        it.moved &&
+        it.snapshotBefore
+      ) {
+        pushHistory(createHistorySnapshot(it.snapshotBefore, tracks));
       } else if (it && it.type === "move" && !it.moved) {
         setSelectedClipIds(new Set([it.clipId]));
       } else if (it && it.moved && it.snapshotBefore) {
@@ -1242,6 +1350,14 @@ export function useTimelineMouseInteraction({
           }
         }
       }
+      if (it && it.type === "seek") {
+        endScrubAudio?.();
+        // Force sync final position on scrub-end to ensure UI is immediately updated
+        dispatchEngineCommand({
+          type: "timeline.setPlayhead",
+          payload: { time: timelineTimeRef.current, force: true },
+        });
+      }
       if (it && it.type === "seek" && it.wasPlaying) {
         const resumeTime = timelineTimeRef.current;
         const resumeClip = getTopVisibleTimelineClip({
@@ -1288,6 +1404,7 @@ export function useTimelineMouseInteraction({
     handleClipMouseDown,
     handleTrimMouseDown,
     handlePreviewClipMouseDown,
+    handleCrossfadeMouseDown,
     snapValue,
     handleClipContextMenu,
   };

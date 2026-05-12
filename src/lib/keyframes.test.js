@@ -1,4 +1,3 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ANIMATABLE_VIDEO_PROPERTIES,
@@ -148,10 +147,12 @@ test("resolveAnimatedClip samples text style keyframes into content.style", () =
     content: { text: "Hallo", style: { fontSize: 48 } },
     keyframes: {
       fontSize: [buildKeyframe(0, 48), buildKeyframe(1, 96)],
+      outlineWidth: [buildKeyframe(0, 0), buildKeyframe(1, 4)],
     },
   };
   const sampled = resolveAnimatedClip(clip, 0.5);
   assert.equal(sampled.content.style.fontSize, 72);
+  assert.equal(sampled.content.style.outlineWidth, 2);
   assert.equal(sampled.content.text, "Hallo");
 });
 

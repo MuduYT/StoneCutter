@@ -11,6 +11,13 @@ import {
 
 const MEDIA_EXTS = [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS];
 
+const filtersForMediaType = (mediaType) => {
+  if (mediaType === "video") return [{ name: "Videos", extensions: VIDEO_EXTS }];
+  if (mediaType === "audio") return [{ name: "Audio", extensions: AUDIO_EXTS }];
+  if (mediaType === "image") return [{ name: "Bilder", extensions: IMAGE_EXTS }];
+  return [{ name: "Medien", extensions: MEDIA_EXTS }];
+};
+
 export class MediaAssetService {
   static get mediaAccept() {
     return "video/*,audio/*,image/*";
@@ -72,6 +79,31 @@ export class MediaAssetService {
     });
   }
 
+  static async openReplacementDialog(mediaType) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    return open({
+      multiple: false,
+      filters: filtersForMediaType(mediaType),
+    });
+  }
+
+  static async openDirectoryDialog() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    return open({ directory: true, multiple: false });
+  }
+
+  static async pathExists(path) {
+    if (!path) return false;
+    const { invoke } = await import("@tauri-apps/api/core");
+    return Boolean(await invoke("media_path_exists", { path }));
+  }
+
+  static async findMediaByName(folderPath, fileName) {
+    if (!folderPath || !fileName) return null;
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke("find_media_by_name", { folderPath, fileName });
+  }
+
   static getPreviewSrc(media, previewQuality = "half") {
     if (!media) return null;
     const quality = normalizePreviewQuality(previewQuality);
@@ -105,6 +137,12 @@ export class MediaAssetService {
       ...proxy,
       previewProxies: { [quality]: proxy },
     };
+  }
+
+  static async deleteProxy(proxyPath) {
+    if (!proxyPath) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_proxy", { proxyPath });
   }
 
   static probeDuration(
@@ -142,6 +180,7 @@ export class MediaAssetService {
     return Array(count).fill(src);
   }
 
+  // Deprecated: use useMediaWorker for non-blocking generation.
   static async generateThumbnails(src, count = 12) {
     const video = document.createElement("video");
     video.muted = true;
@@ -205,6 +244,7 @@ export class MediaAssetService {
     return thumbs;
   }
 
+  // Deprecated: use useMediaWorker for non-blocking generation.
   static async generateWaveform(src, samples = 200) {
     try {
       const response = await fetch(src);

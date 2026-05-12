@@ -305,6 +305,42 @@ fn load_project_file(project_path: String) -> Result<String, String> {
         .map_err(|e| format!("Projektdatei konnte nicht gelesen werden: {e}"))
 }
 
+#[tauri::command]
+fn media_path_exists(path: String) -> bool {
+    Path::new(&path).is_file()
+}
+
+fn find_file_by_name_in_dir(dir: &Path, file_name: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case(file_name))
+        {
+            return Some(path);
+        }
+        if path.is_dir() {
+            if let Some(found) = find_file_by_name_in_dir(&path, file_name) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn find_media_by_name(folder_path: String, file_name: String) -> Result<Option<String>, String> {
+    let folder = PathBuf::from(folder_path);
+    if !folder.is_dir() {
+        return Err(format!("Ordner nicht gefunden: {}", folder.display()));
+    }
+    Ok(find_file_by_name_in_dir(&folder, &file_name)
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
 #[derive(serde::Deserialize, Debug)]
 struct ExportSegment {
     source_path: String,
@@ -736,6 +772,32 @@ fn generate_proxy(
         path: output.to_string_lossy().to_string(),
         resolution: height,
     })
+}
+
+#[tauri::command]
+fn delete_proxy(app: tauri::AppHandle, proxy_path: String) -> Result<(), String> {
+    let path = PathBuf::from(proxy_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    if !path.is_file() {
+        return Err(format!("Proxy-Pfad ist keine Datei: {}", path.display()));
+    }
+    let proxy_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("App-Datenordner konnte nicht gelesen werden: {e}"))?
+        .join("proxies");
+    let canonical_proxy_dir = fs::canonicalize(&proxy_dir)
+        .map_err(|e| format!("Proxy-Ordner konnte nicht gelesen werden: {e}"))?;
+    let canonical_path = fs::canonicalize(&path)
+        .map_err(|e| format!("Proxy-Datei konnte nicht gelesen werden: {e}"))?;
+    if !canonical_path.starts_with(&canonical_proxy_dir) {
+        return Err("Proxy-Datei liegt nicht im Proxy-Ordner.".to_string());
+    }
+    fs::remove_file(&path)
+        .map_err(|e| format!("Proxy-Datei konnte nicht geloescht werden: {e}"))?;
+    Ok(())
 }
 
 fn parse_ffmpeg_progress_seconds(line: &str) -> Option<f64> {
@@ -1289,6 +1351,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             generate_proxy,
+            delete_proxy,
+            media_path_exists,
+            find_media_by_name,
             export_video,
             export_video_progress,
             cancel_export,

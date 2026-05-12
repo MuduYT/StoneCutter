@@ -142,6 +142,10 @@ export function useEngineBridge({
     activeClipId,
   });
 
+  // Throttling state for timeline.setPlayhead during playback
+  const lastTimelineStateUpdateRef = useRef(0);
+  const TIMELINE_STATE_THROTTLE_MS = 66; // ~15 updates per second
+
   useEffect(() => {
     latestRef.current = {
       clips,
@@ -233,10 +237,22 @@ export function useEngineBridge({
         activeClipId: nextActiveClipId,
       };
 
+      // Always update ref immediately for frame-precise timing
       if (timelineTimeRef) timelineTimeRef.current = nextPlayhead;
 
+      // For timeline.setPlayhead, throttle React state updates during playback
+      // unless force flag is set
       if (command?.type === "timeline.setPlayhead") {
-        setTimelineTime(nextPlayhead);
+        const force = command.payload?.force === true;
+        const nowMs = performance.now();
+        const shouldUpdateState =
+          force ||
+          nowMs - lastTimelineStateUpdateRef.current >= TIMELINE_STATE_THROTTLE_MS;
+        
+        if (shouldUpdateState) {
+          setTimelineTime(nextPlayhead);
+          lastTimelineStateUpdateRef.current = nowMs;
+        }
         return result;
       }
 

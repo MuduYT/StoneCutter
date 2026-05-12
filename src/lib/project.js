@@ -95,17 +95,34 @@ const normalizeTextClipContent = (content) => {
   const style = {
     fontSize: Math.max(1, fontSize),
     color: safeString(safeStyle.color, "#ffffff") || "#ffffff",
+    outlineColor: safeString(safeStyle.outlineColor, "#000000") || "#000000",
+    outlineWidth: clampNumber(safeStyle.outlineWidth, 0, 0, 20),
+    fontStyle: "normal",
+    textDecoration: "none",
   };
   const fontFamily = safeString(safeStyle.fontFamily);
   const fontWeight = safeString(safeStyle.fontWeight);
   if (fontFamily) style.fontFamily = fontFamily;
   if (fontWeight) style.fontWeight = fontWeight;
+  const fontStyle = safeString(safeStyle.fontStyle);
+  const textDecoration = safeString(safeStyle.textDecoration);
+  if (fontStyle === "italic" || fontStyle === "normal") style.fontStyle = fontStyle;
+  if (
+    textDecoration === "none" ||
+    textDecoration === "underline" ||
+    textDecoration === "line-through"
+  ) {
+    style.textDecoration = textDecoration;
+  }
   if (align && TEXT_ALIGN_VALUES.has(align)) style.align = align;
   if (Object.prototype.hasOwnProperty.call(safeStyle, "letterSpacing")) {
     style.letterSpacing = clampNumber(safeStyle.letterSpacing, 0, -10, 50);
   }
   if (Object.prototype.hasOwnProperty.call(safeStyle, "lineHeight")) {
     style.lineHeight = clampNumber(safeStyle.lineHeight, 1.15, 0.5, 3);
+  }
+  if (Object.prototype.hasOwnProperty.call(safeStyle, "outlineWidth")) {
+    style.outlineWidth = clampNumber(safeStyle.outlineWidth, 0, 0, 20);
   }
   if (Object.prototype.hasOwnProperty.call(safeStyle, "shadowOpacity")) {
     style.shadowOpacity = clampNumber(safeStyle.shadowOpacity, 0, 0, 100);
@@ -220,6 +237,11 @@ const sanitizeTrackHeight = (height) => {
   return Math.max(MIN_TRACK_HEIGHT, Math.min(MAX_TRACK_HEIGHT, number));
 };
 
+const sanitizeTrackGain = (gain) => {
+  const number = finiteNumber(gain, 1);
+  return Math.max(0, Math.min(2, number));
+};
+
 const normalizeTrack = (track, index) => {
   const safeTrack = safeObject(track);
   const type = sanitizeTrackType(safeTrack.type);
@@ -237,6 +259,7 @@ const normalizeTrack = (track, index) => {
   if (type === "audio") {
     normalized.muted = safeBoolean(safeTrack.muted, false);
     normalized.solo = safeBoolean(safeTrack.solo, false);
+    normalized.gain = sanitizeTrackGain(safeTrack.gain);
   }
   return normalized;
 };

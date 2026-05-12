@@ -1,4 +1,3 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildProjectDocument,
@@ -79,6 +78,8 @@ test("text clips round-trip with normalized content while legacy clips become me
         style: {
           fontSize: "64",
           color: "#ffeeaa",
+          outlineColor: "#222222",
+          outlineWidth: "3",
           fontFamily: "Inter",
           fontWeight: "700",
           align: "center",
@@ -107,8 +108,12 @@ test("text clips round-trip with normalized content while legacy clips become me
     style: {
       fontSize: 64,
       color: "#ffeeaa",
+      outlineColor: "#222222",
+      outlineWidth: 3,
       fontFamily: "Inter",
       fontWeight: "700",
+      fontStyle: "normal",
+      textDecoration: "none",
       align: "center",
     },
   });
@@ -514,6 +519,7 @@ test("hydrates partial and corrupt project input with safe fallbacks", () => {
       height: 60,
       muted: true,
       solo: true,
+      gain: 1,
     },
   ]);
   assert.deepEqual(hydrated.sourceRanges, {});

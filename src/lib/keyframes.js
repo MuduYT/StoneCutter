@@ -58,6 +58,7 @@ export const ANIMATABLE_VIDEO_PROPERTIES = [
   { key: "fontSize", group: "typography", default: 48, min: 8, max: 240 },
   { key: "letterSpacing", group: "typography", default: 0, min: -10, max: 50 },
   { key: "lineHeight", group: "typography", default: 1.15, min: 0.5, max: 3 },
+  { key: "outlineWidth", group: "appearance", default: 0, min: 0, max: 20 },
   { key: "shadowOpacity", group: "appearance", default: 0, min: 0, max: 100 },
   { key: "shadowBlur", group: "appearance", default: 10, min: 0, max: 50 },
   { key: "bgOpacity", group: "appearance", default: 0, min: 0, max: 100 },
@@ -71,6 +72,7 @@ const TEXT_STYLE_PROPERTY_KEYS = new Set([
   "fontSize",
   "letterSpacing",
   "lineHeight",
+  "outlineWidth",
   "shadowOpacity",
   "shadowBlur",
   "bgOpacity",
@@ -201,7 +203,7 @@ export const resolveAnimatedClip = (clip, timelineTime) => {
   if (map && clip.kind === "text") {
     const contentStyle = { ...(clip.content?.style || {}) };
     let styleTouched = false;
-    const textKeys = ["fontSize", "letterSpacing", "lineHeight", "shadowOpacity", "shadowBlur", "bgOpacity"];
+    const textKeys = ["fontSize", "letterSpacing", "lineHeight", "outlineWidth", "shadowOpacity", "shadowBlur", "bgOpacity"];
     for (const key of textKeys) {
       const track = map[key];
       if (!Array.isArray(track) || track.length === 0) continue;

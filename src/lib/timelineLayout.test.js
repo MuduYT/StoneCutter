@@ -1,4 +1,3 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildSeparatedLayout, DIVIDER_HEIGHT } from './timelineLayout.js'
 

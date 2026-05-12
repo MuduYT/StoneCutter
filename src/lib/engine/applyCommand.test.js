@@ -1,4 +1,3 @@
-import test from "node:test"
 import assert from "node:assert/strict"
 import { applyCommand, createInitialEngineState } from "./applyCommand.js"
 
@@ -41,6 +40,8 @@ test("clip.add normalizes text clip content", () => {
             style: {
               fontSize: "72",
               color: "#ffcc00",
+              outlineColor: "#111111",
+              outlineWidth: "4",
               fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
               fontWeight: "700",
               align: "center",
@@ -56,8 +57,12 @@ test("clip.add normalizes text clip content", () => {
     style: {
       fontSize: 72,
       color: "#ffcc00",
+      outlineColor: "#111111",
+      outlineWidth: 4,
       fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
       fontWeight: "700",
+      fontStyle: "normal",
+      textDecoration: "none",
       align: "center",
     },
   })
@@ -95,8 +100,12 @@ test("clip.addText creates the default text clip at the requested timeline time"
     style: {
       fontSize: 48,
       color: "#ffffff",
+      outlineColor: "#000000",
+      outlineWidth: 0,
       fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
       fontWeight: "600",
+      fontStyle: "normal",
+      textDecoration: "none",
       align: "center",
       shadowOpacity: 0,
       shadowBlur: 0,
@@ -113,6 +122,8 @@ test("clip.addText keeps text shadow visually off by default", () => {
   const style = result.state.timeline.clips[0].content.style
   assert.equal(style.shadowOpacity, 0)
   assert.equal(style.shadowBlur, 0)
+  assert.equal(style.outlineWidth, 0)
+  assert.equal(style.outlineColor, "#000000")
 })
 
 test("clip.addText falls back to playhead, explicit track and non-negative start", () => {

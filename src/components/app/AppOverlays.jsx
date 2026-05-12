@@ -22,10 +22,13 @@ export function AppOverlays({
   inspectorTab,
   isLinked,
   tracksById,
+  tracks,
   vidClip,
   contextMenu,
   clips,
   timelineTime,
+  volume,
+  muted,
   selectedClipCount,
   setShowExport,
   setExportStatus,
@@ -40,6 +43,10 @@ export function AppOverlays({
   onToggleGroupKeyframe,
   onUpdateKeyframeInterpolation,
   onJumpToKeyframeTime,
+  onUpdateTrack,
+  onSetVolume,
+  onSetMuted,
+  getAudioNode,
   selectedKeyframe,
   splitAtPlayhead,
   handleContextMenuDuplicate,
@@ -269,6 +276,20 @@ export function AppOverlays({
                 <p className="settings-hint">
                   Timeline-Playback nutzt Proxies, wenn vorhanden. Export nutzt weiterhin Originaldateien.
                 </p>
+                <label className="settings-row">
+                  <span>Audio-Scrubbing</span>
+                  <input
+                    type="checkbox"
+                    checked={settings.audioScrubbing !== false}
+                    onChange={(e) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        audioScrubbing: e.target.checked,
+                      }))
+                    }
+                    aria-label="Audio-Scrubbing"
+                  />
+                </label>
               </div>
               <div className="settings-section">
                 <h4 className="settings-section-header" onClick={() => setDesignExpanded(!designExpanded)}>
@@ -462,8 +483,16 @@ export function AppOverlays({
           selectedKeyframe={selectedKeyframe}
           selectedClipCount={selectedClipCount}
           timelineTime={timelineTime}
+          tracks={tracks}
+          clips={clips}
+          volume={volume}
+          muted={muted}
           tracksById={tracksById}
           vidClip={vidClip}
+          onUpdateTrack={onUpdateTrack}
+          onSetVolume={onSetVolume}
+          onSetMuted={onSetMuted}
+          getAudioNode={getAudioNode}
           Icon={Icon}
         />
       )}

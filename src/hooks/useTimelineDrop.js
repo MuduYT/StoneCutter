@@ -677,20 +677,12 @@ export function useTimelineDrop({
               (c) => c.trackId === audioTrackForExplorer.id,
             );
             if (snapEnabled) {
-              const ins = detectInsertPoint(
-                audioClipIdE,
-                placeholderStart + placeholderDur / 2,
-                placeholderDur,
+              audioSiblingAfter = applyRippleInsert(
                 audioSibling,
+                audioClipIdE,
+                placeholderStart,
+                placeholderDur,
               );
-              audioSiblingAfter = ins
-                ? applyRippleInsert(
-                    audioSibling,
-                    audioClipIdE,
-                    placeholderStart,
-                    placeholderDur,
-                  )
-                : audioSibling;
             } else {
               audioSiblingAfter = audioSibling;
             }
@@ -861,22 +853,12 @@ export function useTimelineDrop({
         const audioTrackId = linkedAudioTrack.id;
         const audioSibling = clips.filter((c) => c.trackId === audioTrackId);
         if (snapEnabled) {
-          const ins = detectInsertPoint(
-            audioClipId,
-            placeholderStart + placeholderDur / 2,
-            placeholderDur,
+          audioTrackClipsAfter = applyRippleInsert(
             audioSibling,
+            audioClipId,
+            placeholderStart,
+            placeholderDur,
           );
-          if (ins) {
-            audioTrackClipsAfter = applyRippleInsert(
-              audioSibling,
-              audioClipId,
-              placeholderStart,
-              placeholderDur,
-            );
-          } else {
-            audioTrackClipsAfter = audioSibling;
-          }
         } else {
           audioTrackClipsAfter = audioSibling;
         }

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { MediaAssetService } from "../lib/services/MediaAssetService.js";
+import { useMediaWorker } from "./useMediaWorker.js";
 
 export function useMediaAnalysis({
   videos,
@@ -8,6 +9,42 @@ export function useMediaAnalysis({
   setPeaksMap,
   setThumbsMap,
 }) {
+  const { generateThumbnails, generateWaveform } = useMediaWorker();
+
+  useEffect(() => {
+    let cancelled = false;
+    const audioJobs = videos.filter(
+      (v) =>
+        v.mediaType === "audio" &&
+        !mediaAnalysisRef.current.waveformStarted.has(v.id),
+    );
+    if (audioJobs.length === 0) return undefined;
+    audioJobs.forEach((v) => {
+      mediaAnalysisRef.current.waveformStarted.add(v.id);
+      setPeaksMap((prev) =>
+        prev[v.id] != null ? prev : { ...prev, [v.id]: null },
+      );
+    });
+    Promise.all(
+      audioJobs.map(async (video) => {
+        try {
+          const peaks = await generateWaveform(video.src);
+          if (!cancelled) {
+            setPeaksMap((prev) => ({ ...prev, [video.id]: peaks || [] }));
+          }
+        } catch (err) {
+          console.error("Audio waveform generation error:", err);
+          if (!cancelled) {
+            setPeaksMap((prev) => ({ ...prev, [video.id]: [] }));
+          }
+        }
+      }),
+    ).catch((err) =>
+      console.error("Audio waveform generation error:", err),
+    );
+    return () => { cancelled = true; };
+  }, [generateWaveform, mediaAnalysisRef, setPeaksMap, videos]);
+
   useEffect(() => {
     let cancelled = false;
     const videoById = new Map(videos.map((video) => [video.id, video]));
@@ -24,28 +61,31 @@ export function useMediaAnalysis({
         prev[video.id] != null ? prev : { ...prev, [video.id]: null },
       );
     });
-    let cursor = 0;
-    const runNext = async () => {
-      if (cancelled) return;
-      const video = jobs[cursor];
-      cursor += 1;
-      if (!video) return;
-      const peaks = await MediaAssetService.generateWaveform(video.src);
-      if (!cancelled) {
-        setPeaksMap((prev) =>
-          videoById.has(video.id) ? { ...prev, [video.id]: peaks || [] } : prev,
-        );
-      }
-      await runNext();
-    };
-    const workers = Array.from({ length: Math.min(2, jobs.length) }, runNext);
-    Promise.all(workers).catch((err) =>
+    Promise.all(
+      jobs.map(async (video) => {
+        try {
+          const peaks = await generateWaveform(video.src);
+          if (!cancelled) {
+            setPeaksMap((prev) =>
+              videoById.has(video.id) ? { ...prev, [video.id]: peaks || [] } : prev,
+            );
+          }
+        } catch (err) {
+          console.error("Waveform generation error:", err);
+          if (!cancelled) {
+            setPeaksMap((prev) =>
+              videoById.has(video.id) ? { ...prev, [video.id]: [] } : prev,
+            );
+          }
+        }
+      }),
+    ).catch((err) =>
       console.error("Waveform generation error:", err),
     );
     return () => {
       cancelled = true;
     };
-  }, [clips, mediaAnalysisRef, setPeaksMap, videos]);
+  }, [clips, generateWaveform, mediaAnalysisRef, setPeaksMap, videos]);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,32 +100,35 @@ export function useMediaAnalysis({
         prev[video.id] != null ? prev : { ...prev, [video.id]: null },
       );
     });
-    let cursor = 0;
-    const runNext = async () => {
-      if (cancelled) return;
-      const video = jobs[cursor];
-      cursor += 1;
-      if (!video) return;
-      const genFn =
-        video.mediaType === "image"
-          ? MediaAssetService.generateImageThumbnails
-          : video.mediaType === "audio"
-            ? async () => []
-            : MediaAssetService.generateThumbnails;
-      const thumbs = await genFn(video.src);
-      if (!cancelled) {
-        setThumbsMap((prev) =>
-          videoById.has(video.id) ? { ...prev, [video.id]: thumbs || [] } : prev,
-        );
-      }
-      await runNext();
-    };
-    const workers = Array.from({ length: Math.min(2, jobs.length) }, runNext);
-    Promise.all(workers).catch((err) =>
+    Promise.all(
+      jobs.map(async (video) => {
+        try {
+          const genFn =
+            video.mediaType === "image"
+              ? MediaAssetService.generateImageThumbnails
+              : video.mediaType === "audio"
+                ? async () => []
+                : generateThumbnails;
+          const thumbs = await genFn(video.src);
+          if (!cancelled) {
+            setThumbsMap((prev) =>
+              videoById.has(video.id) ? { ...prev, [video.id]: thumbs || [] } : prev,
+            );
+          }
+        } catch (err) {
+          console.error("Thumbnail generation error:", err);
+          if (!cancelled) {
+            setThumbsMap((prev) =>
+              videoById.has(video.id) ? { ...prev, [video.id]: [] } : prev,
+            );
+          }
+        }
+      }),
+    ).catch((err) =>
       console.error("Thumbnail generation error:", err),
     );
     return () => {
       cancelled = true;
     };
-  }, [mediaAnalysisRef, setThumbsMap, videos]);
+  }, [generateThumbnails, mediaAnalysisRef, setThumbsMap, videos]);
 }

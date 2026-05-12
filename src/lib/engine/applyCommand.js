@@ -112,8 +112,12 @@ const DEFAULT_TEXT_CLIP_CONTENT = {
   style: {
     fontSize: 48,
     color: "#ffffff",
+    outlineColor: "#000000",
+    outlineWidth: 0,
     fontFamily: "Inter, 'Segoe UI', Arial, sans-serif",
     fontWeight: "600",
+    fontStyle: "normal",
+    textDecoration: "none",
     align: "center",
     shadowOpacity: 0,
     shadowBlur: 0,
@@ -133,6 +137,15 @@ const normalizeTextContent = (content) => {
     style: {
       fontSize: Number.isFinite(fontSize) ? Math.max(1, fontSize) : 48,
       color: typeof safeStyle.color === "string" && safeStyle.color ? safeStyle.color : "#ffffff",
+      outlineColor:
+        typeof safeStyle.outlineColor === "string" && safeStyle.outlineColor
+          ? safeStyle.outlineColor
+          : "#000000",
+      outlineWidth: Number.isFinite(Number(safeStyle.outlineWidth))
+        ? Math.max(0, Math.min(20, Number(safeStyle.outlineWidth)))
+        : 0,
+      fontStyle: "normal",
+      textDecoration: "none",
     },
   }
   if (typeof safeStyle.fontFamily === "string" && safeStyle.fontFamily) {
@@ -141,12 +154,23 @@ const normalizeTextContent = (content) => {
   if (typeof safeStyle.fontWeight === "string" && safeStyle.fontWeight) {
     out.style.fontWeight = safeStyle.fontWeight
   }
+  if (safeStyle.fontStyle === "italic" || safeStyle.fontStyle === "normal") {
+    out.style.fontStyle = safeStyle.fontStyle
+  }
+  if (
+    safeStyle.textDecoration === "none" ||
+    safeStyle.textDecoration === "underline" ||
+    safeStyle.textDecoration === "line-through"
+  ) {
+    out.style.textDecoration = safeStyle.textDecoration
+  }
   if (align && TEXT_ALIGN_VALUES.has(align)) {
     out.style.align = align
   }
   const numericStyle = [
     ["letterSpacing", 0, -10, 50],
     ["lineHeight", 1.15, 0.5, 3],
+    ["outlineWidth", 0, 0, 20],
     ["shadowOpacity", 0, 0, 100],
     ["shadowBlur", 10, 0, 50],
     ["bgOpacity", 0, 0, 100],
