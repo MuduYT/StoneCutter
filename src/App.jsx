@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { flushSync } from "react-dom";
 import logoUrl from "../media/Logo/StoneCutter-Logo.png";
 import "./styles/base.css";
 import "./styles/layout.css";
@@ -32,7 +33,15 @@ import {
   unlinkClipGroup,
   isClipTrackLocked,
 } from "./lib/timeline.js";
-import { buildSeparatedLayout } from "./lib/timelineLayout.js";
+import {
+  buildSeparatedLayout,
+  clampTimelinePxPerSec,
+  clampTimelineScrollLeft,
+  computeTimelineTotalWidth,
+  getTimelineMaxScrollLeft,
+  zoomPxPerSecAtCursor,
+  zoomPxPerSecFromWheelDelta,
+} from "./lib/timelineLayout.js";
 import {
   nextTrackId,
   createDefaultTracks,
@@ -45,7 +54,11 @@ import {
   DEFAULT_TRACK_HEIGHT,
   MIN_TRACK_HEIGHT,
   MAX_TRACK_HEIGHT,
+  validateClipsOnTracks,
 } from "./lib/trackStore.js";
+import {
+  assertTimelineLayoutConsistency,
+} from "./lib/timelineIntegrity.js";
 import { filterAndSortMedia } from "./lib/mediaBin.js";
 import {
   buildTimelinePlaybackLookups,
@@ -205,7 +218,6 @@ function App() {
   const browserObjectUrlsRef = useRef(new Set());
   const clipboardRef = useRef([]); // copied clips (with relative startTimes)
   const volumeLineDragRef = useRef(null); // { clipId, startY, startVolume, trackHeight }
-  const fadeDragRef = useRef(null); // { clipId, side:'in'|'out', startX, startFade, dur, pxPerSec }
   const trackResizeDragRef = useRef(null); // { trackId, startY, startHeight }
   const [volTooltip, setVolTooltip] = useState(null); // { x, y, vol } — shown while dragging vol line
 
@@ -228,6 +240,11 @@ function App() {
   const [previewSnapGuides, setPreviewSnapGuides] = useState(null);
   const [interaction, setInteraction] = useState(null);
   const [pxPerSec, setPxPerSec] = useState(40);
+  const pxPerSecRef = useRef(40);
+  const scrollLeftRef = useRef(0);
+  const wheelZoomFrameRef = useRef(0);
+  const wheelZoomPendingRef = useRef(null);
+  const [tracksContentMounted, setTracksContentMounted] = useState(0);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
@@ -265,12 +282,14 @@ function App() {
   const trackHeadersListRef = useRef(null);
   const setTracksContentRef = useCallback((node) => {
     tracksContentRef.current = node;
+    if (node) setTracksContentMounted((tick) => tick + 1);
   }, []);
   const setTrackHeadersListRef = useCallback((node) => {
     trackHeadersListRef.current = node;
   }, []);
   const [editingTrackId, setEditingTrackId] = useState(null);
   const [dropTargetTrackId, setDropTargetTrackId] = useState(null);
+  const [dropTargetInvalid, setDropTargetInvalid] = useState(false);
   const [dropZoneTrackMode, setDropZoneTrackMode] = useState("av");
 
   // --- Settings (persisted in localStorage) ---
@@ -1130,15 +1149,16 @@ function App() {
     [tracks],
   );
 
-  const updateTimelinePlayheadPosition = useCallback(
-    (time) => {
-      const x = Math.max(0, time) * pxPerSec;
-      timelinePlayheadRefs.current.forEach((node) => {
-        if (node) node.style.setProperty("--playhead-x", `${x}px`);
-      });
-    },
-    [pxPerSec],
-  );
+  const updateTimelinePlayheadPosition = useCallback((time, scale) => {
+    const safeScale = Math.max(
+      0.001,
+      scale ?? pxPerSecRef.current ?? pxPerSec,
+    );
+    const x = Math.max(0, time) * safeScale;
+    timelinePlayheadRefs.current.forEach((node) => {
+      if (node) node.style.setProperty("--playhead-x", `${x}px`);
+    });
+  }, [pxPerSec]);
 
   const getNextTimelineLayerBoundary = useCallback((time, clipList = clips) => {
     let boundary = Number.MAX_SAFE_INTEGER;
@@ -1174,7 +1194,36 @@ function App() {
     );
   }, [pxPerSec]);
 
+  const applyTimelineScrollLeft = useCallback(
+    (nextScrollLeft, scale = pxPerSecRef.current) => {
+      const tc = tracksContentRef.current;
+      if (!tc) return 0;
+      const actualMax = getTimelineMaxScrollLeft(
+        tc.scrollWidth,
+        tc.clientWidth,
+      );
+      const safeScrollLeft = clampTimelineScrollLeft(
+        nextScrollLeft,
+        actualMax,
+      );
+      if (tc.scrollLeft !== safeScrollLeft) {
+        tc.scrollLeft = safeScrollLeft;
+      }
+      scrollLeftRef.current = safeScrollLeft;
+      setVisibleTimelineRange(
+        getVisibleTimelineRange({
+          scrollLeft: safeScrollLeft,
+          clientWidth: tc.clientWidth,
+          pxPerSec: scale,
+        }),
+      );
+      return safeScrollLeft;
+    },
+    [],
+  );
+
   const handleTracksScroll = useCallback((e) => {
+    scrollLeftRef.current = e.target.scrollLeft;
     if (trackHeadersListRef.current) {
       trackHeadersListRef.current.scrollTop = e.target.scrollTop;
     }
@@ -1182,10 +1231,128 @@ function App() {
       getVisibleTimelineRange({
         scrollLeft: e.target.scrollLeft,
         clientWidth: e.target.clientWidth,
-        pxPerSec,
+        pxPerSec: pxPerSecRef.current,
       }),
     );
-  }, [pxPerSec]);
+  }, []);
+
+  const commitTimelineZoom = useCallback(
+    (nextPxPerSec, nextScrollLeft) => {
+      const tc = tracksContentRef.current;
+      const safePxPerSec = clampTimelinePxPerSec(nextPxPerSec);
+      pxPerSecRef.current = safePxPerSec;
+
+      const predictedWidth = computeTimelineTotalWidth(
+        totalEnd,
+        timelineTimeRef.current,
+        safePxPerSec,
+      );
+      const predictedMaxScroll = tc
+        ? getTimelineMaxScrollLeft(predictedWidth, tc.clientWidth)
+        : 0;
+      const targetScrollLeft = clampTimelineScrollLeft(
+        nextScrollLeft,
+        predictedMaxScroll,
+      );
+
+      flushSync(() => {
+        setPxPerSec(safePxPerSec);
+      });
+      updateTimelinePlayheadPosition(timelineTimeRef.current, safePxPerSec);
+
+      if (!tc) return;
+      applyTimelineScrollLeft(targetScrollLeft, safePxPerSec);
+
+      requestAnimationFrame(() => {
+        if (tracksContentRef.current !== tc) return;
+        applyTimelineScrollLeft(targetScrollLeft, safePxPerSec);
+      });
+    },
+    [applyTimelineScrollLeft, totalEnd, updateTimelinePlayheadPosition],
+  );
+
+  const setTimelineZoomAtCursor = useCallback(
+    (nextPxPerSec, cursorX = null) => {
+      const tc = tracksContentRef.current;
+      const safeNextPxPerSec = clampTimelinePxPerSec(nextPxPerSec);
+      if (!tc) {
+        pxPerSecRef.current = safeNextPxPerSec;
+        setPxPerSec(safeNextPxPerSec);
+        return;
+      }
+      const safeCursorX =
+        cursorX == null
+          ? tc.clientWidth / 2
+          : Math.max(0, Math.min(tc.clientWidth, cursorX));
+      scrollLeftRef.current = tc.scrollLeft;
+      const zoom = zoomPxPerSecAtCursor({
+        pxPerSec: pxPerSecRef.current,
+        nextPxPerSec: safeNextPxPerSec,
+        scrollLeft: scrollLeftRef.current,
+        cursorX: safeCursorX,
+        clientWidth: tc.clientWidth,
+      });
+      commitTimelineZoom(zoom.nextPxPerSec, zoom.nextScrollLeft);
+    },
+    [commitTimelineZoom],
+  );
+
+  const flushPendingWheelZoom = useCallback(() => {
+    wheelZoomFrameRef.current = 0;
+    const pending = wheelZoomPendingRef.current;
+    wheelZoomPendingRef.current = null;
+    if (!pending) return;
+
+    const tc = tracksContentRef.current;
+    if (!tc) return;
+
+    const zoom = zoomPxPerSecFromWheelDelta({
+      pxPerSec: pxPerSecRef.current,
+      scrollLeft: scrollLeftRef.current,
+      cursorX: pending.cursorX,
+      clientWidth: tc.clientWidth,
+      delta: pending.delta,
+    });
+    if (zoom.nextPxPerSec === pxPerSecRef.current) return;
+    commitTimelineZoom(zoom.nextPxPerSec, zoom.nextScrollLeft);
+  }, [commitTimelineZoom]);
+
+  const handleTimelineWheel = useCallback(
+    (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.target.closest("input, textarea, select, button")) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const tc = tracksContentRef.current;
+      if (!tc) return;
+      const rect = tc.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      scrollLeftRef.current = tc.scrollLeft;
+
+      const pending = wheelZoomPendingRef.current ?? {
+        delta: 0,
+        cursorX,
+      };
+      pending.delta += e.deltaY;
+      pending.cursorX = cursorX;
+      wheelZoomPendingRef.current = pending;
+
+      if (!wheelZoomFrameRef.current) {
+        wheelZoomFrameRef.current = requestAnimationFrame(flushPendingWheelZoom);
+      }
+    },
+    [flushPendingWheelZoom],
+  );
+
+  useEffect(() => {
+    const tc = tracksContentRef.current;
+    if (!tc) return undefined;
+    scrollLeftRef.current = tc.scrollLeft;
+    const onWheel = (e) => handleTimelineWheel(e);
+    tc.addEventListener("wheel", onWheel, { passive: false });
+    return () => tc.removeEventListener("wheel", onWheel);
+  }, [handleTimelineWheel, tracksContentMounted]);
 
   const setTimelineVisualRef = useCallback(
     (clipId) => (node) => {
@@ -1267,6 +1434,11 @@ function App() {
     }
   }, [volume, muted]);
 
+
+  useEffect(() => {
+    pxPerSecRef.current = pxPerSec;
+    updateTimelinePlayheadPosition(timelineTimeRef.current, pxPerSec);
+  }, [pxPerSec, updateTimelinePlayheadPosition]);
 
   useEffect(() => {
     if (playbackModeRef.current === "timeline" && isPlaying) return;
@@ -1596,6 +1768,7 @@ function App() {
     setDragTooltip,
     setDropTargetTrackId,
     setDropZoneTrackMode,
+    setDropTargetInvalid,
     setTrackMovePreview,
   });
 
@@ -1607,6 +1780,7 @@ function App() {
     handleClipMouseDown,
     handleCrossfadeMouseDown,
     handleTrimMouseDown,
+    handleFadeMouseDown,
     handlePreviewClipMouseDown,
   } = useTimelineMouseInteraction({
     clips,
@@ -1624,6 +1798,7 @@ function App() {
     interaction,
     setInteraction,
     pxPerSec,
+    pxPerSecRef,
     snapEnabled,
     videos,
     setEditorFocus,
@@ -1828,37 +2003,6 @@ function App() {
     };
   }, [createHistorySnapshot, pushHistory]);
 
-  // Fade handle drag (DaVinci Resolve style)
-  useEffect(() => {
-    const onFadeMove = (e) => {
-      const d = fadeDragRef.current;
-      if (!d) return;
-      const dx = e.clientX - d.startX;
-      const deltaSec = dx / d.pxPerSec;
-      const maxFade = d.dur * 0.95;
-      if (!d.historyPushed) {
-        pushHistory(d.historyBefore);
-        d.historyPushed = true;
-      }
-      if (d.side === "in") {
-        const newFade = Math.max(0, Math.min(maxFade, d.startFade + deltaSec));
-        dispatchClipUpdateProps(d.clipId, { fadeIn: newFade });
-      } else {
-        const newFade = Math.max(0, Math.min(maxFade, d.startFade - deltaSec));
-        dispatchClipUpdateProps(d.clipId, { fadeOut: newFade });
-      }
-    };
-    const onFadeUp = () => {
-      fadeDragRef.current = null;
-    };
-    document.addEventListener("mousemove", onFadeMove);
-    document.addEventListener("mouseup", onFadeUp);
-    return () => {
-      document.removeEventListener("mousemove", onFadeMove);
-      document.removeEventListener("mouseup", onFadeUp);
-    };
-  }, [dispatchClipUpdateProps, pushHistory]);
-
   // Close context menu on outside click / scroll
   useEffect(() => {
     if (!contextMenu) return;
@@ -1873,6 +2017,70 @@ function App() {
     };
   }, [contextMenu]);
 
+  const cancelActiveTimelineInteractions = useCallback(() => {
+    const it = interactionRef.current;
+    if (it?.snapshotBefore) setClips(it.snapshotBefore);
+    if (it?.tracksBefore) setTracks(it.tracksBefore);
+    if (it?.type === "seek") {
+      endScrubAudio?.();
+      dispatchEngineCommand({
+        type: "timeline.setPlayhead",
+        payload: { time: timelineTimeRef.current, force: true },
+      });
+    }
+
+    interactionRef.current = null;
+    volumeLineDragRef.current = null;
+    trackResizeDragRef.current = null;
+    sourceTrimDragRef.current = null;
+    sourceSeekDragRef.current = null;
+    document.body.style.cursor = "";
+    setInteraction(null);
+    setMarqueeBox(null);
+    setSnapIndicatorTime(null);
+    setScrubTooltip(null);
+    setPreviewSnapGuides(null);
+    setDropTargetTrackId(null);
+    setDropTargetInvalid(false);
+    setDropZoneTrackMode("av");
+    setTrackMovePreview(null);
+    setDragOver(false);
+    setDropIndicatorTime(null);
+    setImportDragInfo(null);
+    setDragTooltip(null);
+    setVolTooltip(null);
+  }, [dispatchEngineCommand, endScrubAudio]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.code !== "Escape") return;
+      if (
+        !interactionRef.current &&
+        !volumeLineDragRef.current &&
+        !trackResizeDragRef.current &&
+        !sourceTrimDragRef.current &&
+        !sourceSeekDragRef.current &&
+        !dragOver &&
+        !importDragInfo &&
+        !trackMovePreview
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      cancelActiveTimelineInteractions();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [
+    cancelActiveTimelineInteractions,
+    dragOver,
+    importDragInfo,
+    trackMovePreview,
+  ]);
+
   // Fallback: clear interaction state on window mouseup (catches missed events)
   useEffect(() => {
     const onWindowMouseUp = () => {
@@ -1882,6 +2090,7 @@ function App() {
         setSnapIndicatorTime(null);
         setScrubTooltip(null);
         setDropTargetTrackId(null);
+        setDropTargetInvalid(false);
         setTrackMovePreview(null);
       }
     };
@@ -1896,14 +2105,32 @@ function App() {
     [trackMovePreview],
   );
 
+  useEffect(() => {
+    if (!import.meta.env?.DEV) return;
+    assertTimelineLayoutConsistency(tracks, DEFAULT_TRACK_HEIGHT);
+    validateClipsOnTracks(tracks, clips);
+  }, [tracks, clips]);
+
   const getAutoTrackZoneTop = useCallback(
     (type, edge) => {
-      const { videoTracksLayout, audioTracksLayout, dividerY, dividerHeight } =
-        buildSeparatedLayout(tracks, DEFAULT_TRACK_HEIGHT);
+      const {
+        videoTracksLayout,
+        audioTracksLayout,
+        videoEdgeZone,
+        audioEdgeZone,
+        dividerY,
+        dividerHeight,
+      } = buildSeparatedLayout(tracks, DEFAULT_TRACK_HEIGHT);
+      if (type === "video" && edge === "start") {
+        return DEFAULT_TIMELINE_RULER_HEIGHT + videoEdgeZone.top;
+      }
+      if (type === "audio" && edge === "end") {
+        return DEFAULT_TIMELINE_RULER_HEIGHT + audioEdgeZone.top;
+      }
       const trackList =
         type === "video" ? videoTracksLayout : audioTracksLayout;
       if (trackList.length === 0) {
-        if (type === "video") return DEFAULT_TIMELINE_RULER_HEIGHT;
+        if (type === "video") return DEFAULT_TIMELINE_RULER_HEIGHT + videoEdgeZone.top;
         return DEFAULT_TIMELINE_RULER_HEIGHT + dividerY + dividerHeight;
       }
       if (edge === "start") return DEFAULT_TIMELINE_RULER_HEIGHT + trackList[0].top;
@@ -1913,17 +2140,42 @@ function App() {
     [tracks],
   );
 
-  // Auto-scroll only when needed
+  // Playback auto-scroll: imperative RAF loop (no playheadX React dependency)
   useEffect(() => {
-    const el = tracksContentRef.current;
-    if (!el) return;
+    if (!isPlaying || playbackModeRef.current !== "timeline") return;
+    let rafId = 0;
     const margin = 60;
-    if (playheadX < el.scrollLeft + margin) {
-      el.scrollLeft = Math.max(0, playheadX - margin);
-    } else if (playheadX > el.scrollLeft + el.clientWidth - margin) {
-      el.scrollLeft = playheadX - el.clientWidth + margin;
-    }
-  }, [playheadX]);
+    const tick = () => {
+      if (interactionRef.current) {
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+      const el = tracksContentRef.current;
+      if (el) {
+        const playheadPx =
+          timelineTimeRef.current * pxPerSecRef.current;
+        const maxScroll = getTimelineMaxScrollLeft(
+          el.scrollWidth,
+          el.clientWidth,
+        );
+        if (playheadPx < el.scrollLeft + margin) {
+          const next = clampTimelineScrollLeft(playheadPx - margin, maxScroll);
+          el.scrollLeft = next;
+          scrollLeftRef.current = next;
+        } else if (playheadPx > el.scrollLeft + el.clientWidth - margin) {
+          const next = clampTimelineScrollLeft(
+            playheadPx - el.clientWidth + margin,
+            maxScroll,
+          );
+          el.scrollLeft = next;
+          scrollLeftRef.current = next;
+        }
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [isPlaying]);
 
   const tracksById = useMemo(
     () => new Map(tracks.map((track) => [track.id, track])),
@@ -2272,13 +2524,14 @@ function App() {
         editingTrackId={editingTrackId}
         dragOver={dragOver}
         dropZoneTrackMode={dropZoneTrackMode}
+        dropTargetInvalid={dropTargetInvalid}
         scrubTooltip={scrubTooltip}
         selectedKeyframe={selectedKeyframe}
         onSelectKeyframe={selectKeyframeAndSeek}
         onBeginKeyframeDrag={beginKeyframeDrag}
         onBeginVolumeKeyframeDrag={beginVolumeKeyframeDrag}
         onAddVolumeKeyframe={addVolumeKeyframeFromCurve}
-        fadeDragRef={fadeDragRef}
+        handleFadeMouseDown={handleFadeMouseDown}
         volumeLineDragRef={volumeLineDragRef}
         createHistorySnapshot={createHistorySnapshot}
         getAutoTrackZoneTop={getAutoTrackZoneTop}
@@ -2287,7 +2540,7 @@ function App() {
         setShowSettings={setShowSettings}
         setMuted={setMuted}
         setVolume={setVolume}
-        setPxPerSec={setPxPerSec}
+        setTimelineZoomAtCursor={setTimelineZoomAtCursor}
         setEditingTrackId={setEditingTrackId}
         seekToTime={seekToTime}
         handlePlay={handleTimelinePlay}
@@ -2305,6 +2558,7 @@ function App() {
         setTrackHeadersListRef={setTrackHeadersListRef}
         handleTracksMouseDown={handleTracksMouseDown}
         handleTracksScroll={handleTracksScroll}
+        handleTimelineWheel={handleTimelineWheel}
         handlePlayheadMouseDown={handlePlayheadMouseDown}
         handleClipMouseDown={handleClipMouseDown}
         handleCrossfadeMouseDown={handleCrossfadeMouseDown}

@@ -3,7 +3,11 @@ import {
   buildThumbnailItems,
   buildWaveformBars,
 } from "../lib/timelineRender.js";
-import { DEFAULT_TIMELINE_RULER_HEIGHT } from "../lib/timeline.js";
+import {
+  clampFadeValues,
+  DEFAULT_TIMELINE_RULER_HEIGHT,
+  findAdjacentAudioClipPairs,
+} from "../lib/timeline.js";
 import { buildSeparatedLayout } from "../lib/timelineLayout.js";
 import { ClipKeyframes } from "./timeline/ClipKeyframes.jsx";
 import { VolumeCurve } from "./timeline/VolumeCurve.jsx";
@@ -21,7 +25,6 @@ export const Timeline = ({
   pxPerSec,
   totalWidth,
   totalEnd,
-  playheadX,
   interaction,
   activeClipId,
   selectedClipIds,
@@ -34,6 +37,7 @@ export const Timeline = ({
   editingTrackId,
   dragOver,
   dropZoneTrackMode,
+  dropTargetInvalid = false,
   formatTime,
   formatTC,
   scrubTooltip,
@@ -51,12 +55,13 @@ export const Timeline = ({
   handleClipMouseDown,
   handleClipContextMenu,
   handleTrimMouseDown,
+  handleCrossfadeMouseDown,
   handleUpdateTrack,
   handleTrackResizeMouseDown,
   marqueeBox,
   snapIndicatorTime,
   setEditingTrackId,
-  fadeDragRef,
+  handleFadeMouseDown,
   volumeLineDragRef,
   createHistorySnapshot,
   DEFAULT_TRACK_HEIGHT,
@@ -76,15 +81,39 @@ export const Timeline = ({
   }, [clips]);
   const clipsByTrack = visibleClipsByTrack || allClipsByTrack;
 
+  const crossfadeByLeftClipId = useMemo(() => {
+    const map = new Map();
+    for (const pair of findAdjacentAudioClipPairs(clips, tracks)) {
+      map.set(pair.leftClip.id, pair);
+    }
+    return map;
+  }, [clips, tracks]);
+
   const layout = useMemo(
     () => buildSeparatedLayout(tracks, DEFAULT_TRACK_HEIGHT),
     [tracks, DEFAULT_TRACK_HEIGHT],
   );
-  const { videoTracksLayout, audioTracksLayout, dividerY, dividerHeight, totalTracksHeight } = layout;
+  const {
+    videoTracksLayout,
+    audioTracksLayout,
+    videoEdgeZone,
+    audioEdgeZone,
+    dividerY,
+    dividerHeight,
+    totalTracksHeight,
+  } = layout;
   const allTracksLayout = useMemo(
     () => [...videoTracksLayout, ...audioTracksLayout],
     [videoTracksLayout, audioTracksLayout],
   );
+  const showVideoDropEdge = dropZoneTrackMode !== "audio";
+  const showAudioDropEdge = dropZoneTrackMode !== "video";
+  const laneDropClass = (trackId) => {
+    const isTarget =
+      dropTargetTrackId === trackId || trackMoveTargetIds.has(trackId);
+    if (!isTarget) return "";
+    return dropTargetInvalid ? "drop-target drop-target-invalid" : "drop-target";
+  };
 
   return (
     <div className="timeline-tracks">
@@ -92,17 +121,20 @@ export const Timeline = ({
       <div className="track-headers">
         <div className="track-header time-header" />
         <div className="track-headers-list" ref={setTrackHeadersListRef}>
-          {dragOver && (
-            <div
-              className={`track-header-row drop-target-below ${dropTargetTrackId === "__above__" ? "active" : ""}`}
-              style={{ flexShrink: 0 }}
-            >
-              <span>
-                {dropZoneTrackMode === "audio" ? "+ Audio-Spur" : "+ Video-Spur"}
-              </span>
-            </div>
-          )}
           <div style={{ position: "relative", height: `${totalTracksHeight}px`, flexShrink: 0 }}>
+            <div
+              className={`track-edge-zone-header video ${dragOver && showVideoDropEdge ? "drag-active" : ""} ${dropTargetTrackId === "__above__" ? "active" : ""} ${dropTargetInvalid && dropTargetTrackId === "__above__" ? "drop-target-invalid" : ""}`}
+              style={{
+                position: "absolute",
+                top: `${videoEdgeZone.top}px`,
+                left: 0,
+                right: 0,
+                height: `${videoEdgeZone.height}px`,
+              }}
+              aria-hidden={!(dragOver && showVideoDropEdge)}
+            >
+              {dragOver && showVideoDropEdge && <span>+ Video-Spur</span>}
+            </div>
             <div
               className="track-section-divider track-header-divider"
               style={{
@@ -120,7 +152,7 @@ export const Timeline = ({
             return (
               <div
                 key={track.id}
-                className={`track-header-row ${track.type === "video" ? "video" : "audio"} ${track.hidden ? "hidden" : ""} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""}`}
+                className={`track-header-row ${track.type === "video" ? "video" : "audio"} ${track.hidden ? "hidden" : ""} ${laneDropClass(track.id)}`}
                 style={{
                   position: "absolute",
                   top: `${top}px`,
@@ -215,21 +247,19 @@ export const Timeline = ({
               </div>
             );
           })}
-            {/* Drop target below tracks */}
-            {dragOver && (
-              <div
-                className={`track-header-row drop-target-below ${dropTargetTrackId === "__below__" ? "active" : ""}`}
-                style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
-              >
-                <span>
-                  {dragOver
-                    ? dropZoneTrackMode === "audio"
-                      ? "+ Audio-Spur"
-                      : "+ Video-Spur"
-                    : "+ Neue Spur"}
-                </span>
-              </div>
-            )}
+            <div
+              className={`track-edge-zone-header audio ${dragOver && showAudioDropEdge ? "drag-active" : ""} ${dropTargetTrackId === "__below__" ? "active" : ""} ${dropTargetInvalid && dropTargetTrackId === "__below__" ? "drop-target-invalid" : ""}`}
+              style={{
+                position: "absolute",
+                top: `${audioEdgeZone.top}px`,
+                left: 0,
+                right: 0,
+                height: `${audioEdgeZone.height}px`,
+              }}
+              aria-hidden={!(dragOver && showAudioDropEdge)}
+            >
+              {dragOver && showAudioDropEdge && <span>+ Audio-Spur</span>}
+            </div>
           </div>
         </div>
       </div>
@@ -269,7 +299,6 @@ export const Timeline = ({
             <div
               className={`playhead-handle ruler-handle ${interaction?.type === "seek" ? "dragging" : ""}`}
               ref={setTimelinePlayheadRef(0)}
-              style={{ "--playhead-x": `${playheadX}px` }}
               onMouseDown={handlePlayheadMouseDown}
               title="Ziehen zum Spulen"
             />
@@ -288,7 +317,6 @@ export const Timeline = ({
           <div
             className="playhead"
             ref={setTimelinePlayheadRef(1)}
-            style={{ "--playhead-x": `${playheadX}px` }}
             aria-hidden="true"
           >
             <div className="playhead-line" />
@@ -325,11 +353,34 @@ export const Timeline = ({
             }}
           />
 
+          <div
+            className={`track-edge-zone-lane video ${dragOver && showVideoDropEdge ? "drag-active" : ""} ${dropTargetTrackId === "__above__" ? "active" : ""} ${dropTargetInvalid && dropTargetTrackId === "__above__" ? "drop-target-invalid" : ""}`}
+            style={{
+              position: "absolute",
+              top: `${DEFAULT_TIMELINE_RULER_HEIGHT + videoEdgeZone.top}px`,
+              left: 0,
+              right: 0,
+              height: `${videoEdgeZone.height}px`,
+            }}
+            aria-hidden="true"
+          />
+          <div
+            className={`track-edge-zone-lane audio ${dragOver && showAudioDropEdge ? "drag-active" : ""} ${dropTargetTrackId === "__below__" ? "active" : ""} ${dropTargetInvalid && dropTargetTrackId === "__below__" ? "drop-target-invalid" : ""}`}
+            style={{
+              position: "absolute",
+              top: `${DEFAULT_TIMELINE_RULER_HEIGHT + audioEdgeZone.top}px`,
+              left: 0,
+              right: 0,
+              height: `${audioEdgeZone.height}px`,
+            }}
+            aria-hidden="true"
+          />
+
           {/* Track lanes */}
           {allTracksLayout.map(({ track, height, top }) => (
             <div
               key={track.id}
-              className={`track-lane ${track.type} ${track.hidden ? "hidden" : ""} ${dropTargetTrackId === track.id || trackMoveTargetIds.has(track.id) ? "drop-target" : ""} ${track.locked ? "locked" : ""}`}
+              className={`track-lane ${track.type} ${track.hidden ? "hidden" : ""} ${laneDropClass(track.id)} ${track.locked ? "locked" : ""}`}
               style={{
                 position: "absolute",
                 top: `${DEFAULT_TIMELINE_RULER_HEIGHT + top}px`,
@@ -348,6 +399,38 @@ export const Timeline = ({
                 const trimmedLeft = clip.inPoint > 0.01;
                 const trimmedRight =
                   !isText && clip.outPoint < clip.sourceDuration - 0.01;
+                const {
+                  fadeIn: visibleFadeIn,
+                  fadeOut: visibleFadeOut,
+                } = clampFadeValues({
+                  duration: dur,
+                  fadeIn: clip.fadeIn ?? 0,
+                  fadeOut: clip.fadeOut ?? 0,
+                });
+                const fadeHandleW = 10;
+                const fadeHandleH = 13;
+                const fadeInPx = Math.min(
+                  width,
+                  (visibleFadeIn / Math.max(0.001, dur)) * width,
+                );
+                const fadeOutPx = Math.min(
+                  width,
+                  (visibleFadeOut / Math.max(0.001, dur)) * width,
+                );
+                const fadeInHandleLeft = Math.max(
+                  2,
+                  Math.min(
+                    width - fadeHandleW,
+                    fadeInPx > 0.001 ? fadeInPx - fadeHandleW : 2,
+                  ),
+                );
+                const fadeOutHandleLeft =
+                  fadeOutPx > 0.001
+                    ? Math.max(
+                        2,
+                        Math.min(width - fadeHandleW, width - fadeOutPx),
+                      )
+                    : null;
                 return (
                   <div
                     key={clip.id}
@@ -442,8 +525,8 @@ export const Timeline = ({
                               outPoint: clip.outPoint,
                               sourceDuration: clip.sourceDuration,
                               volume: clip.volume ?? 1,
-                              fadeIn: clip.fadeIn ?? 0,
-                              fadeOut: clip.fadeOut ?? 0,
+                              fadeIn: visibleFadeIn,
+                              fadeOut: visibleFadeOut,
                               seed: clip.id.length,
                             });
                             if (peaks && peaks.length > 0) {
@@ -511,11 +594,11 @@ export const Timeline = ({
                       </>
                     )}
                     {/* Fade overlays */}
-                    {(clip.fadeIn ?? 0) > 0 && (
+                    {visibleFadeIn > 0 && (
                       <div
                         className="fade-in-overlay"
                         style={{
-                          width: `${Math.min(width, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width)}px`,
+                          width: `${fadeInPx}px`,
                         }}
                       >
                         <svg
@@ -525,15 +608,14 @@ export const Timeline = ({
                         >
                           <polygon points={FADE_IN_POLYGON} className="fade-poly" />
                           <polyline points={FADE_IN_POLYLINE} className="fade-envelope-line" />
-                          <circle cx="100" cy="0" r="4" className="fade-envelope-point" />
                         </svg>
                       </div>
                     )}
-                    {(clip.fadeOut ?? 0) > 0 && (
+                    {visibleFadeOut > 0 && (
                       <div
                         className="fade-out-overlay"
                         style={{
-                          width: `${Math.min(width, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width)}px`,
+                          width: `${fadeOutPx}px`,
                         }}
                       >
                         <svg
@@ -543,53 +625,64 @@ export const Timeline = ({
                         >
                           <polygon points={FADE_OUT_POLYGON} className="fade-poly" />
                           <polyline points={FADE_OUT_POLYLINE} className="fade-envelope-line" />
-                          <circle cx="0" cy="0" r="4" className="fade-envelope-point" />
                         </svg>
                       </div>
                     )}
-                    {/* Fade handles */}
-                    <div
+                    {/* Fade handles (follow fade boundary along diagonal) */}
+                    <button
+                      type="button"
                       className="fade-handle-in"
                       style={{
-                        left: `${Math.max(0, Math.min(width - 12, ((clip.fadeIn ?? 0) / Math.max(0.001, dur)) * width))}px`,
+                        left: `${fadeInHandleLeft}px`,
+                        top: "2px",
                       }}
                       onMouseDown={(e) => {
                         if (track.locked) return;
-                        e.stopPropagation();
-                        fadeDragRef.current = {
-                          clipId: clip.id,
-                          side: "in",
-                          startX: e.clientX,
-                          startFade: clip.fadeIn ?? 0,
-                          dur,
-                          pxPerSec,
-                          historyBefore: createHistorySnapshot(),
-                          historyPushed: false,
-                        };
+                        handleFadeMouseDown?.(e, clip, "in");
                       }}
-                      title={`Fade-In: ${(clip.fadeIn ?? 0).toFixed(1)}s`}
+                      title={`Fade-In: ${visibleFadeIn.toFixed(1)}s`}
+                      aria-label="Fade-In anpassen"
                     />
-                    <div
+                    <button
+                      type="button"
                       className="fade-handle-out"
-                      style={{
-                        right: `${Math.max(0, Math.min(width - 12, ((clip.fadeOut ?? 0) / Math.max(0.001, dur)) * width))}px`,
-                      }}
+                      style={
+                        fadeOutHandleLeft != null
+                          ? { left: `${fadeOutHandleLeft}px`, top: "2px" }
+                          : { right: "2px", top: "2px" }
+                      }
                       onMouseDown={(e) => {
                         if (track.locked) return;
-                        e.stopPropagation();
-                        fadeDragRef.current = {
-                          clipId: clip.id,
-                          side: "out",
-                          startX: e.clientX,
-                          startFade: clip.fadeOut ?? 0,
-                          dur,
-                          pxPerSec,
-                          historyBefore: createHistorySnapshot(),
-                          historyPushed: false,
-                        };
+                        handleFadeMouseDown?.(e, clip, "out");
                       }}
-                      title={`Fade-Out: ${(clip.fadeOut ?? 0).toFixed(1)}s`}
+                      title={`Fade-Out: ${visibleFadeOut.toFixed(1)}s`}
+                      aria-label="Fade-Out anpassen"
                     />
+                    {!isVideo &&
+                      !isText &&
+                      handleCrossfadeMouseDown &&
+                      crossfadeByLeftClipId.has(clip.id) &&
+                      (() => {
+                        const { rightClip, handleOffsetSec } =
+                          crossfadeByLeftClipId.get(clip.id);
+                        const handleLeft = Math.max(
+                          6,
+                          Math.min(width - 6, handleOffsetSec * pxPerSec),
+                        );
+                        return (
+                          <button
+                            type="button"
+                            className="crossfade-handle"
+                            style={{ left: `${handleLeft}px` }}
+                            onMouseDown={(e) => {
+                              if (track.locked) return;
+                              handleCrossfadeMouseDown(e, clip, rightClip);
+                            }}
+                            title="Crossfade zum nächsten Clip"
+                            aria-label="Crossfade zum nächsten Clip"
+                          />
+                        );
+                      })()}
                     <div
                       className={`trim-handle right ${trimmedRight ? "trimmed" : ""}`}
                       onMouseDown={(e) => {

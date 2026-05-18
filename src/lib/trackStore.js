@@ -1,4 +1,10 @@
 import { buildSeparatedLayout } from './timelineLayout.js'
+import {
+  assertTrackTypeCompatibility,
+  assertValidTrackPlacement,
+  getClipExpectedTrackType,
+  warnTimelineIntegrity,
+} from './timelineIntegrity.js'
 
 let _seq = 0
 export const nextTrackId = () => `track-${++_seq}`
@@ -8,6 +14,34 @@ export const MIN_TRACK_HEIGHT = 40
 export const MAX_TRACK_HEIGHT = 200
 export const TRACK_DROP_ABOVE = '__above__'
 export const TRACK_DROP_BELOW = '__below__'
+
+/** Video tracks are only inserted at the top; audio tracks only at the bottom. */
+export function normalizeTrackInsertEdge(type, edge = 'end') {
+  if (type === 'video') return 'start'
+  if (type === 'audio') return 'end'
+  return edge
+}
+
+/** Ensure all video tracks sit above the divider and all audio tracks below it. */
+export function normalizeTrackOrder(tracks) {
+  const list = tracks || []
+  const videos = list.filter((track) => track.type === 'video')
+  const audios = list.filter((track) => track.type === 'audio')
+  const unknown = list.filter((track) => track.type !== 'video' && track.type !== 'audio')
+  if (unknown.length > 0) {
+    warnTimelineIntegrity('Unknown track types normalized to video', unknown.map((t) => t.id))
+  }
+  const reordered = [
+    ...videos,
+    ...audios,
+    ...unknown.map((track) => ({ ...track, type: 'video' })),
+  ]
+  if (reordered.length === list.length) {
+    const changed = reordered.some((track, index) => track.id !== list[index]?.id)
+    if (changed) assertValidTrackPlacement(reordered)
+  }
+  return reordered
+}
 
 export function createDefaultTracks() {
   return [
@@ -22,11 +56,11 @@ export function addTrack(tracks, type) {
   const base = { id: nextTrackId(), type, name, locked: false, height: DEFAULT_TRACK_HEIGHT }
   if (type === 'audio') { base.muted = false; base.solo = false; base.gain = 1 }
   if (type === 'video') {
-    const lastVideoIdx = tracks.reduce((acc, t, i) => (t.type === 'video' ? i : acc), -1)
-    const insertAt = lastVideoIdx + 1
-    return [...tracks.slice(0, insertAt), base, ...tracks.slice(insertAt)]
+    const firstVideoIdx = tracks.findIndex((t) => t.type === 'video')
+    const insertAt = firstVideoIdx >= 0 ? firstVideoIdx : 0
+    return normalizeTrackOrder([...tracks.slice(0, insertAt), base, ...tracks.slice(insertAt)])
   }
-  return [...tracks, base]
+  return normalizeTrackOrder([...tracks, base])
 }
 
 /** Insert a track at the correct position (video before audio, audio at end). */
@@ -66,6 +100,7 @@ function getClipMoveTrackType(tracks, clip) {
 }
 
 function getTypeEdgeInsertIndex(tracks, type, edge) {
+  edge = normalizeTrackInsertEdge(type, edge)
   if (type === 'video') {
     if (edge === 'start') {
       const firstVideoIdx = tracks.findIndex((track) => track.type === 'video')
@@ -89,8 +124,13 @@ function getTypeEdgeInsertIndex(tracks, type, edge) {
 function insertTrackAtTypeEdge(tracks, track, edge = 'end') {
   if (!track?.type) return tracks
   if (tracks.some((item) => item.id === track.id)) return tracks
-  const insertAt = getTypeEdgeInsertIndex(tracks, track.type, edge)
-  return [...tracks.slice(0, insertAt), track, ...tracks.slice(insertAt)]
+  const normalizedEdge = normalizeTrackInsertEdge(track.type, edge)
+  const insertAt = getTypeEdgeInsertIndex(tracks, track.type, normalizedEdge)
+  return normalizeTrackOrder([
+    ...tracks.slice(0, insertAt),
+    { ...track, edge: normalizedEdge },
+    ...tracks.slice(insertAt),
+  ])
 }
 
 function getTrackTypeIndexes(tracks, type) {
@@ -143,11 +183,12 @@ function orderedTracksForCollisionSearch(tracks, type, preferredTrackId, directi
 }
 
 export function createAutoTrackForMove(tracks, type, edge = 'end', options = {}) {
+  const normalizedEdge = normalizeTrackInsertEdge(type, edge)
   const count = tracks.filter((track) => track.type === type).length + 1
   const track = {
     id: options.id || options.idFactory?.() || nextTrackId(),
     type,
-    edge,
+    edge: normalizedEdge,
     name: options.name || `${trackTypeLabel(type)} ${count}`,
     locked: false,
     height: DEFAULT_TRACK_HEIGHT,
@@ -171,7 +212,7 @@ export function getCollisionFreeTrackForClip({
 }) {
   const type = getClipMoveTrackType(tracks, clip)
   const ignore = ignoreClipIds instanceof Set ? ignoreClipIds : new Set(ignoreClipIds)
-  const edge = direction || (type === 'video' ? 'start' : 'end')
+  const edge = normalizeTrackInsertEdge(type, direction)
   const candidates = orderedTracksForCollisionSearch(tracks, type, preferredTrackId, edge)
 
   for (const track of candidates) {
@@ -205,16 +246,39 @@ export function getCompatibleTrackMoveTarget({ tracks, clip, targetTrackId }) {
 
   if (!trackType || !clip?.trackId) return fallback
 
-  const autoTarget = (edge) => ({
-    trackType,
-    targetTrackId: null,
-    targetTrack: null,
-    autoTrack: { type: trackType, edge },
-    reason: `auto-${edge}`,
-  })
+  const unlockedSameType = tracks.filter((track) => track.type === trackType && !track.locked)
+  const clampToBoundary = (edge) => {
+    if (unlockedSameType.length === 0) return fallback
+    const boundary = edge === 'start' ? unlockedSameType[0] : unlockedSameType[unlockedSameType.length - 1]
+    return {
+      trackType,
+      targetTrackId: boundary.id,
+      targetTrack: boundary,
+      autoTrack: null,
+      reason: 'type-boundary',
+    }
+  }
 
-  if (targetTrackId === TRACK_DROP_BELOW) return autoTarget('end')
-  if (targetTrackId == null || targetTrackId === TRACK_DROP_ABOVE) return autoTarget('start')
+  const autoTarget = (edge) => {
+    const normalizedEdge = normalizeTrackInsertEdge(trackType, edge)
+    if (normalizedEdge === 'start' && trackType !== 'video') return clampToBoundary('start')
+    if (normalizedEdge === 'end' && trackType !== 'audio') return clampToBoundary('end')
+    return {
+      trackType,
+      targetTrackId: null,
+      targetTrack: null,
+      autoTrack: { type: trackType, edge: normalizedEdge },
+      reason: `auto-${normalizedEdge}`,
+    }
+  }
+
+  if (targetTrackId === TRACK_DROP_BELOW) {
+    return trackType === 'audio' ? autoTarget('end') : clampToBoundary('end')
+  }
+  if (targetTrackId === TRACK_DROP_ABOVE) {
+    return trackType === 'video' ? autoTarget('start') : clampToBoundary('start')
+  }
+  if (targetTrackId == null) return fallback
 
   const targetTrack = tracks.find((track) => track.id === targetTrackId)
   if (!targetTrack) return { ...fallback, reason: 'missing-target' }
@@ -233,10 +297,10 @@ export function getCompatibleTrackMoveTarget({ tracks, clip, targetTrackId }) {
   const targetIndex = tracks.findIndex((track) => track.id === targetTrackId)
   const compatibleIndexes = getTrackTypeIndexes(tracks, trackType)
   if (compatibleIndexes.length === 0) {
-    return autoTarget(targetIndex <= 0 ? 'start' : 'end')
+    return targetIndex <= 0 ? clampToBoundary('start') : clampToBoundary('end')
   }
-  if (targetIndex < compatibleIndexes[0]) return autoTarget('start')
-  if (targetIndex > compatibleIndexes[compatibleIndexes.length - 1]) return autoTarget('end')
+  if (targetIndex < compatibleIndexes[0]) return clampToBoundary('start')
+  if (targetIndex > compatibleIndexes[compatibleIndexes.length - 1]) return clampToBoundary('end')
 
   return { ...fallback, reason: 'incompatible-target' }
 }
@@ -288,9 +352,10 @@ export function planTrackMove({
   const plannedAutoTracksByKey = new Map()
 
   const ensureAutoTrack = (type, edge) => {
-    const key = getAutoTrackKey(type, edge)
+    const normalizedEdge = normalizeTrackInsertEdge(type, edge)
+    const key = getAutoTrackKey(type, normalizedEdge)
     if (!autoTrackSpecsByKey.has(key)) {
-      autoTrackSpecsByKey.set(key, { type, edge })
+      autoTrackSpecsByKey.set(key, { type, edge: normalizedEdge })
     }
     if (plannedAutoTracksByKey.has(key)) return plannedAutoTracksByKey.get(key)
     const provided = providedAutoTracks.get(key)
@@ -371,7 +436,7 @@ export function applyTrackMovePlan(stateOrClips, maybePlan) {
 
   const { tracks = [], clips = [], plan } = stateOrClips || {}
   const nextTracks = (plan?.autoTracks || []).reduce(
-    (acc, track) => insertTrackAtTypeEdge(acc, track, track.edge || 'end'),
+    (acc, track) => insertTrackAtTypeEdge(acc, track, normalizeTrackInsertEdge(track.type, track.edge)),
     tracks
   )
   return {
@@ -391,6 +456,52 @@ export function findPreferredVideoTrackForDrop(tracks, dropTargetId) {
   return tracks.find((t) => t.type === 'video' && !t.locked) || null
 }
 
+export function getDropZoneModeFromRelativeY(tracks, relativeY, defaultTrackHeight = DEFAULT_TRACK_HEIGHT) {
+  const layout = buildSeparatedLayout(tracks || [], defaultTrackHeight)
+  if (relativeY < layout.videoEdgeZone.top + layout.videoEdgeZone.height) return 'video'
+  if (relativeY >= layout.audioEdgeZone.top) return 'audio'
+  const dividerEnd = layout.dividerY + layout.dividerHeight
+  if (relativeY < layout.dividerY) return 'video'
+  if (relativeY >= dividerEnd) return 'audio'
+  const mid = layout.dividerY + layout.dividerHeight / 2
+  return relativeY < mid ? 'video' : 'audio'
+}
+
+export function resolveTimelineDropTarget({
+  tracks,
+  dropTargetId,
+  requiredTrackType,
+}) {
+  if (!requiredTrackType) {
+    return { valid: true, dropTargetId, reason: 'any' }
+  }
+
+  if (dropTargetId === TRACK_DROP_ABOVE) {
+    if (requiredTrackType === 'video') {
+      return { valid: true, dropTargetId, edge: 'start', reason: 'zone-above' }
+    }
+    return { valid: false, dropTargetId, reason: 'zone-mismatch' }
+  }
+
+  if (dropTargetId === TRACK_DROP_BELOW) {
+    if (requiredTrackType === 'audio') {
+      return { valid: true, dropTargetId, edge: 'end', reason: 'zone-below' }
+    }
+    return { valid: false, dropTargetId, reason: 'zone-mismatch' }
+  }
+
+  const targetTrack = (tracks || []).find((track) => track.id === dropTargetId)
+  if (!targetTrack) {
+    return { valid: false, dropTargetId, reason: 'missing-target' }
+  }
+
+  if (targetTrack.type !== requiredTrackType) {
+    return { valid: false, dropTargetId, targetTrack, reason: 'type-mismatch' }
+  }
+
+  return { valid: true, dropTargetId, targetTrack, reason: 'track' }
+}
+
 export function getTrackIdAtTimelineY({
   clientY,
   containerTop,
@@ -402,15 +513,45 @@ export function getTrackIdAtTimelineY({
   if (relativeY < 0) return TRACK_DROP_ABOVE
 
   const layout = buildSeparatedLayout(tracks || [], DEFAULT_TRACK_HEIGHT)
-  const allTracks = [...layout.videoTracksLayout, ...layout.audioTracksLayout]
+  const { videoTracksLayout, audioTracksLayout, dividerY, dividerHeight, videoEdgeZone, audioEdgeZone } = layout
+  const dividerEnd = dividerY + dividerHeight
 
-  if (allTracks.length === 0) return TRACK_DROP_BELOW
+  if (relativeY < videoEdgeZone.top + videoEdgeZone.height) return TRACK_DROP_ABOVE
 
-  const firstEntry = allTracks[0]
-  if (relativeY < firstEntry.top + Math.min(18, firstEntry.height / 3)) return TRACK_DROP_ABOVE
-
-  for (const { track, top, height } of allTracks) {
-    if (relativeY < top + height) return track.id
+  if (videoTracksLayout.length === 0 && audioTracksLayout.length === 0) {
+    return TRACK_DROP_BELOW
   }
+
+  for (const { track, top, height } of videoTracksLayout) {
+    if (relativeY >= top && relativeY < top + height) return track.id
+  }
+
+  if (relativeY >= dividerY && relativeY < dividerEnd) {
+    const mid = dividerY + dividerHeight / 2
+    if (relativeY < mid) {
+      const lastVideo = videoTracksLayout[videoTracksLayout.length - 1]
+      return lastVideo?.track.id ?? TRACK_DROP_ABOVE
+    }
+    const firstAudio = audioTracksLayout[0]
+    return firstAudio?.track.id ?? TRACK_DROP_BELOW
+  }
+
+  for (const { track, top, height } of audioTracksLayout) {
+    if (relativeY >= top && relativeY < top + height) return track.id
+  }
+
   return TRACK_DROP_BELOW
 }
+
+export function validateClipsOnTracks(tracks, clips) {
+  let valid = true
+  const trackById = new Map((tracks || []).map((track) => [track.id, track]))
+  for (const clip of clips || []) {
+    const track = trackById.get(clip.trackId)
+    if (!track) continue
+    if (!assertTrackTypeCompatibility(clip, track)) valid = false
+  }
+  return valid
+}
+
+export { getClipExpectedTrackType }

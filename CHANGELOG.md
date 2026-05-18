@@ -1,5 +1,59 @@
 # StoneCutter Update Log
 
+## 2026-05-18 - Timeline Zoom & Scroll UX
+
+### Features
+- Timeline-Zoom via Strg/Ctrl+Wheel und Pinch am Ruler/Track-Viewport; die Cursor-Zeit bleibt beim Zoomen stabil.
+- Zoom-Slider nutzt dieselbe zentrale `pxPerSec`-Quelle und haelt den Viewport-Mittelpunkt stabil.
+- Drag-Auto-Scroll skaliert horizontal mit der Randnaehe und wird auch bei Medien-Drag genutzt.
+- Split-/Overwrite-Schnitte clippen Fade-Bereiche pro neuem Clipsegment lokal; keine M-foermigen Cross-Clip-Fade-Overlays mehr.
+- Bild-Clips nutzen `imageDuration` nur als Einfuege-Laenge; Trimmen nach rechts ist nicht mehr auf diese Dauer/sourceDuration begrenzt.
+
+### Fixes
+- Zoom: `flushSync` + Scroll-Korrektur nach Layout (`scrollWidth`), damit `scrollLeft` nicht mehr auf alter Content-Breite gesetzt wird (Hauptursache fuer Cursor-Drift).
+- Wheel-Zoom pro Frame gebündelt; nativer `wheel`-Listener mit `passive: false`; `scrollLeftRef` als Scroll-Quelle waehrend Zoom.
+- Timeline-Drag-Listener haengt nicht mehr von `pxPerSec` ab (kein Listener-Reset mitten im Drag).
+- `pxPerSecRef` verhindert Zoom-Drift bei schnellem Wheel-Spam; Playhead nur noch per CSS-Transform (`--playhead-x`), keine konkurrierenden React-Styles.
+- Playback-Auto-Scroll per RAF-Loop mit `timelineTimeRef`/`pxPerSecRef` statt `playheadX`-useEffect.
+- Drag-Auto-Scroll: ein RAF-Loop pro Interaktion (`createTimelineEdgeAutoScroller`) fuer Clip-/Trim-/Marquee- und Medien-Drag.
+- Escape bricht aktive Timeline-/Drag-Interaktionen ab und entfernt Preview-/Drop-Zustaende.
+- Timeline-Rendering klemmt Fade-Overlays und Handles an die aktuelle Clipdauer, auch bei Altprojekten mit zu grossen Fade-Werten.
+- Export klemmt Bild-Segmente nicht mehr auf die initiale Bilddauer, Videos/Audio bleiben source-begrenzt.
+
+## 2026-05-18 - Timeline Track Zones & UI Integrity (TL-009–TL-012)
+
+### Features
+- Strikte Video/Audio-Zonen: Video-Spuren nur oberhalb, Audio-Spuren nur unterhalb der Trennlinie; `normalizeTrackOrder` beim Laden und Einfügen.
+- Neue Spuren nur an den Typ-Kanten: Video immer oben (`normalizeTrackInsertEdge`), Audio immer unten — per Drag, Auto-Spur beim Verschieben, `addTrack` und Kollisionen.
+- Drop-Validierung mit sichtbarem `drop-target-invalid`-Feedback statt stiller Ablehnung.
+- Defensive Guards (`timelineIntegrity.js`): Placement, Clip/Track-Typ, Bounds, Layout-Konsistenz (DEV-Warnungen).
+
+### Fixes
+- `getTrackIdAtTimelineY`: Trennlinien-Band löst auf benachbarte Spur statt falscher Audio-Zuordnung auf.
+- Track-Header: oberes Drop-Ziel innerhalb des Layout-Containers (kein Header/Lane-Drift mehr).
+- „+ Video-Spur“ / „+ Audio-Spur“: eigene schwarze Randstreifen (44 px) oberhalb/unterhalb der Spuren — kein Überlappen mehr mit V1/A1-Labels.
+- Vertikales Clip-Verschieben: neue Spur nur noch in der passenden Randzone (Video oben, Audio unten); über die Trennlinie hinaus wird auf die letzte/erste Spur des Typs begrenzt.
+- Fade-Overlays: diagonale Schwarzfläche fällt von oben nach unten (gerade Kante statt nach oben gebogener Kurve); Fade-In/Out und Crossfades unverändert kombinierbar.
+- Fade-Handles oben links/rechts (DaVinci/Filmora): Drag per Timeline-Interaction mit Live-Preview und `clip.updateProps`-Commit; Trim-Hitbox nur unterhalb der Fade-Ecke.
+
+### Tests
+- `timelineIntegrity.test.js`, erweiterte `trackStore`/`timelineLayout`-Tests für Zonen, Divider und Drop-Auflösung.
+
+## 2026-05-18 - Timeline Crossfade UI & Hook Cleanup
+
+### Fixes
+- Timeline: Crossfade-Handles werden an nahen/überlappenden Audio-Clips gerendert (`findAdjacentAudioClipPairs`); Drag nutzt die bestehende `crossfade-drag`-Logik.
+- Crossfade-Commit nach Drag über `clip.updateProps` (Engine), nicht nur `setClips` + History.
+- Entfernt: unreferenzierter Legacy-Hook `useTimelineInteraction.js` (kanonisch: `useTimelineMouseInteraction`).
+
+### Tests
+- `timeline.test.js`: Adjacency/Crossfade-Helfer.
+- `playbackGuards.test.js`: Regression für Seek-Epoch- und Interaction-Guards.
+- `applyCommand.test.js`: Fade-Props via `clip.updateProps`.
+
+### Docs
+- `engine-contract.ts`: `ripple` auf add/move/trim als reserviert dokumentiert; nur `clip.delete` implementiert Engine-Ripple.
+
 ## 2026-05-12 - Media Bin Virtualisierung
 
 ### Performance
@@ -88,7 +142,7 @@
 ## 2026-05-06 - Dokumentation: Hooks-Tabelle, Styles-Tabelle, Lint-Stand
 
 ### Docs
-- `README.md`: Unter **Architecture** → **Frontend hooks** eine Tabelle aller `src/hooks/*.js` mit Kurzverantwortung; Hinweis, dass `App.jsx` `useTimelineMouseInteraction` nutzt und `useTimelineInteraction` derzeit unreferenziert ist.
+- `README.md`: Unter **Architecture** → **Frontend hooks** eine Tabelle aller `src/hooks/*.js` mit Kurzverantwortung; kanonischer Timeline-Mouse-Hook ist `useTimelineMouseInteraction`.
 - `README.md`: **Frontend styles** als Tabelle (Import-Reihenfolge 1–12) statt nummerierter Liste; Kurznotiz zu absichtlichen Duplikaten in `App.css` unveraendert.
 - `README.md`: Abschnitt **Lint** aktualisiert: erwarteter gruener Lauf; gezielte `preserve-manual-memoization`-Disables in `usePlaybackController.js` dokumentiert.
 

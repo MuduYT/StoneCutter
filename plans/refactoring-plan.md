@@ -15,10 +15,12 @@ Extract 7 custom hooks from `App.jsx` in 3 phases, then modularize `App.css`.
 
 ## Phase 1 — High Priority (largest, most cohesive blocks)
 
-### 1.1 `useTimelineInteraction` (~800 lines)
+### 1.1 `useTimelineMouseInteraction` (done)
 
-**Lines:** 2882–3797  
-**New file:** `src/hooks/useTimelineInteraction.js`
+**Status:** Extracted to `src/hooks/useTimelineMouseInteraction.js` and wired from `App.jsx`. Legacy duplicate `useTimelineInteraction.js` removed 2026-05-18.
+
+**Original target lines:** 2882–3797  
+**Canonical file:** `src/hooks/useTimelineMouseInteraction.js`
 
 **Functions to extract:**
 - `seekToTime` (2883–2919)

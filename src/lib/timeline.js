@@ -8,6 +8,8 @@ export const TIMELINE_DIVIDER_HEIGHT = 8
 export const CLIP_VERTICAL_INSET = 4
 export const TRIM_HOTSPOT_WIDTH = 14
 export const TRIM_HOTSPOT_HEIGHT = 22
+export const FADE_HANDLE_WIDTH = 16
+export const FADE_HANDLE_HEIGHT = 22
 
 export const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']
 export const VIDEO_EXTS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v']
@@ -21,6 +23,77 @@ export const clipDuration = (clip) => {
 }
 
 export const clipEnd = (clip) => clip.startTime + clipDuration(clip)
+
+/** Max gap (seconds) between clip end and next clip start to show a crossfade handle. */
+export const ADJACENT_CROSSFADE_MAX_GAP_SEC = 0.5
+
+/**
+ * Max crossfade duration for a left/right clip pair (matches timeline mouse interaction).
+ */
+export const computeCrossfadeMaxDuration = (leftClip, rightClip) => {
+  const leftDuration = Math.max(MIN_CLIP_DURATION, clipDuration(leftClip))
+  const rightDuration = Math.max(MIN_CLIP_DURATION, clipDuration(rightClip))
+  const leftEnd = leftClip.startTime + leftDuration
+  const gapBetweenClips = rightClip.startTime - leftEnd
+  return Math.max(
+    0.05,
+    Math.min(
+      leftDuration * 0.5,
+      rightDuration * 0.5,
+      gapBetweenClips + Math.min(leftDuration, rightDuration) * 0.5,
+    ),
+  )
+}
+
+/**
+ * Horizontal position of the crossfade handle on the left clip (seconds from clip start).
+ */
+export const getCrossfadeHandleOffsetSec = (leftClip, rightClip) => {
+  const leftDur = clipDuration(leftClip)
+  const leftEnd = clipEnd(leftClip)
+  const boundaryTime = (leftEnd + rightClip.startTime) / 2
+  return Math.max(0, Math.min(leftDur, boundaryTime - leftClip.startTime))
+}
+
+/**
+ * Audio-clip pairs on the same track that are near or overlapping (eligible for crossfade UI).
+ */
+export const findAdjacentAudioClipPairs = (
+  clips = [],
+  tracks = [],
+  { maxGapSec = ADJACENT_CROSSFADE_MAX_GAP_SEC } = {},
+) => {
+  const audioTrackIds = new Set(
+    (tracks || []).filter((t) => t?.type === 'audio').map((t) => t.id),
+  )
+  const byTrack = new Map()
+  for (const clip of clips || []) {
+    if (!clip || clip.kind === 'text') continue
+    if (!audioTrackIds.has(clip.trackId)) continue
+    if (!byTrack.has(clip.trackId)) byTrack.set(clip.trackId, [])
+    byTrack.get(clip.trackId).push(clip)
+  }
+
+  const pairs = []
+  for (const trackClips of byTrack.values()) {
+    trackClips.sort((a, b) => a.startTime - b.startTime || clipEnd(a) - clipEnd(b))
+    for (let i = 0; i < trackClips.length - 1; i += 1) {
+      const leftClip = trackClips[i]
+      const rightClip = trackClips[i + 1]
+      const gap = rightClip.startTime - clipEnd(leftClip)
+      if (gap > maxGapSec) continue
+      const maxDuration = computeCrossfadeMaxDuration(leftClip, rightClip)
+      if (maxDuration < 0.05) continue
+      pairs.push({
+        leftClip,
+        rightClip,
+        maxDuration,
+        handleOffsetSec: getCrossfadeHandleOffsetSec(leftClip, rightClip),
+      })
+    }
+  }
+  return pairs
+}
 
 export const isClipTrackLocked = (clip, tracks = []) => {
   if (!clip) return false
@@ -112,23 +185,175 @@ export const getMiddlePanScroll = ({
   top: Math.max(0, Math.min(maxScrollTop, scrollStartTop - (clientY - startClientY))),
 })
 
+/** Corner hit metrics for fade handles; shrinks on very narrow clips to avoid overlap. */
+export const getTimelineFadeHandleMetrics = (clipRect, side = 'left') => {
+  const rectWidth = clipRect?.width ?? (clipRect ? clipRect.right - clipRect.left : 0)
+  const rectHeight = clipRect?.height ?? (clipRect ? clipRect.bottom - clipRect.top : 0)
+  const maxPairWidth = Math.max(16, rectWidth - 4)
+  const sizeScale = 0.6
+  const width = Math.max(8, Math.min(FADE_HANDLE_WIDTH * sizeScale, maxPairWidth / 2))
+  const height = Math.max(8, Math.min(FADE_HANDLE_HEIGHT * sizeScale, rectHeight))
+  return { width, height }
+}
+
+export const isTimelineFadeHotspot = ({
+  clientX,
+  clientY,
+  clipRect,
+  side,
+  width = FADE_HANDLE_WIDTH,
+  height = FADE_HANDLE_HEIGHT,
+}) => {
+  if (!clipRect || (side !== 'left' && side !== 'right')) return false
+  const metrics = getTimelineFadeHandleMetrics(clipRect, side)
+  const hotspotWidth = Math.min(Number(width) || metrics.width, metrics.width)
+  const hotspotHeight = Math.min(Number(height) || metrics.height, metrics.height)
+  const withinY = clientY >= clipRect.top && clientY <= clipRect.top + hotspotHeight
+  if (!withinY) return false
+  if (side === 'left') {
+    return clientX >= clipRect.left && clientX <= clipRect.left + hotspotWidth
+  }
+  return clientX <= clipRect.right && clientX >= clipRect.right - hotspotWidth
+}
+
+/** Trim uses the vertical clip edge below the top fade-handle band. */
 export const isTimelineTrimHotspot = ({
   clientX,
   clientY,
   clipRect,
   side,
   width = TRIM_HOTSPOT_WIDTH,
-  height = TRIM_HOTSPOT_HEIGHT,
+  fadeHandleHeight = FADE_HANDLE_HEIGHT,
 }) => {
-  if (!clipRect || side !== 'left' && side !== 'right') return false
-  const rectWidth = clipRect.width ?? (clipRect.right - clipRect.left)
-  const rectHeight = clipRect.height ?? (clipRect.bottom - clipRect.top)
+  if (!clipRect || (side !== 'left' && side !== 'right')) return false
+  const rectWidth = clipRect.width ?? clipRect.right - clipRect.left
+  const rectHeight = clipRect.height ?? clipRect.bottom - clipRect.top
   const hotspotWidth = Math.max(8, Math.min(Number(width) || TRIM_HOTSPOT_WIDTH, rectWidth))
-  const hotspotHeight = Math.max(10, Math.min(Number(height) || TRIM_HOTSPOT_HEIGHT, rectHeight))
-  const withinY = clientY >= clipRect.top && clientY <= clipRect.top + hotspotHeight
+  const fadeBand = Math.max(
+    getTimelineFadeHandleMetrics(clipRect, 'left').height,
+    getTimelineFadeHandleMetrics(clipRect, 'right').height,
+  )
+  const trimZoneTop = clipRect.top + Math.min(fadeBand, rectHeight * 0.45)
+  const withinY = clientY >= trimZoneTop && clientY <= clipRect.bottom
   if (!withinY) return false
-  if (side === 'left') return clientX >= clipRect.left && clientX <= clipRect.left + hotspotWidth
+  if (side === 'left') {
+    return clientX >= clipRect.left && clientX <= clipRect.left + hotspotWidth
+  }
   return clientX <= clipRect.right && clientX >= clipRect.right - hotspotWidth
+}
+
+/** Clamp fadeIn/fadeOut to [0, duration] with combined length <= duration. */
+export const clampFadeValues = ({
+  duration,
+  fadeIn = 0,
+  fadeOut = 0,
+  side,
+  nextValue,
+}) => {
+  const dur = Math.max(MIN_CLIP_DURATION, Number(duration) || 0)
+  let fadeInVal = Math.max(0, Number(fadeIn) || 0)
+  let fadeOutVal = Math.max(0, Number(fadeOut) || 0)
+  if (side === 'in') fadeInVal = Math.max(0, Number(nextValue) || 0)
+  if (side === 'out') fadeOutVal = Math.max(0, Number(nextValue) || 0)
+  fadeInVal = Math.min(fadeInVal, dur)
+  fadeOutVal = Math.min(fadeOutVal, dur)
+  if (fadeInVal + fadeOutVal > dur) {
+    if (side === 'in') fadeInVal = Math.max(0, dur - fadeOutVal)
+    else if (side === 'out') fadeOutVal = Math.max(0, dur - fadeInVal)
+    else {
+      const scale = dur / Math.max(MIN_CLIP_DURATION, fadeInVal + fadeOutVal)
+      fadeInVal *= scale
+      fadeOutVal *= scale
+    }
+  }
+  return { fadeIn: fadeInVal, fadeOut: fadeOutVal }
+}
+
+const hasFadeValue = (clip, key) =>
+  Object.prototype.hasOwnProperty.call(clip || {}, key) || Number(clip?.[key]) > 0
+
+/**
+ * Keep fade boundaries stable on the timeline when a clip edge is trimmed.
+ * The stored model remains edge-relative, so we rewrite the relative value
+ * instead of introducing a second fade timeline state.
+ */
+export const preserveFadeTimingOnTrim = (beforeClip, nextClip, side) => {
+  if (!beforeClip || !nextClip) return nextClip
+  const hasFadeIn = hasFadeValue(beforeClip, 'fadeIn')
+  const hasFadeOut = hasFadeValue(beforeClip, 'fadeOut')
+  if (!hasFadeIn && !hasFadeOut) return nextClip
+
+  const beforeStart = Number(beforeClip.startTime) || 0
+  const nextStart = Number(nextClip.startTime) || 0
+  const beforeEnd = clipEnd(beforeClip)
+  const nextEnd = clipEnd(nextClip)
+  let fadeIn = Math.max(0, Number(beforeClip.fadeIn) || 0)
+  let fadeOut = Math.max(0, Number(beforeClip.fadeOut) || 0)
+
+  if (side === 'left') {
+    fadeIn = Math.max(0, fadeIn - (nextStart - beforeStart))
+  } else if (side === 'right') {
+    fadeOut = Math.max(0, fadeOut + (nextEnd - beforeEnd))
+  }
+
+  const clamped = clampFadeValues({
+    duration: clipDuration(nextClip),
+    fadeIn,
+    fadeOut,
+    side: side === 'left' ? 'in' : 'out',
+    nextValue: side === 'left' ? fadeIn : fadeOut,
+  })
+  return {
+    ...nextClip,
+    fadeIn: clamped.fadeIn,
+    fadeOut: clamped.fadeOut,
+  }
+}
+
+const getVisibleFadeDuration = (fadeStart, fadeEnd, clipStart, clipEnd) =>
+  Math.max(0, Math.min(fadeEnd, clipEnd) - Math.max(fadeStart, clipStart))
+
+/**
+ * Rebase original timeline fade ranges onto a newly cut clip segment.
+ * Fades stay edge-relative in the data model, but the visible duration is
+ * clipped to the segment so split/overwrite cuts cannot draw cross-clip shapes.
+ */
+export const clipFadesToVisibleSegment = (sourceClip, segmentClip) => {
+  if (!sourceClip || !segmentClip) return segmentClip
+  const sourceStart = Number(sourceClip.startTime) || 0
+  const sourceEnd = clipEnd(sourceClip)
+  const segmentStart = Number(segmentClip.startTime) || 0
+  const segmentEnd = clipEnd(segmentClip)
+  const sourceFadeIn = Math.max(0, Number(sourceClip.fadeIn) || 0)
+  const sourceFadeOut = Math.max(0, Number(sourceClip.fadeOut) || 0)
+
+  const fadeIn = sourceFadeIn > 0
+    ? getVisibleFadeDuration(
+        sourceStart,
+        sourceStart + sourceFadeIn,
+        segmentStart,
+        segmentEnd,
+      )
+    : 0
+  const fadeOut = sourceFadeOut > 0
+    ? getVisibleFadeDuration(
+        sourceEnd - sourceFadeOut,
+        sourceEnd,
+        segmentStart,
+        segmentEnd,
+      )
+    : 0
+
+  const clamped = clampFadeValues({
+    duration: clipDuration(segmentClip),
+    fadeIn,
+    fadeOut,
+  })
+  return {
+    ...segmentClip,
+    fadeIn: clamped.fadeIn,
+    fadeOut: clamped.fadeOut,
+  }
 }
 
 export const duplicateClipsAfterSelection = ({ clips = [], clipIds = [], makeId }) => {
@@ -212,6 +437,13 @@ export const getMediaType = (nameOrPath) => {
   if (IMAGE_EXTS.includes(ext)) return 'image'
   if (AUDIO_EXTS.includes(ext)) return 'audio'
   return 'video'
+}
+
+export const isTimelineImageClip = (clip) => {
+  if (!clip) return false
+  if (clip.mediaType === 'image' || clip.sourceMediaType === 'image') return true
+  const nameOrPath = clip.src || clip.path || clip.name || ''
+  return Boolean(nameOrPath) && getMediaType(String(nameOrPath)) === 'image'
 }
 
 export const normalizeSourceSelection = ({
@@ -409,19 +641,34 @@ export const resolveOverlaps = (clipList, modifiedId, makeId, protectedIds) => {
     }
     if (movedStart <= start + 1e-3 && movedEnd >= end - 1e-3) continue
     if (start < movedStart - 1e-3 && end > movedEnd + 1e-3) {
-      const left = { ...clip, outPoint: sourceAtTimelineTime(clip, movedStart) }
-      const right = { ...clip, id: makeId(), inPoint: sourceAtTimelineTime(clip, movedEnd), startTime: movedEnd }
+      const left = clipFadesToVisibleSegment(clip, {
+        ...clip,
+        outPoint: sourceAtTimelineTime(clip, movedStart),
+      })
+      const right = clipFadesToVisibleSegment(clip, {
+        ...clip,
+        id: makeId(),
+        inPoint: sourceAtTimelineTime(clip, movedEnd),
+        startTime: movedEnd,
+      })
       if (clipDuration(left) > MIN_CLIP_DURATION) out.push(left)
       if (clipDuration(right) > MIN_CLIP_DURATION) out.push(right)
       continue
     }
     if (start >= movedStart - 1e-3 && start < movedEnd - 1e-3) {
-      const nextClip = { ...clip, inPoint: sourceAtTimelineTime(clip, movedEnd), startTime: movedEnd }
+      const nextClip = clipFadesToVisibleSegment(clip, {
+        ...clip,
+        inPoint: sourceAtTimelineTime(clip, movedEnd),
+        startTime: movedEnd,
+      })
       if (clipDuration(nextClip) > MIN_CLIP_DURATION) out.push(nextClip)
       continue
     }
     if (end > movedStart + 1e-3 && end <= movedEnd + 1e-3) {
-      const nextClip = { ...clip, outPoint: sourceAtTimelineTime(clip, movedStart) }
+      const nextClip = clipFadesToVisibleSegment(clip, {
+        ...clip,
+        outPoint: sourceAtTimelineTime(clip, movedStart),
+      })
       if (clipDuration(nextClip) > MIN_CLIP_DURATION) out.push(nextClip)
       continue
     }
@@ -452,6 +699,7 @@ const buildClip = ({ id, media, startTime, inPoint, outPoint, sourceDuration, tr
   videoId: media.id,
   name: media.name,
   src: media.src,
+  mediaType: media.mediaType,
   sourceDuration,
   inPoint,
   outPoint,
@@ -581,7 +829,11 @@ export const applyGroupTrimLeft = (clips, primaryId, { inPoint, startTime }) => 
   return clips.map((c) => {
     if (!groupIds.has(c.id)) return c
     const clampedIn = Math.max(0, Math.min(c.outPoint - MIN_CLIP_DURATION, inPoint))
-    return { ...c, inPoint: clampedIn, startTime: Math.max(0, startTime) }
+    return preserveFadeTimingOnTrim(
+      c,
+      { ...c, inPoint: clampedIn, startTime: Math.max(0, startTime) },
+      'left',
+    )
   })
 }
 
@@ -592,8 +844,9 @@ export const applyGroupTrimRight = (clips, primaryId, { outPoint }) => {
   const groupIds = getLinkedClipIds(clips, primaryId)
   return clips.map((c) => {
     if (!groupIds.has(c.id)) return c
-    const clampedOut = Math.max(c.inPoint + MIN_CLIP_DURATION, Math.min(c.sourceDuration || outPoint, outPoint))
-    return { ...c, outPoint: clampedOut }
+    const maxOut = isTimelineImageClip(c) ? Number.MAX_SAFE_INTEGER : (c.sourceDuration || outPoint)
+    const clampedOut = Math.max(c.inPoint + MIN_CLIP_DURATION, Math.min(maxOut, outPoint))
+    return preserveFadeTimingOnTrim(c, { ...c, outPoint: clampedOut }, 'right')
   })
 }
 
@@ -632,14 +885,14 @@ export const applyGroupSplit = (clips, primaryId, timelineTime, makeId, linkGrou
     const target = targets.find((t) => t.id === c.id)
     if (!target) { out.push(c); continue }
     const sourceSplit = c.inPoint + (timelineTime - c.startTime)
-    const left = { ...c, outPoint: sourceSplit }
-    const right = {
+    const left = clipFadesToVisibleSegment(c, { ...c, outPoint: sourceSplit })
+    const right = clipFadesToVisibleSegment(c, {
       ...c,
       id: makeId(),
       inPoint: sourceSplit,
       startTime: timelineTime,
       linkGroupId: rightGroupId,
-    }
+    })
     if (clipDuration(left) > MIN_CLIP_DURATION) out.push(left)
     if (clipDuration(right) > MIN_CLIP_DURATION) out.push(right)
   }
@@ -657,14 +910,18 @@ export const applySingleClipSplit = (clips, clipId, timelineTime, makeId) => {
     return clips
   }
   const sourceSplit = clip.inPoint + (timelineTime - clip.startTime)
-  const left = { ...clip, outPoint: sourceSplit, linkGroupId: clip.linkGroupId || null }
-  const right = {
+  const left = clipFadesToVisibleSegment(clip, {
+    ...clip,
+    outPoint: sourceSplit,
+    linkGroupId: clip.linkGroupId || null,
+  })
+  const right = clipFadesToVisibleSegment(clip, {
     ...clip,
     id: makeId(),
     inPoint: sourceSplit,
     startTime: timelineTime,
     linkGroupId: clip.linkGroupId || null,
-  }
+  })
   const out = []
   for (const c of clips) {
     if (c.id !== clipId) {

@@ -146,6 +146,17 @@ test("clamps clip out points to source duration before export", () => {
   assert.equal(result.segments[0].duration, 4);
 });
 
+test("does not clamp image clip duration to initial sourceDuration before export", () => {
+  const imageClip = clip("still", "v2", 0, 0, 30);
+  imageClip.sourceDuration = 3;
+  const result = buildExportSegments({ clips: [imageClip], videos: media, tracks });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.segments[0].in_point, 0);
+  assert.equal(result.segments[0].out_point, 30);
+  assert.equal(result.segments[0].duration, 30);
+});
+
 test("passes audio-only clips without requiring a source video track", () => {
   const result = buildExportSegments({
     clips: [clip("voice", "a1", 0, 1, 3, "audio", { trackId: "track-a1" })],

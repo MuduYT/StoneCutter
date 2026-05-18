@@ -6,6 +6,8 @@ import {
   applySingleClipSplit,
   clipDuration,
   expandWithLinkedPartners,
+  isTimelineImageClip,
+  preserveFadeTimingOnTrim,
   resolveOverlaps,
   resolveOverlapsMulti,
   rippleDeleteClips,
@@ -476,12 +478,18 @@ export const applyCommand = (engineState, command) => {
       const clampedStart = Math.max(0, Math.min(fixedRight - MIN_CLIP_DURATION, nextStart))
       next.timeline.clips = clips.map((item) =>
         item.id === clipId
-          ? normalizeClipKindAndContent({
-              ...item,
-              startTime: clampedStart,
-              inPoint: 0,
-              outPoint: Math.max(MIN_CLIP_DURATION, fixedRight - clampedStart),
-            })
+          ? normalizeClipKindAndContent(
+              preserveFadeTimingOnTrim(
+                item,
+                {
+                  ...item,
+                  startTime: clampedStart,
+                  inPoint: 0,
+                  outPoint: Math.max(MIN_CLIP_DURATION, fixedRight - clampedStart),
+                },
+                "left"
+              )
+            )
           : item
       )
     } else if (clip.linkGroupId) {
@@ -492,11 +500,15 @@ export const applyCommand = (engineState, command) => {
     } else {
       next.timeline.clips = clips.map((item) =>
         item.id === clipId
-          ? {
-              ...item,
-              inPoint: Math.max(0, Math.min(item.outPoint - MIN_CLIP_DURATION, nextInPoint)),
-              startTime: Math.max(0, nextStart),
-            }
+          ? preserveFadeTimingOnTrim(
+              item,
+              {
+                ...item,
+                inPoint: Math.max(0, Math.min(item.outPoint - MIN_CLIP_DURATION, nextInPoint)),
+                startTime: Math.max(0, nextStart),
+              },
+              "left"
+            )
           : item
       )
     }
@@ -515,7 +527,7 @@ export const applyCommand = (engineState, command) => {
     const trimTime = Number(payload.time)
     const hasTrimTime = Number.isFinite(trimTime)
     const minEnd = clip.startTime + MIN_CLIP_DURATION
-    const maxEnd = clip.kind !== "text" && clip.sourceDuration
+    const maxEnd = clip.kind !== "text" && !isTimelineImageClip(clip) && clip.sourceDuration
       ? clip.startTime + (clip.sourceDuration - clip.inPoint)
       : Number.MAX_SAFE_INTEGER
     const nextTime = hasTrimTime
@@ -537,11 +549,17 @@ export const applyCommand = (engineState, command) => {
     if (clip.kind === "text") {
       next.timeline.clips = clips.map((item) =>
         item.id === clipId
-          ? normalizeClipKindAndContent({
-              ...item,
-              inPoint: 0,
-              outPoint: Math.max(MIN_CLIP_DURATION, nextOutPoint),
-            })
+          ? normalizeClipKindAndContent(
+              preserveFadeTimingOnTrim(
+                item,
+                {
+                  ...item,
+                  inPoint: 0,
+                  outPoint: Math.max(MIN_CLIP_DURATION, nextOutPoint),
+                },
+                "right"
+              )
+            )
           : item
       )
     } else if (clip.linkGroupId) {
@@ -549,10 +567,14 @@ export const applyCommand = (engineState, command) => {
     } else {
       next.timeline.clips = clips.map((item) =>
         item.id === clipId
-          ? {
-              ...item,
-              outPoint: Math.max(item.inPoint + MIN_CLIP_DURATION, nextOutPoint),
-            }
+          ? preserveFadeTimingOnTrim(
+              item,
+              {
+                ...item,
+                outPoint: Math.max(item.inPoint + MIN_CLIP_DURATION, nextOutPoint),
+              },
+              "right"
+            )
           : item
       )
     }

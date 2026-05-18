@@ -31,13 +31,14 @@ export function TimelineSection({
   editingTrackId,
   dragOver,
   dropZoneTrackMode,
+  dropTargetInvalid,
   scrubTooltip,
   selectedKeyframe,
   onSelectKeyframe,
   onBeginKeyframeDrag,
   onBeginVolumeKeyframeDrag,
   onAddVolumeKeyframe,
-  fadeDragRef,
+  handleFadeMouseDown,
   volumeLineDragRef,
   createHistorySnapshot,
   getAutoTrackZoneTop,
@@ -46,7 +47,7 @@ export function TimelineSection({
   setShowSettings,
   setMuted,
   setVolume,
-  setPxPerSec,
+  setTimelineZoomAtCursor,
   setEditingTrackId,
   seekToTime,
   handlePlay,
@@ -64,6 +65,7 @@ export function TimelineSection({
   setTrackHeadersListRef,
   handleTracksMouseDown,
   handleTracksScroll,
+  handleTimelineWheel,
   handlePlayheadMouseDown,
   handleClipMouseDown,
   handleCrossfadeMouseDown,
@@ -80,6 +82,7 @@ export function TimelineSection({
   return (
     <section
       className={className}
+      onWheel={handleTimelineWheel}
       onDragEnter={handleTimelineDragEnter}
       onDragOver={handleTimelineDragOver}
       onDragLeave={handleTimelineDragLeave}
@@ -192,9 +195,9 @@ export function TimelineSection({
             type="range"
             min="10"
             max="120"
-            step="2"
+            step="1"
             value={pxPerSec}
-            onChange={(e) => setPxPerSec(parseInt(e.target.value, 10))}
+            onChange={(e) => setTimelineZoomAtCursor(parseFloat(e.target.value))}
             className="zoom-slider"
             title="Zoom (px/s)"
           />
@@ -223,6 +226,7 @@ export function TimelineSection({
         editingTrackId={editingTrackId}
         dragOver={dragOver}
         dropZoneTrackMode={dropZoneTrackMode}
+        dropTargetInvalid={dropTargetInvalid}
         formatTime={formatTime}
         formatTC={formatTC}
         scrubTooltip={scrubTooltip}
@@ -236,6 +240,7 @@ export function TimelineSection({
         setTrackHeadersListRef={setTrackHeadersListRef}
         handleTracksMouseDown={handleTracksMouseDown}
         handleTracksScroll={handleTracksScroll}
+        handleTimelineWheel={handleTimelineWheel}
         handlePlayheadMouseDown={handlePlayheadMouseDown}
         handleClipMouseDown={handleClipMouseDown}
         handleCrossfadeMouseDown={handleCrossfadeMouseDown}
@@ -246,7 +251,7 @@ export function TimelineSection({
         marqueeBox={marqueeBox}
         snapIndicatorTime={snapIndicatorTime}
         setEditingTrackId={setEditingTrackId}
-        fadeDragRef={fadeDragRef}
+        handleFadeMouseDown={handleFadeMouseDown}
         volumeLineDragRef={volumeLineDragRef}
         createHistorySnapshot={createHistorySnapshot}
         DEFAULT_TRACK_HEIGHT={DEFAULT_TRACK_HEIGHT}
@@ -275,7 +280,8 @@ export function TimelineSection({
             {snapEnabled ? "Ein (N)" : "Aus (N)"}
           </span>
           <span className="status-item">
-            <span className="status-label">Zoom:</span> {pxPerSec}px/s
+            <span className="status-label">Zoom:</span>{" "}
+            {Number(pxPerSec).toFixed(1)}px/s
           </span>
           <div className="kbd-hints">
             <span className="kbd-group"><kbd>Space</kbd> Play</span>

@@ -293,14 +293,13 @@
     border-radius: 0 5px 5px 0;
 }
 
-/* ===== Fade Handles ===== */
+/* ===== Fade Handles (timeline clips use timeline.css corner handles) ===== */
 .fade-handle-in,
 .fade-handle-out {
     position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 6px;
-    height: 20px;
+    top: 2px;
+    width: 10px;
+    height: 13px;
     z-index: 6;
     cursor: ew-resize;
     opacity: 0;
@@ -312,11 +311,11 @@
 }
 
 .fade-handle-in {
-    margin-left: -3px;
+    left: 2px;
 }
 
 .fade-handle-out {
-    margin-right: -3px;
+    right: 2px;
 }
 
 .clip:hover .fade-handle-in,

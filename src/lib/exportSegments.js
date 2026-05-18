@@ -19,10 +19,11 @@ const clampNumber = (value, fallback, min = -Infinity, max = Infinity) => {
   return Math.max(min, Math.min(max, number));
 };
 
-const clampSourceRange = (clip) => {
+const clampSourceRange = (clip, media) => {
+  const mediaType = media?.mediaType || clip.mediaType || "video";
   const sourceDuration = finiteNumber(clip.sourceDuration, NaN);
   const hasSourceDuration =
-    Number.isFinite(sourceDuration) && sourceDuration > 0;
+    mediaType !== "image" && Number.isFinite(sourceDuration) && sourceDuration > 0;
   let inPoint = Math.max(0, finiteNumber(clip.inPoint, 0));
   let outPoint = Math.max(0, finiteNumber(clip.outPoint, inPoint));
 
@@ -69,7 +70,7 @@ const shouldExportAudioClip = ({ clip, track, media, hasSoloAudio }) => {
 };
 
 const buildSegmentForClip = ({ clip, media, track, trackIndex, hasAudio }) => {
-  const { inPoint, outPoint } = clampSourceRange(clip);
+  const { inPoint, outPoint } = clampSourceRange(clip, media);
   const duration = Math.max(0, outPoint - inPoint);
   const mediaType = media?.mediaType || "video";
   const trackType = getTrackType(track, clip, media);

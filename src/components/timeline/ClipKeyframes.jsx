@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { getMergedKeyframeMarkers } from "../../lib/keyframes.js";
+import { getVisibleMergedKeyframeMarkers } from "../../lib/keyframes.js";
 
 const DOT_RADIUS = 4;
 
@@ -10,19 +10,14 @@ export function ClipKeyframes({
   onSelectKeyframe,
   onBeginKeyframeDrag,
 }) {
-  const markers = useMemo(() => getMergedKeyframeMarkers(clip), [clip]);
+  const markers = useMemo(() => getVisibleMergedKeyframeMarkers(clip), [clip]);
 
   if (!markers || markers.length === 0) return null;
 
   const clipDuration = Math.max(0.001, clip.outPoint - clip.inPoint);
   const clipWidth = clipDuration * pxPerSec;
 
-  // Marker -> local x within the clip element. clip.startTime is the timeline
-  // origin, so we map keyframe.time accordingly. Keyframes outside the visible
-  // [startTime, startTime + duration] range are still rendered close to the
-  // edge; clamping happens in CSS via overflow:hidden on the .clip element.
-  const positionFor = (time) =>
-    Math.max(0, (time - clip.startTime) * pxPerSec);
+  const positionFor = (time) => (time - clip.startTime) * pxPerSec;
 
   const isSelectedMarker = (marker) =>
     selectedKeyframe &&

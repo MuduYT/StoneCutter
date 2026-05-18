@@ -1,53 +1,10 @@
-// Constant-power fade curve helpers for SVG overlays
-const FADE_SVG_STEPS = 24;
+// Diagonal fade overlay shapes (SVG viewBox 0 0 100 100, y grows downward).
+// Black falls from top to bottom along a straight edge (not a curved envelope).
 
-const buildFadeInPolyline = () => {
-  let pts = "0,100 ";
-  for (let i = 1; i <= FADE_SVG_STEPS; i++) {
-    const x = (i / FADE_SVG_STEPS) * 100;
-    const progress = i / FADE_SVG_STEPS;
-    const y = 100 - 100 * Math.sin((Math.PI / 2) * progress);
-    pts += x.toFixed(2) + "," + y.toFixed(2) + " ";
-  }
-  return pts;
-};
+/** Left fade-in: top-left triangle; edge from bottom-left to top-right (/). */
+export const FADE_IN_POLYGON = "0,0 0,100 100,0";
+export const FADE_IN_POLYLINE = "0,100 100,0";
 
-const buildFadeInPolygon = () => {
-  let pts = "0,100 ";
-  for (let i = 1; i <= FADE_SVG_STEPS; i++) {
-    const x = (i / FADE_SVG_STEPS) * 100;
-    const progress = i / FADE_SVG_STEPS;
-    const y = 100 - 100 * Math.sin((Math.PI / 2) * progress);
-    pts += x.toFixed(2) + "," + y.toFixed(2) + " ";
-  }
-  pts += "100,100";
-  return pts;
-};
-
-const buildFadeOutPolyline = () => {
-  let pts = "0,0 ";
-  for (let i = 1; i <= FADE_SVG_STEPS; i++) {
-    const x = (i / FADE_SVG_STEPS) * 100;
-    const progress = i / FADE_SVG_STEPS;
-    const y = 100 * Math.cos((Math.PI / 2) * progress);
-    pts += x.toFixed(2) + "," + y.toFixed(2) + " ";
-  }
-  return pts;
-};
-
-const buildFadeOutPolygon = () => {
-  let pts = "0,0 ";
-  for (let i = 1; i <= FADE_SVG_STEPS; i++) {
-    const x = (i / FADE_SVG_STEPS) * 100;
-    const progress = i / FADE_SVG_STEPS;
-    const y = 100 * Math.cos((Math.PI / 2) * progress);
-    pts += x.toFixed(2) + "," + y.toFixed(2) + " ";
-  }
-  pts += "100,100 0,100";
-  return pts;
-};
-
-export const FADE_IN_POLYLINE = buildFadeInPolyline();
-export const FADE_IN_POLYGON = buildFadeInPolygon();
-export const FADE_OUT_POLYLINE = buildFadeOutPolyline();
-export const FADE_OUT_POLYGON = buildFadeOutPolygon();
+/** Right fade-out: top-right triangle; edge from top-left to bottom-right. */
+export const FADE_OUT_POLYGON = "0,0 100,0 100,100";
+export const FADE_OUT_POLYLINE = "0,0 100,100";

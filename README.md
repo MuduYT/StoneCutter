@@ -117,8 +117,7 @@ Keep feature logic out of `App.jsx` when it can be expressed as pure data transf
 | `useProjectLifecycle.js` | Create/open/save `.stonecutter` projects, recent list, folder helpers, autosave-related state. |
 | `useThrottledCallback.js` | `requestAnimationFrame` throttling for noisy callbacks (e.g. pointer moves). |
 | `useTimelineDrop.js` | Drop from media onto the timeline: insert, linked A/V, track creation, ripple insert. |
-| `useTimelineMouseInteraction.js` | **Wired from `App.jsx`:** timeline mouse pipeline—seek, move/trim, marquee, preview transform, snap, global move/up. |
-| `useTimelineInteraction.js` | Same domain as `useTimelineMouseInteraction` (extracted earlier); not imported by `App.jsx` today—kept for migration/reference until one implementation is canonical. |
+| `useTimelineMouseInteraction.js` | **Wired from `App.jsx`:** timeline mouse pipeline—seek, move/trim, marquee, crossfade, preview transform, snap, global move/up. |
 
 ## Frontend styles (CSS modules)
 

@@ -294,27 +294,93 @@
     color: var(--accent-hover);
 }
 
+.track-header-row.drop-target-edge-top {
+    min-height: 44px;
+}
+
+.track-header-row.drop-target-invalid,
+.track-lane.drop-target-invalid {
+    background: rgba(239, 68, 68, 0.14) !important;
+    box-shadow: inset 0 0 0 2px rgba(248, 113, 113, 0.75);
+}
+
+.track-header-row.drop-target-below.drop-target-invalid {
+    border-color: rgba(248, 113, 113, 0.8);
+    color: #fecaca;
+}
+
 .track-header-row.hidden {
     opacity: 0.7;
 }
 
-/* Canvas-side drop zone lane that mirrors the header strip */
-.track-drop-zone-lane {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 44px;
-    border: 2px dashed var(--primary-35);
-    background: var(--primary-06);
-    border-radius: 4px;
+/* Dedicated strips above video / below audio for new-track drops */
+.track-edge-zone-header,
+.track-edge-zone-lane {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.42);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    z-index: 3;
     pointer-events: none;
     transition:
         background 0.15s,
-        border-color 0.15s;
+        border-color 0.15s,
+        color 0.15s;
 }
-.track-drop-zone-lane.active {
+
+.track-edge-zone-header.audio,
+.track-edge-zone-lane.audio {
+    border-bottom: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.track-edge-zone-header span {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent-hover);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.track-edge-zone-header.drag-active span {
+    opacity: 1;
+}
+
+.track-edge-zone-header.active,
+.track-edge-zone-lane.active {
     background: var(--primary-18);
-    border-color: var(--primary-65);
+    box-shadow: inset 0 0 0 2px var(--primary-60);
+}
+
+.track-edge-zone-header.audio.active,
+.track-edge-zone-lane.audio.active {
+    background: var(--secondary-12);
+    box-shadow: inset 0 0 0 2px var(--secondary-65);
+}
+
+.track-edge-zone-header.drop-target-invalid,
+.track-edge-zone-lane.drop-target-invalid {
+    background: rgba(239, 68, 68, 0.14) !important;
+    box-shadow: inset 0 0 0 2px rgba(248, 113, 113, 0.75);
+}
+
+.track-edge-zone-header.drop-target-invalid span {
+    color: #fecaca;
+    opacity: 1;
+}
+
+.track-edge-zone-lane {
+    border: none;
+    border-radius: 0;
+}
+
+.track-edge-zone-lane.drag-active {
+    background: rgba(0, 0, 0, 0.42);
+}
+
+.track-edge-zone-lane.drag-active.active {
+    background: var(--primary-18);
 }
 
 .track-auto-zone-lane {
@@ -892,66 +958,80 @@
     background: var(--danger-85);
 }
 
-/* Trim Handles */
-.trim-handle {
+/* Fade corner handles (top-left = fade-in, top-right = fade-out) */
+.fade-handle-in,
+.fade-handle-out {
     position: absolute;
-    top: 3px;
-    width: 14px;
-    height: 22px;
+    top: 2px;
+    width: 10px;
+    height: 13px;
+    padding: 0;
+    border: 0;
+    z-index: 9;
     cursor: ew-resize;
-    z-index: 7;
     opacity: 0;
+    pointer-events: auto;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.82);
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.35),
+        0 1px 4px rgba(0, 0, 0, 0.45);
     transition:
         opacity 0.12s,
         background 0.12s,
         box-shadow 0.12s;
+    /* left/top/right/bottom follow fade width (inline) */
 }
-.trim-handle.left {
-    left: 3px;
-    border-radius: 5px 2px 5px 2px;
-    background: linear-gradient(
-        135deg,
-        rgba(255, 255, 255, 0.82),
-        rgba(255, 255, 255, 0.18)
-    );
+.clip:hover .fade-handle-in,
+.clip:hover .fade-handle-out,
+.clip.active .fade-handle-in,
+.clip.active .fade-handle-out,
+.clip.selected .fade-handle-in,
+.clip.selected .fade-handle-out {
+    opacity: 0.85;
 }
-.trim-handle.right {
-    right: 3px;
-    border-radius: 2px 5px 2px 5px;
-    background: linear-gradient(
-        225deg,
-        rgba(255, 255, 255, 0.82),
-        rgba(255, 255, 255, 0.18)
-    );
-}
-.clip:hover .trim-handle {
-    opacity: 0.55;
-}
-.trim-handle:hover {
+.fade-handle-in:hover,
+.fade-handle-out:hover,
+.fade-handle-in:focus-visible,
+.fade-handle-out:focus-visible {
     opacity: 1 !important;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
+    background: #fff;
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.35),
+        0 0 8px rgba(255, 255, 255, 0.45);
+}
+.clip.track-locked .fade-handle-in,
+.clip.track-locked .fade-handle-out {
+    pointer-events: none;
 }
 
-/* trimmed indicator */
-.trim-handle.trimmed::after {
-    content: "";
+/* Trim hit zones (invisible; drag left/right clip edge below fade corners) */
+.trim-handle {
     position: absolute;
-    top: 2px;
-    bottom: 2px;
-    width: 2px;
-    background: repeating-linear-gradient(
-        -45deg,
-        var(--warn) 0,
-        var(--warn) 2px,
-        transparent 2px,
-        transparent 4px
-    );
+    top: 26px;
+    bottom: 3px;
+    width: 14px;
+    height: auto;
+    cursor: ew-resize;
+    z-index: 7;
+    opacity: 0;
+    background: transparent;
+    box-shadow: none;
+    pointer-events: auto;
 }
-.trim-handle.left.trimmed::after {
-    left: 2px;
+.trim-handle.left {
+    left: 0;
 }
-.trim-handle.right.trimmed::after {
-    right: 2px;
+.trim-handle.right {
+    right: 0;
+}
+.clip:hover .trim-handle,
+.trim-handle:hover {
+    opacity: 0;
+    box-shadow: none;
+}
+.trim-handle.trimmed::after {
+    display: none;
 }
 
 /* Waveform */

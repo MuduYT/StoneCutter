@@ -112,27 +112,27 @@ test('getMiddlePanScroll computes clamped pan deltas', () => {
   assert.equal(r2.top, 80)
 })
 
-test('isTimelineTrimHotspot requires top-left/top-right corner position', () => {
+test('isTimelineTrimHotspot uses vertical edge below fade-handle band', () => {
   const clipRect = { left: 100, right: 300, top: 50, bottom: 100 }
   assert.equal(
     isTimelineTrimHotspot({ clientX: 104, clientY: 55, clipRect, side: 'left' }),
-    true
-  )
-  assert.equal(
-    isTimelineTrimHotspot({ clientX: 120, clientY: 55, clipRect, side: 'left' }),
     false
   )
   assert.equal(
     isTimelineTrimHotspot({ clientX: 104, clientY: 80, clipRect, side: 'left' }),
+    true
+  )
+  assert.equal(
+    isTimelineTrimHotspot({ clientX: 120, clientY: 80, clipRect, side: 'left' }),
     false
   )
   assert.equal(
     isTimelineTrimHotspot({ clientX: 295, clientY: 55, clipRect, side: 'right' }),
-    true
+    false
   )
   assert.equal(
-    isTimelineTrimHotspot({ clientX: 104, clientY: 55, clipRect, side: 'right' }),
-    false
+    isTimelineTrimHotspot({ clientX: 295, clientY: 80, clipRect, side: 'right' }),
+    true
   )
 })
 

@@ -723,25 +723,7 @@ button {
 }
 
 
-/* ===== Fade handles (draggable) ===== */
-
-.fade-handle-in::before,
-.fade-handle-out::before {
-    content: "";
-    display: block;
-    width: 3px;
-    height: 60%;
-    min-height: 16px;
-    border-radius: 2px;
-    background: rgba(255, 255, 255, 0.75);
-    box-shadow: 0 0 6px rgba(0, 0, 0, 0.5);
-}
-
-.fade-handle-in:hover::before,
-.fade-handle-out:hover::before {
-    background: #fff;
-    box-shadow: 0 0 8px rgba(255,255,255,0.5);
-}
+/* Fade corner handles: see timeline.css (.fade-handle-in / .fade-handle-out) */
 
 
 .audio-clip {

@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import {
   SNAP_THRESHOLD_PX,
   MOVE_THRESHOLD_PX,
@@ -18,6 +18,11 @@ import {
   getMiddlePanScroll,
   isTimelineTrimHotspot,
   isClipTrackLocked,
+  isTimelineImageClip,
+  computeCrossfadeMaxDuration,
+  clampFadeValues,
+  clipDuration,
+  preserveFadeTimingOnTrim,
 } from "../lib/timeline.js";
 import { getTopVisibleTimelineClip } from "../lib/playback.js";
 import { FOCUS_TIMELINE } from "../lib/sourceMonitor.js";
@@ -27,6 +32,7 @@ import {
 } from "../lib/previewTransform.js";
 import { shiftKeyframeMap } from "../lib/keyframes.js";
 import { nextId } from "../lib/utils.js";
+import { createTimelineEdgeAutoScroller } from "../lib/timelineLayout.js";
 
 const TIMELINE_COMMIT_EPSILON = 1e-6;
 const isTextClip = (clip) => clip?.kind === "text";
@@ -167,6 +173,7 @@ export function useTimelineMouseInteraction({
   interaction,
   setInteraction,
   pxPerSec,
+  pxPerSecRef,
   snapEnabled,
   videos,
   setEditorFocus,
@@ -220,24 +227,11 @@ export function useTimelineMouseInteraction({
       if (isClipTrackLocked(leftClip, tracks) || isClipTrackLocked(rightClip, tracks)) {
         return;
       }
-      const leftDuration = Math.max(
-        MIN_CLIP_DURATION,
-        leftClip.outPoint - leftClip.inPoint,
-      );
-      const rightDuration = Math.max(
-        MIN_CLIP_DURATION,
-        rightClip.outPoint - rightClip.inPoint,
-      );
+      const leftDuration = Math.max(MIN_CLIP_DURATION, leftClip.outPoint - leftClip.inPoint);
+      const rightDuration = Math.max(MIN_CLIP_DURATION, rightClip.outPoint - rightClip.inPoint);
       const leftEnd = leftClip.startTime + leftDuration;
       const gapBetweenClips = rightClip.startTime - leftEnd;
-      const maxDuration = Math.max(
-        0.05,
-        Math.min(
-          leftDuration * 0.5,
-          rightDuration * 0.5,
-          gapBetweenClips + Math.min(leftDuration, rightDuration) * 0.5,
-        ),
-      );
+      const maxDuration = computeCrossfadeMaxDuration(leftClip, rightClip);
       const i = {
         type: "crossfade-drag",
         leftClipId: leftClip.id,
@@ -335,11 +329,21 @@ export function useTimelineMouseInteraction({
     ],
   );
 
+  const getPxPerSec = () =>
+    Math.max(0.001, pxPerSecRef?.current ?? pxPerSec);
+
   const getXInTracks = (clientX) => {
     if (!tracksContentRef.current) return 0;
     const rect = tracksContentRef.current.getBoundingClientRect();
     return clientX - rect.left + tracksContentRef.current.scrollLeft;
   };
+
+  const edgeAutoScrollerRef = useRef(null);
+  if (!edgeAutoScrollerRef.current) {
+    edgeAutoScrollerRef.current = createTimelineEdgeAutoScroller(
+      () => tracksContentRef.current,
+    );
+  }
 
   const beginScrub = () => {
     const v = videoRef.current;
@@ -389,7 +393,7 @@ export function useTimelineMouseInteraction({
     setSourceMonitorId(null);
     if (playbackModeRef.current === "source") stopPlayback();
     const x = getXInTracks(e.clientX);
-    const t = Math.max(0, x / pxPerSec);
+    const t = Math.max(0, x / getPxPerSec());
     if (e.target.closest(".time-ruler")) {
       const wasPlaying = beginScrub();
       beginScrubAudio?.();
@@ -437,6 +441,7 @@ export function useTimelineMouseInteraction({
 
   const handleClipMouseDown = (e, clip) => {
     if (e.target.closest(".trim-handle")) return;
+    if (e.target.closest(".fade-handle-in, .fade-handle-out")) return;
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
@@ -552,6 +557,34 @@ export function useTimelineMouseInteraction({
     setInteraction(i);
   };
 
+  const handleFadeMouseDown = (e, clip, side) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (e.button !== 0) return;
+    setEditorFocus(FOCUS_TIMELINE);
+    setSourceMonitorId(null);
+    if (playbackModeRef.current === "source") stopPlayback();
+    setActiveClipId(clip.id);
+    setActiveId(getClipMediaId(clip));
+    if (isClipTrackLocked(clip, tracks)) {
+      setSelectedClipIds(new Set([clip.id]));
+      return;
+    }
+    const dur = clipDuration(clip);
+    const i = {
+      type: side === "in" ? "fade-in" : "fade-out",
+      clipId: clip.id,
+      startClientX: e.clientX,
+      startFade: side === "in" ? clip.fadeIn ?? 0 : clip.fadeOut ?? 0,
+      dur,
+      pxPerSec,
+      snapshotBefore: clips.map((c) => ({ ...c })),
+      moved: false,
+    };
+    interactionRef.current = i;
+    setInteraction(i);
+  };
+
   const handleTrimMouseDown = (e, clip, side) => {
     e.stopPropagation();
     e.preventDefault();
@@ -661,7 +694,7 @@ export function useTimelineMouseInteraction({
     let bestDistPx = SNAP_THRESHOLD_PX;
     let didSnap = false;
     for (const p of points) {
-      const dPx = Math.abs(p - value) * pxPerSec;
+      const dPx = Math.abs(p - value) * getPxPerSec();
       if (dPx < bestDistPx) {
         bestDistPx = dPx;
         best = p;
@@ -673,10 +706,13 @@ export function useTimelineMouseInteraction({
 
   useEffect(() => {
     if (!interaction) return;
+    const edgeAutoScroller = edgeAutoScrollerRef.current;
     const onMove = (ev) => {
-      const x = getXInTracks(ev.clientX);
       const it = interactionRef.current;
       if (!it) return;
+      if (it.type !== "middle-pan") {
+        edgeAutoScroller?.setClientX(ev.clientX);
+      }
       if (it.type === "middle-pan") {
         ev.preventDefault();
         if (tracksContentRef.current) {
@@ -701,16 +737,10 @@ export function useTimelineMouseInteraction({
       }
 
       const effSnap = snapEnabled && !ev.shiftKey;
-      const tcEl = tracksContentRef.current;
-      if (tcEl) {
-        const tcRect = tcEl.getBoundingClientRect();
-        const edge = 50;
-        if (ev.clientX < tcRect.left + edge) tcEl.scrollLeft -= 12;
-        else if (ev.clientX > tcRect.right - edge) tcEl.scrollLeft += 12;
-      }
+      const x = getXInTracks(ev.clientX);
 
       if (it.type === "seek") {
-        const t = Math.max(0, x / pxPerSec);
+        const t = Math.max(0, x / getPxPerSec());
         seekToTime(t);
         triggerScrubAudio?.(t);
         setScrubTooltip({ x, time: t });
@@ -721,13 +751,13 @@ export function useTimelineMouseInteraction({
         ev.preventDefault();
         const deltaSec =
           Math.abs(ev.clientX - it.startClientX) /
-          Math.max(0.001, it.pxPerSec || pxPerSec);
+          Math.max(0.001, it.pxPerSec || getPxPerSec());
         const crossfadeDuration = Math.max(
           0.05,
           Math.min(it.maxDuration, deltaSec),
         );
-        setClips((prev) =>
-          prev.map((clip) => {
+        setClips((prev) => {
+          const next = prev.map((clip) => {
             if (clip.id === it.leftClipId) {
               return { ...clip, fadeOut: crossfadeDuration };
             }
@@ -735,10 +765,40 @@ export function useTimelineMouseInteraction({
               return { ...clip, fadeIn: crossfadeDuration };
             }
             return clip;
-          }),
-        );
+          });
+          it.lastPreviewClips = next;
+          return next;
+        });
         it.moved = true;
         it.lastCrossfadeDuration = crossfadeDuration;
+        return;
+      }
+
+      if (it.type === "fade-in" || it.type === "fade-out") {
+        ev.preventDefault();
+        const deltaSec =
+          (ev.clientX - it.startClientX) / Math.max(0.001, it.pxPerSec || getPxPerSec());
+        const side = it.type === "fade-in" ? "in" : "out";
+        const rawFade =
+          side === "in"
+            ? it.startFade + deltaSec
+            : it.startFade - deltaSec;
+        setClips((prev) => {
+          const next = prev.map((clip) => {
+            if (clip.id !== it.clipId) return clip;
+            const { fadeIn, fadeOut } = clampFadeValues({
+              duration: it.dur,
+              fadeIn: clip.fadeIn ?? 0,
+              fadeOut: clip.fadeOut ?? 0,
+              side,
+              nextValue: rawFade,
+            });
+            return { ...clip, fadeIn, fadeOut };
+          });
+          it.lastPreviewClips = next;
+          return next;
+        });
+        it.moved = true;
         return;
       }
 
@@ -863,7 +923,7 @@ export function useTimelineMouseInteraction({
         return;
       const orig = it.originalClip;
       if (!orig) return;
-      const deltaSec = (x - it.startX) / pxPerSec;
+      const deltaSec = (x - it.startX) / getPxPerSec();
 
       if (
         it.type === "move" &&
@@ -1037,7 +1097,7 @@ export function useTimelineMouseInteraction({
           let snappedAt = null;
           if (
             sStart.snapped &&
-            (!sEnd.snapped || distStart * pxPerSec <= distEnd * pxPerSec)
+            (!sEnd.snapped || distStart * getPxPerSec() <= distEnd * getPxPerSec())
           ) {
             newStart = sStart.value;
             snappedAt = sStart.value;
@@ -1112,18 +1172,24 @@ export function useTimelineMouseInteraction({
             }
           }
           setSnapIndicatorTime(snappedAt);
-          setClips((prev) =>
-            prev.map((clip) =>
+          setClips((prev) => {
+            const next = prev.map((clip) =>
               clip.id === orig.id
-                ? {
-                    ...clip,
-                    startTime: finalStart,
-                    inPoint: 0,
-                    outPoint: Math.max(MIN_CLIP_DURATION, fixedRight - finalStart),
-                  }
+                ? preserveFadeTimingOnTrim(
+                    clip,
+                    {
+                      ...clip,
+                      startTime: finalStart,
+                      inPoint: 0,
+                      outPoint: Math.max(MIN_CLIP_DURATION, fixedRight - finalStart),
+                    },
+                    "left",
+                  )
                 : clip,
-            ),
-          );
+            );
+            it.lastPreviewClips = next;
+            return next;
+          });
           it.moved = true;
           return;
         }
@@ -1167,16 +1233,18 @@ export function useTimelineMouseInteraction({
           }
         }
         setSnapIndicatorTime(snappedAt);
-        setClips((prev) =>
-          applyGroupTrimLeft(prev, orig.id, {
+        setClips((prev) => {
+          const next = applyGroupTrimLeft(prev, orig.id, {
             inPoint: newInPoint,
             startTime: finalStart,
-          }),
-        );
+          });
+          it.lastPreviewClips = next;
+          return next;
+        });
         it.moved = true;
       } else if (it.type === "trim-right") {
         const maxOutPoint =
-          isTextClip(orig) || orig.mediaType === "image"
+          isTextClip(orig) || isTimelineImageClip(orig)
             ? Number.MAX_SAFE_INTEGER
             : (orig.sourceDuration || Number.MAX_SAFE_INTEGER);
         let newOutPoint = isTextClip(orig)
@@ -1215,15 +1283,21 @@ export function useTimelineMouseInteraction({
           }
         }
         setSnapIndicatorTime(snappedAt);
-        setClips((prev) =>
-          isTextClip(orig)
+        setClips((prev) => {
+          const next = isTextClip(orig)
             ? prev.map((clip) =>
                 clip.id === orig.id
-                  ? { ...clip, inPoint: 0, outPoint: newOutPoint }
+                  ? preserveFadeTimingOnTrim(
+                      clip,
+                      { ...clip, inPoint: 0, outPoint: newOutPoint },
+                      "right",
+                    )
                   : clip,
               )
-            : applyGroupTrimRight(prev, orig.id, { outPoint: newOutPoint }),
-        );
+            : applyGroupTrimRight(prev, orig.id, { outPoint: newOutPoint });
+          it.lastPreviewClips = next;
+          return next;
+        });
         it.moved = true;
       }
     };
@@ -1255,6 +1329,63 @@ export function useTimelineMouseInteraction({
         it.snapshotBefore
       ) {
         pushHistory(createHistorySnapshot(it.snapshotBefore, tracks));
+        const previewClips = it.lastPreviewClips || clips;
+        const leftClip = previewClips.find((c) => c.id === it.leftClipId);
+        const rightClip = previewClips.find((c) => c.id === it.rightClipId);
+        if (leftClip && rightClip) {
+          const commitState = {
+            clips: it.snapshotBefore,
+            tracks,
+            selectedClipIds: new Set([leftClip.id, rightClip.id]),
+            activeClipId: leftClip.id,
+          };
+          dispatchEngineCommand(
+            {
+              type: "clip.updateProps",
+              payload: {
+                clipId: leftClip.id,
+                props: { fadeOut: leftClip.fadeOut ?? 0 },
+              },
+            },
+            commitState,
+          );
+          dispatchEngineCommand({
+            type: "clip.updateProps",
+            payload: {
+              clipId: rightClip.id,
+              props: { fadeIn: rightClip.fadeIn ?? 0 },
+            },
+          });
+        }
+      } else if (
+        it &&
+        (it.type === "fade-in" || it.type === "fade-out") &&
+        it.moved &&
+        it.snapshotBefore
+      ) {
+        pushHistory(createHistorySnapshot(it.snapshotBefore, tracks));
+        const previewClips = it.lastPreviewClips || clips;
+        const clip = previewClips.find((c) => c.id === it.clipId);
+        if (clip) {
+          dispatchEngineCommand(
+            {
+              type: "clip.updateProps",
+              payload: {
+                clipId: clip.id,
+                props: {
+                  fadeIn: clip.fadeIn ?? 0,
+                  fadeOut: clip.fadeOut ?? 0,
+                },
+              },
+            },
+            {
+              clips: it.snapshotBefore,
+              tracks,
+              selectedClipIds: new Set([clip.id]),
+              activeClipId: clip.id,
+            },
+          );
+        }
       } else if (it && it.type === "move" && !it.moved) {
         setSelectedClipIds(new Set([it.clipId]));
       } else if (it && it.moved && it.snapshotBefore) {
@@ -1292,7 +1423,7 @@ export function useTimelineMouseInteraction({
           }
         }
         if (it.type === "trim-left" || it.type === "trim-right") {
-          const trimCommand = buildEngineTrimCommit(it, clips);
+          const trimCommand = buildEngineTrimCommit(it, finalPreviewClips);
           if (trimCommand) {
             dispatchEngineCommand(trimCommand, {
               clips: it.snapshotBefore,
@@ -1379,11 +1510,12 @@ export function useTimelineMouseInteraction({
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
     return () => {
+      edgeAutoScroller?.stop();
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interaction, clips, tracks, timelineTime, activeClipId, pxPerSec, snapEnabled]);
+  }, [interaction, clips, tracks, timelineTime, activeClipId, snapEnabled]);
 
   const handleClipContextMenu = (e, clip) => {
     e.preventDefault();
@@ -1403,6 +1535,7 @@ export function useTimelineMouseInteraction({
     handlePlayheadMouseDown,
     handleClipMouseDown,
     handleTrimMouseDown,
+    handleFadeMouseDown,
     handlePreviewClipMouseDown,
     handleCrossfadeMouseDown,
     snapValue,

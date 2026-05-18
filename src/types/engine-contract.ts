@@ -104,6 +104,7 @@ export type SetPlayheadCommand = EngineCommandBase<
   { time: number }
 >;
 
+/** `ripple` on add/move/trim is reserved; only `clip.delete` implements engine ripple today. Use client `timeline.js` helpers otherwise. */
 export type AddClipCommand = EngineCommandBase<
   "clip.add",
   { clips: EngineClip[]; ripple?: boolean; resolveOverlaps?: boolean }
@@ -119,6 +120,7 @@ export type UpdateClipPropsCommand = EngineCommandBase<
   { clipId: EngineId; props: Partial<EngineClip> }
 >;
 
+/** See AddClipCommand: `ripple` is validated but not implemented except on delete. */
 export type MoveClipCommand = EngineCommandBase<
   "clip.move",
   {
@@ -157,6 +159,7 @@ export type SplitClipCommand = EngineCommandBase<
   { clipId: EngineId; timelineTime: number; linked?: boolean; expandLinked?: boolean }
 >;
 
+/** `ripple` on delete shifts later clips on affected tracks (engine-supported). */
 export type DeleteClipsCommand = EngineCommandBase<
   "clip.delete",
   { clipIds: EngineId[]; ripple?: boolean; expandLinked?: boolean }

@@ -7,8 +7,11 @@ import {
   applyGroupTrimRight,
   applyRippleInsert,
   closeGap,
+  computeCrossfadeMaxDuration,
   constrainMoveStart,
   detectInsertPoint,
+  findAdjacentAudioClipPairs,
+  getCrossfadeHandleOffsetSec,
   expandWithLinkedPartners,
   findGapAtTime,
   findTimelineSpaceAtTime,
@@ -16,6 +19,7 @@ import {
   getLinkedClipIds,
   isClipTrackLocked,
   getMediaType,
+  isTimelineImageClip,
   isAudioOnlyMedia,
   maxEndForTrimRight,
   minStartForTrimLeft,
@@ -329,6 +333,25 @@ test('applyGroupTrimLeft and applyGroupTrimRight sync linked partners', () => {
   assert.equal(trimmedRight.find((c) => c.id === 'a').outPoint, 4)
 })
 
+test('applyGroupTrimRight lets image clips extend beyond initial duration', () => {
+  const clips = [
+    {
+      id: 'img',
+      name: 'Poster.png',
+      linkGroupId: null,
+      startTime: 0,
+      inPoint: 0,
+      outPoint: 3,
+      sourceDuration: 3,
+      mediaType: 'image',
+    },
+  ]
+
+  const result = applyGroupTrimRight(clips, 'img', { outPoint: 30 })
+  assert.equal(result.find((c) => c.id === 'img').outPoint, 30)
+  assert.equal(isTimelineImageClip(result[0]), true)
+})
+
 test('unlinkClipGroup removes linkGroupId from both linked clips', () => {
   const clips = [
     { id: 'v', linkGroupId: 'lg', startTime: 0, inPoint: 0, outPoint: 2 },
@@ -417,4 +440,60 @@ test('marquee selection ignores clips outside intersecting vertical bounds', () 
     trackTopOffset: 30,
   })
   assert.deepEqual([...selected], ['in-track'])
+})
+
+test('findAdjacentAudioClipPairs returns touching audio clips on same track', () => {
+  const tracks = [{ id: 'a1', type: 'audio', height: 80 }]
+  const clips = [
+    clip('left', 0, 4, { trackId: 'a1' }),
+    clip('right', 4, 4, { trackId: 'a1' }),
+  ]
+  const pairs = findAdjacentAudioClipPairs(clips, tracks)
+  assert.equal(pairs.length, 1)
+  assert.equal(pairs[0].leftClip.id, 'left')
+  assert.equal(pairs[0].rightClip.id, 'right')
+  assert.ok(pairs[0].maxDuration >= 0.05)
+})
+
+test('findAdjacentAudioClipPairs includes overlapping neighbors', () => {
+  const tracks = [{ id: 'a1', type: 'audio', height: 80 }]
+  const clips = [
+    clip('left', 0, 6, { trackId: 'a1' }),
+    clip('right', 4, 4, { trackId: 'a1' }),
+  ]
+  const pairs = findAdjacentAudioClipPairs(clips, tracks)
+  assert.equal(pairs.length, 1)
+  assert.ok(computeCrossfadeMaxDuration(pairs[0].leftClip, pairs[0].rightClip) >= 0.05)
+})
+
+test('findAdjacentAudioClipPairs skips clips separated by large gap', () => {
+  const tracks = [{ id: 'a1', type: 'audio', height: 80 }]
+  const clips = [
+    clip('left', 0, 2, { trackId: 'a1' }),
+    clip('right', 10, 2, { trackId: 'a1' }),
+  ]
+  assert.equal(findAdjacentAudioClipPairs(clips, tracks).length, 0)
+})
+
+test('findAdjacentAudioClipPairs ignores video tracks and text clips', () => {
+  const tracks = [
+    { id: 'v1', type: 'video', height: 80 },
+    { id: 'a1', type: 'audio', height: 80 },
+  ]
+  const clips = [
+    clip('v-left', 0, 4, { trackId: 'v1' }),
+    clip('v-right', 4, 4, { trackId: 'v1' }),
+    clip('text', 0, 2, { trackId: 'a1', kind: 'text' }),
+    clip('a-left', 0, 4, { trackId: 'a1' }),
+    clip('a-right', 4, 4, { trackId: 'a1' }),
+  ]
+  const pairs = findAdjacentAudioClipPairs(clips, tracks)
+  assert.equal(pairs.length, 1)
+  assert.equal(pairs[0].leftClip.id, 'a-left')
+})
+
+test('getCrossfadeHandleOffsetSec places handle at transition midpoint', () => {
+  const left = clip('l', 0, 4, { trackId: 'a1' })
+  const right = clip('r', 4, 4, { trackId: 'a1' })
+  assert.equal(getCrossfadeHandleOffsetSec(left, right), 4)
 })

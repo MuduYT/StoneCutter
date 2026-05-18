@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   MIN_CLIP_DURATION,
   constrainMoveStart,
@@ -16,8 +16,12 @@ import {
   TRACK_DROP_ABOVE,
   TRACK_DROP_BELOW,
   findPreferredVideoTrackForDrop,
+  getDropZoneModeFromRelativeY,
+  normalizeTrackInsertEdge,
+  resolveTimelineDropTarget,
 } from "../lib/trackStore.js";
 import { MediaAssetService } from "../lib/services/MediaAssetService.js";
+import { createTimelineEdgeAutoScroller } from "../lib/timelineLayout.js";
 
 const TEXT_ASSET_KIND = "text";
 const TEXT_ASSET_MIME = "application/x-stonecutter-asset-kind";
@@ -40,16 +44,21 @@ const isTextDropEvent = (dataTransfer) => {
   );
 };
 
-const getDropEdge = (dropTargetId) =>
-  dropTargetId === TRACK_DROP_ABOVE ? "start" : "end";
+const getDropEdge = (dropTargetId, type) =>
+  normalizeTrackInsertEdge(
+    type,
+    dropTargetId === TRACK_DROP_ABOVE ? "start" : "end",
+  );
 
 const createTimelineTrack = (tracks, type, edge = "end") => {
+  const normalizedEdge = normalizeTrackInsertEdge(type, edge);
   const track = {
     id: nextTrackId(),
     type,
     name: `${type === "audio" ? "Audio" : "Video"} ${tracks.filter((t) => t.type === type).length + 1}`,
     locked: false,
     height: DEFAULT_TRACK_HEIGHT,
+    edge: normalizedEdge,
   };
   if (type === "audio") {
     track.muted = false;
@@ -57,7 +66,7 @@ const createTimelineTrack = (tracks, type, edge = "end") => {
   }
   return {
     track,
-    tracks: insertTrackOrdered(tracks, track, edge),
+    tracks: insertTrackOrdered(tracks, track, normalizedEdge),
   };
 };
 
@@ -127,8 +136,32 @@ export function useTimelineDrop({
   setDragTooltip,
   setDropTargetTrackId,
   setDropZoneTrackMode,
+  setDropTargetInvalid,
   setTrackMovePreview,
 }) {
+  const edgeAutoScrollerRef = useRef(null);
+  if (!edgeAutoScrollerRef.current) {
+    edgeAutoScrollerRef.current = createTimelineEdgeAutoScroller(
+      () => tracksContentRef.current,
+    );
+  }
+
+  useEffect(() => {
+    if (!dragOver) edgeAutoScrollerRef.current?.stop();
+  }, [dragOver]);
+
+  const getRelativeTimelineY = useCallback(
+    (clientY) => {
+      const tc = tracksContentRef.current;
+      if (!tc) return 0;
+      const rect = tc.getBoundingClientRect();
+      const rulerEl = tc.querySelector(".time-ruler");
+      const rulerHeight = rulerEl ? rulerEl.getBoundingClientRect().height : 30;
+      return clientY - rect.top + tc.scrollTop - rulerHeight;
+    },
+    [tracksContentRef],
+  );
+
   const dropTimeFromEvent = useCallback(
     (e) => {
       if (!tracksContentRef.current) return totalEnd;
@@ -260,24 +293,25 @@ export function useTimelineDrop({
       e.stopPropagation();
       e.dataTransfer.dropEffect = "copy";
       if (!dragOver) setDragOver(true);
-      const tcEl = tracksContentRef.current;
-      if (tcEl) {
-        const tcRect = tcEl.getBoundingClientRect();
-        const edge = 50;
-        if (e.clientX < tcRect.left + edge) tcEl.scrollLeft -= 12;
-        else if (e.clientX > tcRect.right - edge) tcEl.scrollLeft += 12;
-      }
+      edgeAutoScrollerRef.current?.setClientX(e.clientX);
       const dropTime = dropTimeFromEvent(e);
       setDropIndicatorTime(dropTime);
 
       const targetTrackId = getTrackAtClientY(e.clientY);
       setDropTargetTrackId(targetTrackId);
+      const relativeY = getRelativeTimelineY(e.clientY);
+      setDropZoneTrackMode(getDropZoneModeFromRelativeY(tracks, relativeY));
+
       const textDrag = isTextDragEvent(e.dataTransfer);
+      let requiredTrackType = null;
+      if (textDrag) {
+        requiredTrackType = "video";
+      }
+
       if (textDrag) {
         draggedVideoIdRef.current = null;
         draggedTrackModeRef.current = "video";
         draggedUseSourceRangeRef.current = false;
-        setDropZoneTrackMode("video");
         const targetTrack =
           targetTrackId &&
           targetTrackId !== TRACK_DROP_ABOVE &&
@@ -313,6 +347,12 @@ export function useTimelineDrop({
             label: `Standard Text · ${formatTime(TEXT_DURATION)}`,
           });
         }
+        const textDropResolution = resolveTimelineDropTarget({
+          tracks,
+          dropTargetId: targetTrackId,
+          requiredTrackType,
+        });
+        setDropTargetInvalid?.(!textDropResolution.valid);
         return;
       }
 
@@ -323,7 +363,7 @@ export function useTimelineDrop({
         const file = files[0];
         const mediaType = MediaAssetService.getFileMediaType(file);
         draggedTrackModeRef.current = mediaType === "audio" ? "audio" : "av";
-        setDropZoneTrackMode(mediaType === "audio" ? "audio" : "av");
+        requiredTrackType = mediaType === "audio" ? "audio" : "video";
         const targetTrack =
           targetTrackId &&
           targetTrackId !== TRACK_DROP_ABOVE &&
@@ -353,6 +393,12 @@ export function useTimelineDrop({
             label: `${file.name} · ${formatTime(preview.dur || 5)}`,
           });
         }
+        const fileDropResolution = resolveTimelineDropTarget({
+          tracks,
+          dropTargetId: targetTrackId,
+          requiredTrackType,
+        });
+        setDropTargetInvalid?.(!fileDropResolution.valid);
         return;
       }
 
@@ -360,6 +406,7 @@ export function useTimelineDrop({
       if (videoId) {
         const video = videos.find((v) => v.id === videoId);
         const trackMode = draggedTrackModeRef.current || "av";
+        requiredTrackType = trackMode === "audio" ? "audio" : "video";
         const useSourceRange = draggedUseSourceRangeRef.current;
         const targetTrack =
           targetTrackId &&
@@ -391,7 +438,16 @@ export function useTimelineDrop({
             label: `${trackMode === "audio" ? "Nur Audio" : "Video + Audio"} · ${formatTime(preview.insertPoint)} · ${formatTime(preview.dur)}`,
           });
         }
+        const mediaDropResolution = resolveTimelineDropTarget({
+          tracks,
+          dropTargetId: targetTrackId,
+          requiredTrackType,
+        });
+        setDropTargetInvalid?.(!mediaDropResolution.valid);
+        return;
       }
+
+      setDropTargetInvalid?.(false);
     },
     [
       computeImportPreview,
@@ -402,10 +458,12 @@ export function useTimelineDrop({
       draggedVideoIdRef,
       dropTimeFromEvent,
       formatTime,
+      getRelativeTimelineY,
       getTrackAtClientY,
       setDragOver,
       setDragTooltip,
       setDropIndicatorTime,
+      setDropTargetInvalid,
       setDropTargetTrackId,
       setDropZoneTrackMode,
       setImportDragInfo,
@@ -418,18 +476,21 @@ export function useTimelineDrop({
   const handleTimelineDragLeave = useCallback(
     (e) => {
       if (e.currentTarget.contains(e.relatedTarget)) return;
+      edgeAutoScrollerRef.current?.stop();
       setDragOver(false);
       setDropIndicatorTime(null);
       setImportDragInfo(null);
       setDragTooltip(null);
       setDropTargetTrackId(null);
       setDropZoneTrackMode("av");
+      setDropTargetInvalid?.(false);
       setTrackMovePreview(null);
     },
     [
       setDragOver,
       setDragTooltip,
       setDropIndicatorTime,
+      setDropTargetInvalid,
       setDropTargetTrackId,
       setDropZoneTrackMode,
       setImportDragInfo,
@@ -440,12 +501,14 @@ export function useTimelineDrop({
   const handleTimelineDrop = useCallback(
     async (e) => {
       e.preventDefault();
+      edgeAutoScrollerRef.current?.stop();
       setDragOver(false);
       setDropIndicatorTime(null);
       setImportDragInfo(null);
       setDragTooltip(null);
       setDropTargetTrackId(null);
       setDropZoneTrackMode("av");
+      setDropTargetInvalid?.(false);
       setTrackMovePreview(null);
       const isTextDrop = isTextDropEvent(e.dataTransfer);
       const droppedTextValue =
@@ -473,6 +536,18 @@ export function useTimelineDrop({
           ? tracks.find((t) => t.id === dropTargetId) || null
           : null;
       if (isTextDrop) {
+        const textResolution = resolveTimelineDropTarget({
+          tracks,
+          dropTargetId: dropTargetId,
+          requiredTrackType: "video",
+        });
+        if (!textResolution.valid) {
+          setProjectStatus({
+            ok: false,
+            msg: "Text-Clips dürfen nur im Video-Bereich abgelegt werden.",
+          });
+          return;
+        }
         const dropTime = dropTimeFromEvent(e);
         let nextTracksForAdd = tracks;
         if (targetTrack && targetTrack.type !== "video") {
@@ -494,7 +569,7 @@ export function useTimelineDrop({
             const created = createTimelineTrack(
               tracks,
               "video",
-              getDropEdge(dropTargetId),
+              getDropEdge(dropTargetId, "video"),
             );
             targetTrack = created.track;
             nextTracksForAdd = created.tracks;
@@ -567,6 +642,20 @@ export function useTimelineDrop({
           const isVideoFile = lastVideo.mediaType === "video";
           const explorerTrackMode = isAudioFile ? "audio" : "av";
           const requiredTrackType = isAudioFile ? "audio" : "video";
+          const explorerResolution = resolveTimelineDropTarget({
+            tracks,
+            dropTargetId: dropTargetId,
+            requiredTrackType,
+          });
+          if (!explorerResolution.valid) {
+            setProjectStatus({
+              ok: false,
+              msg: isAudioFile
+                ? "Audio-Dateien dürfen nur im Audio-Bereich unterhalb der Trennlinie abgelegt werden."
+                : "Video-Dateien dürfen nur im Video-Bereich oberhalb der Trennlinie abgelegt werden.",
+            });
+            return;
+          }
           if (targetTrack && targetTrack.type !== requiredTrackType) {
             setProjectStatus({
               ok: false,
@@ -584,7 +673,7 @@ export function useTimelineDrop({
             const created = createTimelineTrack(
               tracks,
               requiredTrackType,
-              getDropEdge(dropTargetId),
+              getDropEdge(dropTargetId, requiredTrackType),
             );
             targetTrack = created.track;
             tracksUpdateExplorer = created.tracks;
@@ -743,6 +832,21 @@ export function useTimelineDrop({
         droppedUsesSourceRange && !!sourceRanges[video.id];
 
       const requiredTrackType = trackMode === "audio" ? "audio" : "video";
+      const mediaResolution = resolveTimelineDropTarget({
+        tracks,
+        dropTargetId: dropTargetId,
+        requiredTrackType,
+      });
+      if (!mediaResolution.valid) {
+        setProjectStatus({
+          ok: false,
+          msg:
+            trackMode === "audio"
+              ? "Audio-Clips dürfen nur im Audio-Bereich unterhalb der Trennlinie abgelegt werden."
+              : "Video-Clips dürfen nur im Video-Bereich oberhalb der Trennlinie abgelegt werden.",
+        });
+        return;
+      }
       if (targetTrack && targetTrack.type !== requiredTrackType) {
         setProjectStatus({
           ok: false,
@@ -760,7 +864,7 @@ export function useTimelineDrop({
         const created = createTimelineTrack(
           tracks,
           requiredTrackType,
-          getDropEdge(dropTargetId),
+          getDropEdge(dropTargetId, requiredTrackType),
         );
         targetTrack = created.track;
         tracksUpdate = created.tracks;
@@ -1016,6 +1120,7 @@ export function useTimelineDrop({
       setDragOver,
       setDragTooltip,
       setDropIndicatorTime,
+      setDropTargetInvalid,
       setDropTargetTrackId,
       setDropZoneTrackMode,
       setImportDragInfo,

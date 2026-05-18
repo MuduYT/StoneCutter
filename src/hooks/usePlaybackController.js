@@ -6,6 +6,12 @@ import {
   getTimelineVisualClips,
   getVirtualTimelinePlaybackTime,
 } from "../lib/playback.js";
+import {
+  isTimelineTransportPlaying,
+  shouldPlayTimelineMediaAfterSeek,
+  shouldPlayTimelineMediaNow,
+  shouldSkipTimelinePlayheadTick,
+} from "../lib/playbackGuards.js";
 import { resolveAnimatedClip } from "../lib/keyframes.js";
 
 const getConstantPowerFadeGain = (clip, time) => {
@@ -500,9 +506,12 @@ export function usePlaybackController({
       imagePlaybackRef.current = null;
       pendingPlayRef.current = false;
     }
-    const timelineIsPlaying =
-      playbackModeRef.current === "timeline" &&
-      (isPlaying || playbackRef.current.isPlaying || timelinePlaybackRef.current);
+    const timelineIsPlaying = isTimelineTransportPlaying({
+      playbackMode: playbackModeRef.current,
+      isPlaying,
+      isPlaybackRefPlaying: playbackRef.current.isPlaying,
+      hasTimelinePlaybackClock: Boolean(timelinePlaybackRef.current),
+    });
     if (timelineIsPlaying) {
       stopPlayback();
       return;
@@ -598,13 +607,13 @@ export function usePlaybackController({
       if (drift > driftTolerance) {
         const seekEpoch = timelineSeekPlayEpochRef.current;
         waitForTimelineMediaSeek(node, sourceTime).then(() => {
-          const epochOk =
-            timelineSeekPlayEpochRef.current === seekEpoch;
-          const ok =
-            epochOk &&
-            playbackModeRef.current === "timeline" &&
-            playbackRef.current.isPlaying &&
-            interactionRef.current?.type !== "seek";
+          const ok = shouldPlayTimelineMediaAfterSeek({
+            seekEpochAtStart: seekEpoch,
+            currentSeekEpoch: timelineSeekPlayEpochRef.current,
+            playbackMode: playbackModeRef.current,
+            isPlaybackRefPlaying: playbackRef.current.isPlaying,
+            interactionType: interactionRef.current?.type,
+          });
           if (ok && node) {
             node
               .play()
@@ -616,12 +625,14 @@ export function usePlaybackController({
         continue;
       }
       if (
-        shouldPlay &&
-        playbackModeRef.current === "timeline" &&
-        playbackRef.current.isPlaying &&
-        !timelineSeekDragActive &&
-        !node.seeking &&
-        performance.now() >= timelineSeekGraceUntilRef.current
+        shouldPlayTimelineMediaNow({
+          shouldPlay,
+          playbackMode: playbackModeRef.current,
+          isPlaybackRefPlaying: playbackRef.current.isPlaying,
+          timelineSeekDragActive,
+          isMediaSeeking: node.seeking,
+          graceUntilMs: timelineSeekGraceUntilRef.current,
+        })
       ) {
         node
           .play()
@@ -653,13 +664,13 @@ export function usePlaybackController({
       if (drift > driftTolerance) {
         const seekEpoch = timelineSeekPlayEpochRef.current;
         waitForTimelineMediaSeek(node, sourceTime).then(() => {
-          const epochOk =
-            timelineSeekPlayEpochRef.current === seekEpoch;
-          const ok =
-            epochOk &&
-            playbackModeRef.current === "timeline" &&
-            playbackRef.current.isPlaying &&
-            interactionRef.current?.type !== "seek";
+          const ok = shouldPlayTimelineMediaAfterSeek({
+            seekEpochAtStart: seekEpoch,
+            currentSeekEpoch: timelineSeekPlayEpochRef.current,
+            playbackMode: playbackModeRef.current,
+            isPlaybackRefPlaying: playbackRef.current.isPlaying,
+            interactionType: interactionRef.current?.type,
+          });
           if (ok && node && !isMuted) {
             node
               .play()
@@ -671,13 +682,15 @@ export function usePlaybackController({
         continue;
       }
       if (
-        shouldPlay &&
-        playbackModeRef.current === "timeline" &&
-        playbackRef.current.isPlaying &&
-        !timelineSeekDragActive &&
-        !isMuted &&
-        !node.seeking &&
-        performance.now() >= timelineSeekGraceUntilRef.current
+        shouldPlayTimelineMediaNow({
+          shouldPlay,
+          playbackMode: playbackModeRef.current,
+          isPlaybackRefPlaying: playbackRef.current.isPlaying,
+          timelineSeekDragActive,
+          isMediaSeeking: node.seeking,
+          graceUntilMs: timelineSeekGraceUntilRef.current,
+        }) &&
+        !isMuted
       ) {
         node
           .play()
@@ -755,7 +768,7 @@ export function usePlaybackController({
       if (playbackModeRef.current !== "timeline") return;
       const state = playbackRef.current;
       const nowMs = performance.now();
-      if (interactionRef.current?.type === "seek") {
+      if (shouldSkipTimelinePlayheadTick({ interactionType: interactionRef.current?.type })) {
         raf = requestAnimationFrame(tick);
         return;
       }

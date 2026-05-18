@@ -3,6 +3,7 @@ import {
   MAX_TRACK_HEIGHT,
   MIN_TRACK_HEIGHT,
   createDefaultTracks,
+  normalizeTrackOrder,
 } from "./trackStore.js";
 import { MIN_CLIP_DURATION, nextLinkGroupId } from "./timeline.js";
 import { sanitizeKeyframeMap } from "./keyframes.js";
@@ -273,7 +274,7 @@ const hydrateTracks = (tracks) => {
   const defaults = createDefaultTracks();
   if (!hasVideo) hydrated.unshift(defaults[0]);
   if (!hasAudio) hydrated.push(defaults[1]);
-  return hydrated;
+  return normalizeTrackOrder(hydrated);
 };
 
 export function sanitizeProjectName(name) {
@@ -313,13 +314,16 @@ export function createEmptyProjectState(name = "Untitled Project") {
 
 export function buildProjectDocument(state) {
   const now = new Date().toISOString();
-  const tracks = (state.tracks || createDefaultTracks()).map((track, index) =>
-    normalizeTrack(track, index),
+  const tracks = normalizeTrackOrder(
+    (state.tracks || createDefaultTracks()).map((track, index) =>
+      normalizeTrack(track, index),
+    ),
   );
   const defaultVideoTrackId =
     tracks.find((track) => track.type === "video")?.id || "track-v1";
   const defaultAudioTrackId =
     tracks.find((track) => track.type === "audio")?.id || "track-a1";
+  const mediaById = new Map((state.videos || []).map((item) => [item.id, item]));
   return {
     app: "StoneCutter",
     schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -346,6 +350,7 @@ export function buildProjectDocument(state) {
           id: clip.id,
           videoId: clip.videoId,
           name: clip.name,
+          mediaType: clip.mediaType || mediaById.get(clip.videoId)?.mediaType,
           sourceDuration: clip.sourceDuration,
           inPoint: clip.inPoint,
           outPoint: clip.outPoint,
@@ -430,14 +435,20 @@ export function hydrateProjectState(doc, hydrateOptions = (path) => path) {
       inPoint,
       finiteNumber(safeClip.outPoint, inPoint),
     );
+    const safeVideoId = safeString(safeClip.videoId);
+    const clipMediaType =
+      safeString(safeClip.mediaType, mediaById.get(safeVideoId)?.mediaType || "") ||
+      undefined;
+    const storedSourceDuration = finiteNumber(safeClip.sourceDuration, outPoint);
     const baseClip = attachClipKindContent({
       id: safeString(safeClip.id, `clip-${index + 1}`),
-      videoId: safeString(safeClip.videoId),
+      videoId: safeVideoId,
       name: safeString(safeClip.name, `Clip ${index + 1}`),
-      sourceDuration: Math.max(
-        outPoint,
-        finiteNumber(safeClip.sourceDuration, outPoint),
-      ),
+      mediaType: clipMediaType,
+      sourceDuration:
+        clipMediaType === "image"
+          ? Math.max(MIN_CLIP_DURATION, storedSourceDuration)
+          : Math.max(outPoint, storedSourceDuration),
       inPoint,
       outPoint,
       startTime: Math.max(0, finiteNumber(safeClip.startTime, 0)),

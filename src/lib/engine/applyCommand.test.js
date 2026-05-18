@@ -26,6 +26,28 @@ test("clip.add treats missing kind as media and strips media content", () => {
   assert.equal("content" in result.state.timeline.clips[0], false)
 })
 
+test("clip.trimRight allows image clips beyond sourceDuration", () => {
+  const state = createInitialEngineState()
+  state.timeline.clips = [
+    {
+      ...baseClip,
+      id: "image-clip",
+      name: "Still.png",
+      sourceDuration: 3,
+      outPoint: 3,
+      mediaType: "image",
+    },
+  ]
+
+  const result = applyCommand(state, {
+    id: "cmd-trim-image",
+    type: "clip.trimRight",
+    payload: { clipId: "image-clip", time: 30 },
+  })
+
+  assert.equal(result.state.timeline.clips[0].outPoint, 30)
+})
+
 test("clip.add normalizes text clip content", () => {
   const result = applyCommand(createInitialEngineState(), {
     id: "cmd-1",
@@ -212,4 +234,24 @@ test("clip.updateProps switches text clips back to media safely", () => {
 
   assert.equal(result.state.timeline.clips[0].kind, "media")
   assert.equal("content" in result.state.timeline.clips[0], false)
+})
+
+test("clip.updateProps stores fadeIn and fadeOut for audio crossfades", () => {
+  const initial = createInitialEngineState({
+    clips: [{ ...baseClip, trackId: "track-a1", trackMode: "audio" }],
+    tracks: [{ id: "track-a1", type: "audio", name: "A1", locked: false, height: 80 }],
+  })
+
+  const result = applyCommand(initial, {
+    id: "cmd-fade",
+    type: "clip.updateProps",
+    payload: {
+      clipId: "clip-1",
+      props: { fadeIn: 0.25, fadeOut: 0.5 },
+    },
+  })
+
+  const clip = result.state.timeline.clips[0]
+  assert.equal(clip.fadeIn, 0.25)
+  assert.equal(clip.fadeOut, 0.5)
 })

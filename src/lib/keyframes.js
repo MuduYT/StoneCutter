@@ -464,6 +464,16 @@ export const getMergedKeyframeMarkers = (clip, fps = PROJECT_FPS) => {
   return [...buckets.values()].sort((a, b) => a.time - b.time);
 };
 
+export const getVisibleMergedKeyframeMarkers = (clip, fps = PROJECT_FPS) => {
+  const markers = getMergedKeyframeMarkers(clip, fps);
+  const start = finiteOr(clip?.startTime, 0);
+  const duration = Math.max(0, finiteOr(clip?.outPoint, 0) - finiteOr(clip?.inPoint, 0));
+  const end = start + duration;
+  return markers.filter(
+    (marker) => marker.time >= start - 1e-6 && marker.time <= end + 1e-6,
+  );
+};
+
 // Persistence sanitization. Drops unknown property keys, validates types and
 // clamps values into the property range. Used by src/lib/project.js when
 // (de)serializing clip.keyframes.
